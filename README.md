@@ -15,7 +15,7 @@ RTU Forge is a compact Python console for raw Modbus RTU work, reusable scripts,
 - One-command script recording with decode and clean-output flags.
 - Windows COM and Linux `/dev/tty*` serial paths.
 
-## Install and run
+## Windows setup
 
 ```bash
 uv sync --extra dev
@@ -30,6 +30,136 @@ uv run rtuforge send 01 03 00 65 00 01
 
 One-shot auto-connect is silent: it does not print `Connected COM...` before command output.
 
+## Linux user installation
+
+Install for the current Linux user from the Git checkout:
+
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+Do not use `sudo`. The installer refuses root, never writes to `/usr`, `/opt`, or `/etc`, and never runs `sudo` or `usermod`. It creates a dedicated virtual environment and performs an editable install from RepoRoot.
+
+Examples:
+
+```bash
+./setup.sh --no-migrate
+
+./setup.sh \
+    --data-dir ~/rtu-data \
+    --working-dir ~/rs485
+
+./setup.sh --desktop
+```
+
+Options:
+
+- `--repo-root PATH`: Git/source directory; defaults to the directory containing `setup.sh`.
+- `--data-dir PATH`: persistent RTUFORGE_HOME; defaults to `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge`.
+- `--working-dir PATH`: desktop launch directory; defaults to DataDir.
+- `--install-dir PATH`: venv location; defaults to `${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge`.
+- `--bin-dir PATH`: launcher directory; defaults to `$HOME/.local/bin`.
+- `--no-migrate`: do not copy existing `config.ini`, `scripts.ini`, or history from RepoRoot.
+- `--desktop`: create `~/.local/share/applications/rtu-forge.desktop` with `Terminal=true`.
+- `--no-path-update`: do not add the managed RTU Forge block to `.bashrc` or `.zshrc`.
+- `-h`, `--help`: show installer help.
+
+All installer paths are normalized to absolute paths before files are created. Migration is copy-only: a source is copied only when it exists and its destination does not. Existing user data is never overwritten, moved, or deleted.
+
+The generated `<BinDir>/rtuforge` launcher exports the absolute DataDir as `RTUFORGE_HOME`, uses `exec`, forwards all arguments, and preserves the caller's current directory. `--desktop` is optional and uses WorkingDir only for graphical launch.
+
+## Path and user-data model
+
+| Term | Purpose | Linux default |
+|---|---|---|
+| RepoRoot | Git/source directory used by the editable install | directory containing `setup.sh` |
+| DataDir / RTUFORGE_HOME | `config.ini`, `scripts.ini`, history | `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge` |
+| WorkingDir | Starting directory for the desktop launcher only | DataDir |
+| InstallDir | Dedicated Python virtual environment | `${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge` |
+| Executable / BinDir | User shell launcher | `$HOME/.local/bin/rtuforge` |
+
+These roles are independent: DataDir, WorkingDir, and RepoRoot may coincide, but none is derived from another after setup. Inspect active application paths with:
+
+```bash
+rtuforge paths
+```
+
+## Working directory
+
+A shell launch preserves the caller's CWD:
+
+```bash
+cd /tmp
+rtuforge
+```
+
+The optional desktop entry starts in configured WorkingDir. In both cases, RTUFORGE_HOME continues to point to DataDir.
+
+## Temporary connection overrides
+
+Global startup flags temporarily replace effective serial settings for one process:
+
+```text
+--port PORT
+--baudrate RATE
+--bytesize BITS
+--parity N|E|O|M|S
+--stopbits 1|1.5|2
+--timeout-ms MS
+```
+
+Windows examples:
+
+```bash
+rtuforge --port COM7 --baudrate 19200
+rtuforge --port COM7 --baudrate 19200 --parity N send 01 03 00 65 00 01
+```
+
+Linux example:
+
+```bash
+rtuforge \
+    --port /dev/ttyUSB0 \
+    --baudrate 9600 \
+    --bytesize 8 \
+    --parity E \
+    --stopbits 1 \
+    scan
+```
+
+Overrides never modify `config.ini`. `options connection` shows persistent values; `status` and the interactive toolbar show effective values, with overridden fields marked `[CLI]` in status. CLI values retain priority until exit—even if `set options port ...` changes the saved value. A new launch without overrides uses config.ini again.
+
+`--timeout-ms` is the effective serial connection timeout. It is distinct from `scan --timeout`, which temporarily controls each scan probe:
+
+```bash
+rtuforge --timeout-ms 1000 scan 1 32 --timeout 100
+```
+
+## Serial permissions on Linux
+
+The installer prints current groups and warns when no common serial group is detected. It does not change permissions automatically. Access to `/dev/ttyUSB*`, `/dev/ttyACM*`, or `/dev/ttyS*` commonly requires membership in `dialout` on Debian/Ubuntu:
+
+```bash
+sudo usermod -aG dialout "$USER"
+```
+
+Run that command yourself only when appropriate for your distribution, then start a new login session. Other distributions may use `uucp`, `tty`, or another group.
+
+## Updating editable installation
+
+Python source changes from the Git checkout are visible immediately because installation is editable:
+
+```bash
+git pull
+```
+
+If dependencies or `pyproject.toml` changed, rerun:
+
+```bash
+./setup.sh
+```
+
 ## Command reference
 
 ```text
@@ -37,6 +167,7 @@ connect
 disconnect
 ports
 status
+paths
 scan [start [end]] [--timeout ms] [--function 01|02|03|04] [--address address]
 
 send [-d|--decode|-r|--raw] <hex...>
@@ -579,6 +710,7 @@ help connect
 help disconnect
 help ports
 help status
+help paths
 help scan
 help send
 help add

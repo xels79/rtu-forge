@@ -14,6 +14,7 @@ GENERAL_HELP: dict[str, str] = {
   disconnect                      Close serial connection
   ports                           List available serial ports
   status                          Show connection state and current settings
+  paths                           Show active home/config/scripts/history paths
   scan [start [end]] [options]    Find Modbus RTU devices by slave ID
   send [-d|--decode|-r|--raw] <hex...>
                                   Send one Modbus RTU frame
@@ -46,6 +47,7 @@ Use 'help scan', 'help scripts', 'help send', 'help run' and 'help record' for d
   disconnect                      Закрыть последовательное соединение
   ports                           Показать доступные последовательные порты
   status                          Показать состояние и текущие параметры
+  paths                           Показать пути home/config/scripts/history
   scan [начало [конец]] [опции]   Найти Modbus RTU устройства по slave ID
   send [-d|--decode|-r|--raw] <hex...>
                                   Отправить один Modbus RTU кадр
@@ -87,6 +89,13 @@ Examples:
   status
 
 Changing a connection option with 'set options ...' disconnects an active connection first.
+
+Temporary startup examples:
+  rtuforge --port COM7
+  rtuforge --port COM7 --baudrate 19200 --parity N
+  rtuforge --port /dev/ttyUSB0 --baudrate 115200 connect
+
+Startup overrides apply only to the current process and never change config.ini. They remain effective even if a persistent connection option is changed with 'set options'; restart without the flag to use the saved value.
 """,
         "disconnect": """disconnect
 
@@ -106,6 +115,14 @@ Columns:
 Show real connection state and current settings without auto-connecting.
 
 Includes port, baud rate, serial format, timeout, CRC mode, RX decoding, clean output and interface language.
+
+Connection values are effective runtime values. Fields supplied as startup overrides are marked [CLI]. Use 'options connection' to see persistent config.ini values.
+""",
+        "paths": """paths
+
+Show the active RTU Forge data/home directory and absolute paths to config.ini, scripts.ini and history.
+
+When RTUFORGE_HOME is set by a user launcher, these paths do not depend on the current working directory. The command also works before config.ini exists.
 """,
         "scan": """scan [start [end]] [--timeout ms] [--function 01|02|03|04] [--address address]
 
@@ -336,6 +353,13 @@ Not allowed inside scripts.
   status
 
 При изменении параметров соединения через 'set options ...' активное соединение сначала закрывается.
+
+Примеры временных startup-параметров:
+  rtuforge --port COM7
+  rtuforge --port COM7 --baudrate 19200 --parity N
+  rtuforge --port /dev/ttyUSB0 --baudrate 115200 connect
+
+Startup overrides действуют только в текущем процессе и никогда не изменяют config.ini. Они сохраняют приоритет даже после 'set options' для persistent connection option; после перезапуска без флага используется сохранённое значение.
 """,
         "disconnect": """disconnect
 
@@ -355,6 +379,14 @@ Not allowed inside scripts.
 Показать реальное состояние соединения и текущие параметры без автоматического подключения.
 
 Выводятся порт, скорость, формат, таймаут, режим CRC, расшифровка RX, чистый вывод и язык интерфейса.
+
+Параметры соединения являются effective runtime значениями. Поля из startup overrides отмечаются [CLI]. Persistent значения config.ini показывает 'options connection'.
+""",
+        "paths": """paths
+
+Показать активный каталог данных/home RTU Forge и абсолютные пути к config.ini, scripts.ini и истории.
+
+Если пользовательский launcher установил RTUFORGE_HOME, пути не зависят от текущего рабочего каталога. Команда работает и до появления config.ini.
 """,
         "scan": """scan [начало [конец]] [--timeout мс] [--function 01|02|03|04] [--address адрес]
 

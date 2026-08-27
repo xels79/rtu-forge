@@ -11,7 +11,7 @@ from .scripts import ScriptStore
 
 
 TOP_LEVEL_COMMANDS: tuple[str, ...] = (
-    "connect", "disconnect", "ports", "status", "scan", "send", "add", "run",
+    "connect", "disconnect", "ports", "status", "paths", "scan", "send", "add", "run",
     "scripts", "ls", "list", "show", "delete", "record", "options", "set", "pause",
     "history", "clear", "cls", "help", "exit", "quit",
 )

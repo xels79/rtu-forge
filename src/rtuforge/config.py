@@ -21,11 +21,11 @@ class OptionSpec:
 
 OPTION_SPECS: tuple[OptionSpec, ...] = (
     OptionSpec("connection", "port", "Serial port, e.g. COM5 or /dev/ttyUSB0", "str"),
-    OptionSpec("connection", "baudrate", "Baud rate", "int"),
+    OptionSpec("connection", "baudrate", "Baud rate", "int", minimum=1),
     OptionSpec("connection", "bytesize", "Data bits", "int", ("5", "6", "7", "8")),
     OptionSpec("connection", "parity", "Parity: N/E/O/M/S", "str", ("N", "E", "O", "M", "S")),
     OptionSpec("connection", "stopbits", "Stop bits", "float", ("1", "1.5", "2")),
-    OptionSpec("connection", "timeout_ms", "Serial read timeout", "int"),
+    OptionSpec("connection", "timeout_ms", "Serial read timeout", "int", minimum=1),
     OptionSpec("runtime", "inter_command_delay_ms", "Delay between script commands", "int"),
     OptionSpec("runtime", "post_write_delay_ms", "Delay after each serial write", "int"),
     OptionSpec("runtime", "response_silence_ms", "Silence used to detect end of response", "int"),
@@ -84,7 +84,7 @@ def parse_value(spec: OptionSpec, value: str) -> str:
     if spec.kind == "int":
         parsed = str(int(value, 10))
     elif spec.kind == "float":
-        parsed = str(float(value.replace(",", ".")))
+        parsed = f"{float(value.replace(',', '.')):g}"
     elif spec.kind == "bool":
         lowered = value.lower()
         if lowered in {"1", "true", "yes", "on"}:

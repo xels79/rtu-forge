@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .config import OPTION_SPECS, option_spec, parse_value, save_config
+from .connection import effective_connection
 from .formatting import hex_line, parse_hex_bytes, prefix
 from .i18n import command_help, interactive_help, message
 from .modbus import decode_response, format_decoded_response
@@ -159,19 +160,39 @@ def show_ports(ctx: CommandContext) -> None:
 
 
 def show_status(ctx: CommandContext) -> None:
-    connection = ctx.config["connection"]; runtime = ctx.config["runtime"]
+    runtime = ctx.config["runtime"]
+    settings = getattr(ctx.transport, "settings", effective_connection(ctx.config))
+    is_overridden = getattr(ctx.transport, "is_overridden", lambda name: False)
+
+    def cli_marker(*names: str) -> str:
+        return " [CLI]" if any(is_overridden(name) for name in names) else ""
+
     state = tr(ctx.language, "connected_state" if ctx.transport.connected else "disconnected_state")
     ctx.console.print(f"{tr(ctx.language, 'connection')}: {state}", markup=False)
     if ctx.transport.connected:
         ctx.console.print(f"\n{tr(ctx.language, 'endpoint')}:   {ctx.transport.endpoint}", markup=False)
-    ctx.console.print(f"{tr(ctx.language, 'port')}:       {connection.get('port')}", markup=False)
-    ctx.console.print(f"{tr(ctx.language, 'baudrate')}:   {connection.get('baudrate')}", markup=False)
-    ctx.console.print(f"{tr(ctx.language, 'format')}:     {connection.get('bytesize')}{connection.get('parity')}{connection.get('stopbits')}", markup=False)
-    ctx.console.print(f"{tr(ctx.language, 'timeout')}:    {connection.get('timeout_ms')} ms", markup=False)
+    ctx.console.print(f"{tr(ctx.language, 'port')}:       {settings.port}{cli_marker('port')}", markup=False)
+    ctx.console.print(f"{tr(ctx.language, 'baudrate')}:   {settings.baudrate}{cli_marker('baudrate')}", markup=False)
+    ctx.console.print(
+        f"{tr(ctx.language, 'format')}:     {settings.bytesize}{settings.parity}{settings.stopbits:g}"
+        f"{cli_marker('bytesize', 'parity', 'stopbits')}",
+        markup=False,
+    )
+    ctx.console.print(f"{tr(ctx.language, 'timeout')}:    {settings.timeout_ms} ms{cli_marker('timeout_ms')}", markup=False)
     ctx.console.print(f"{tr(ctx.language, 'crc_mode')}:   {runtime.get('crc_mode')}", markup=False)
     ctx.console.print(f"{tr(ctx.language, 'decode_rx')}:  {runtime.get('decode_rx', 'true')}", markup=False)
     ctx.console.print(f"{tr(ctx.language, 'clean_output')}: {runtime.get('clean_output', 'false')}", markup=False)
     ctx.console.print(f"{tr(ctx.language, 'language')}:   {ctx.language}", markup=False)
+
+
+def show_paths(ctx: CommandContext) -> None:
+    history = Path(ctx.config["history"].get("file", ".rtuforge_history"))
+    if not history.is_absolute():
+        history = (ctx.config_path.parent / history).resolve()
+    ctx.console.print(f"{tr(ctx.language, 'home')}:    {ctx.config_path.parent}", markup=False)
+    ctx.console.print(f"{tr(ctx.language, 'config_path')}:  {ctx.config_path}", markup=False)
+    ctx.console.print(f"{tr(ctx.language, 'scripts_path')}: {ctx.scripts.path.resolve()}", markup=False)
+    ctx.console.print(f"{tr(ctx.language, 'history_path')}: {history}", markup=False)
 
 
 def ensure_connected(ctx: CommandContext) -> None:
@@ -475,6 +496,7 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         return None
     if command == "ports": show_ports(ctx); return None
     if command == "status": show_status(ctx); return None
+    if command == "paths": show_paths(ctx); return None
     if command == "scan": run_scan(ctx, parts[1:]); return None
     if command == "send":
         payload, explicit = _parse_send_arguments(parts[1:], ctx.language); send_frame(ctx, payload, decode_override=explicit if explicit is not None else inherited_decode_override); return None

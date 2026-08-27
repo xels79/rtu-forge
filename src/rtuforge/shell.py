@@ -11,6 +11,11 @@ from .completion import RTUForgeCompleter
 from .runtime_text import tr
 
 
+def toolbar_text(ctx: CommandContext) -> str:
+    state = tr(ctx.language, "connected_state" if ctx.transport.connected else "disconnected_state")
+    return f" {state} | {ctx.transport.endpoint} "
+
+
 def run_shell(ctx: CommandContext) -> None:
     history_path = Path(ctx.config["history"].get("file", ".rtuforge_history"))
     if not history_path.is_absolute():
@@ -23,8 +28,7 @@ def run_shell(ctx: CommandContext) -> None:
     console: Console = ctx.console
 
     def toolbar() -> str:
-        state = tr(ctx.language, "connected_state" if ctx.transport.connected else "disconnected_state")
-        return f" {state} | {ctx.transport.endpoint} "
+        return toolbar_text(ctx)
 
     console.print(tr(ctx.language, "shell_banner"), markup=False)
 

@@ -92,6 +92,7 @@ def test_status_reports_real_state_and_settings_without_connect(command_context,
         ("help show", "show record"),
         ("help record", "record script <name> <all|rx>"),
         ("help status", "Show real connection state"),
+        ("help paths", "RTU Forge data/home directory"),
         ("help scan", "valid IDs are 1..247"),
         ("help nonexistent", "Unknown help topic: nonexistent"),
     ],
@@ -107,6 +108,14 @@ def test_help_preserves_literal_placeholders(command_context):
     text = output(command_context)
     assert "options [section]" in text
     assert "help [command]" in text
+    assert "paths" in text
+
+
+def test_connect_help_documents_startup_overrides(command_context):
+    execute_command(command_context, "help connect")
+    text = output(command_context)
+    assert "rtuforge --port COM7" in text
+    assert "never change config.ini" in text
 
 
 def test_russian_help(command_context):

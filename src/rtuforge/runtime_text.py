@@ -59,6 +59,8 @@ TEXT: dict[str, dict[str, str]] = {
         "scan_invalid_timeout": "Scan timeout must be greater than zero",
         "scan_invalid_function": "Scan function must be one of 01, 02, 03, 04",
         "scan_invalid_address": "Scan address must be within 0..65535",
+        "invalid_connection_override": "Invalid temporary connection value: {name}",
+        "home": "Home", "config_path": "Config", "scripts_path": "Scripts", "history_path": "History",
     },
     "ru": {
         "connected": "Подключено {endpoint}", "disconnected": "Отключено",
@@ -113,6 +115,8 @@ TEXT: dict[str, dict[str, str]] = {
         "scan_invalid_timeout": "Таймаут поиска должен быть больше нуля",
         "scan_invalid_function": "Функция поиска должна быть одной из: 01, 02, 03, 04",
         "scan_invalid_address": "Адрес поиска должен быть в пределах 0..65535",
+        "invalid_connection_override": "Некорректный временный параметр соединения: {name}",
+        "home": "Домашний каталог", "config_path": "Конфигурация", "scripts_path": "Скрипты", "history_path": "История",
     },
 }
 

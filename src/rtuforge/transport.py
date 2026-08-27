@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import serial
 
+from .connection import ConnectionOverrides, ConnectionSettings, effective_connection
 from .crc import apply_crc_mode
 
 
@@ -17,9 +18,18 @@ class Exchange:
 
 
 class SerialTransport:
-    def __init__(self, config: configparser.ConfigParser):
+    def __init__(
+        self,
+        config: configparser.ConfigParser,
+        overrides: ConnectionOverrides | None = None,
+    ):
         self.config = config
+        self.overrides = overrides or ConnectionOverrides()
         self.serial: serial.Serial | None = None
+
+    @property
+    def settings(self) -> ConnectionSettings:
+        return effective_connection(self.config, self.overrides)
 
     @property
     def connected(self) -> bool:
@@ -27,20 +37,22 @@ class SerialTransport:
 
     @property
     def endpoint(self) -> str:
-        c = self.config["connection"]
-        return f"{c.get('port')} @ {c.get('baudrate')} {c.get('bytesize')}{c.get('parity')}{c.get('stopbits')}"
+        return self.settings.endpoint
+
+    def is_overridden(self, name: str) -> bool:
+        return self.overrides.contains(name)
 
     def connect(self) -> None:
         if self.connected:
             return
-        c = self.config["connection"]
+        settings = self.settings
         self.serial = serial.Serial(
-            port=c.get("port"),
-            baudrate=c.getint("baudrate"),
-            bytesize=c.getint("bytesize"),
-            parity=c.get("parity").upper(),
-            stopbits=c.getfloat("stopbits"),
-            timeout=c.getint("timeout_ms") / 1000.0,
+            port=settings.port,
+            baudrate=settings.baudrate,
+            bytesize=settings.bytesize,
+            parity=settings.parity,
+            stopbits=settings.stopbits,
+            timeout=settings.timeout_ms / 1000.0,
         )
 
     def disconnect(self) -> None:
@@ -76,7 +88,7 @@ class SerialTransport:
         last_data = time.perf_counter()
         saw_data = False
         effective_timeout_ms = (
-            self.config["connection"].getint("timeout_ms")
+            self.settings.timeout_ms
             if timeout_ms is None
             else timeout_ms
         )
