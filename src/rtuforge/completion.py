@@ -11,13 +11,14 @@ from .scripts import ScriptStore
 
 
 TOP_LEVEL_COMMANDS: tuple[str, ...] = (
-    "connect", "disconnect", "ports", "status", "send", "add", "run",
+    "connect", "disconnect", "ports", "status", "scan", "send", "add", "run",
     "scripts", "ls", "list", "show", "delete", "record", "options", "set", "pause",
     "history", "clear", "cls", "help", "exit", "quit",
 )
 
 DECODE_FLAGS: tuple[str, ...] = ("--decode", "--raw", "-d", "-r")
 RECORD_SCRIPT_FLAGS: tuple[str, ...] = (*DECODE_FLAGS, "--clean", "-c")
+SCAN_FLAGS: tuple[str, ...] = ("--timeout", "--function", "--address")
 
 
 def completion_candidates(
@@ -58,6 +59,11 @@ def completion_candidates(
         choices = ("clear",)
     elif completed == ["send"]:
         choices = DECODE_FLAGS
+    elif completed and completed[0] == "scan":
+        if completed[-1] == "--function":
+            choices = ("01", "02", "03", "04")
+        else:
+            choices = SCAN_FLAGS
     elif completed == ["record"]:
         choices = ("start", "stop", "status", "cancel", "script")
     elif completed == ["record", "start"]:

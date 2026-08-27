@@ -16,6 +16,7 @@ class OptionSpec:
     kind: str
     choices: tuple[str, ...] = ()
     default: str | None = None
+    minimum: float | None = None
 
 
 OPTION_SPECS: tuple[OptionSpec, ...] = (
@@ -35,6 +36,14 @@ OPTION_SPECS: tuple[OptionSpec, ...] = (
     OptionSpec("runtime", "show_rx", "Print received frames", "bool"),
     OptionSpec("runtime", "decode_rx", "Decode received Modbus RTU frames after raw RX output", "bool", default="true"),
     OptionSpec("runtime", "clean_output", "Print plain HEX frames without TX/RX labels or timing", "bool", default="false"),
+    OptionSpec(
+        "runtime",
+        "scan_timeout_ms",
+        "Per-device Modbus scan timeout in milliseconds",
+        "int",
+        default="100",
+        minimum=1,
+    ),
     OptionSpec("runtime", "timestamps", "Show timestamps in TX/RX output", "bool"),
     OptionSpec("runtime", "uppercase_hex", "Use uppercase HEX output", "bool"),
     OptionSpec("history", "file", "Persistent interactive history file", "str"),
@@ -89,4 +98,6 @@ def parse_value(spec: OptionSpec, value: str) -> str:
 
     if spec.choices and parsed.upper() not in {choice.upper() for choice in spec.choices}:
         raise ValueError(f"Allowed values: {', '.join(spec.choices)}")
+    if spec.minimum is not None and float(parsed) < spec.minimum:
+        raise ValueError(f"Value must be at least {spec.minimum:g}")
     return parsed

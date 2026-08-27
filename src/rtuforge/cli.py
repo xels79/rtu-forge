@@ -38,12 +38,14 @@ def build_parser(language: str = "en") -> argparse.ArgumentParser:
     detailed_help = (
         "Подробная справка по командам:\n"
         "  rtuforge help\n"
+        "  rtuforge help scan\n"
         "  rtuforge help <command>\n"
         "В интерактивной консоли: help [command]"
         if is_ru
         else
         "Detailed command help:\n"
         "  rtuforge help\n"
+        "  rtuforge help scan\n"
         "  rtuforge help <command>\n"
         "In the interactive shell: help [command]"
     )

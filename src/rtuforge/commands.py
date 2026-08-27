@@ -8,15 +8,18 @@ from pathlib import Path
 
 import serial.tools.list_ports
 from rich.console import Console
+from rich.live import Live
 from rich.table import Table
+from rich.text import Text
 
 from .config import OPTION_SPECS, option_spec, parse_value, save_config
 from .formatting import hex_line, parse_hex_bytes, prefix
 from .i18n import command_help, interactive_help, message
 from .modbus import decode_response, format_decoded_response
 from .runtime_text import tr
+from .scanner import ScanArgumentError, ScanResult, parse_scan_arguments, scan_devices
 from .scripts import ScriptStore
-from .transport import SerialTransport
+from .transport import Exchange, SerialTransport
 
 HELP_ALIASES = {"ls": "scripts", "list": "scripts", "cls": "clear", "quit": "exit"}
 
@@ -34,6 +37,7 @@ OPTION_DESCRIPTIONS_RU = {
     "auto_connect": "Автоподключение для send/run в one-shot режиме", "show_tx": "Показывать отправленные кадры",
     "show_rx": "Показывать принятые кадры", "decode_rx": "Расшифровывать Modbus RTU ответ после сырого RX",
     "clean_output": "Чистый вывод HEX без меток TX/RX, времени и длительности ответа",
+    "scan_timeout_ms": "Таймаут одного запроса при поиске устройств, мс",
     "timestamps": "Показывать время в строках TX/RX", "uppercase_hex": "Показывать HEX в верхнем регистре",
     "file": "Файл постоянной истории интерактивных команд", "max_entries": "Максимальное число записей истории",
     "language": "Язык справки и интерфейса: en/ru",
@@ -77,7 +81,14 @@ def _clean_output(ctx: CommandContext) -> bool:
     return ctx.config["runtime"].getboolean("clean_output", fallback=False)
 
 
-def _record_exchange(ctx: CommandContext, tx: bytes, rx: bytes, uppercase: bool) -> None:
+def _record_exchange(
+    ctx: CommandContext,
+    tx: bytes,
+    rx: bytes,
+    uppercase: bool,
+    *,
+    record_empty_rx: bool = True,
+) -> None:
     if not ctx.recording.active:
         return
     if ctx.recording.mode == "all":
@@ -87,9 +98,11 @@ def _record_exchange(ctx: CommandContext, tx: bytes, rx: bytes, uppercase: bool)
                 ctx.recording.lines.append(hex_line(rx, uppercase))
         else:
             ctx.recording.lines.append(f"TX {hex_line(tx, uppercase)}")
-            ctx.recording.lines.append(f"RX {hex_line(rx, uppercase) if rx else ''}".rstrip())
+            if rx or record_empty_rx:
+                ctx.recording.lines.append(f"RX {hex_line(rx, uppercase) if rx else ''}".rstrip())
     elif ctx.recording.mode == "rx":
-        ctx.recording.lines.append(hex_line(rx, uppercase) if rx else "")
+        if rx or record_empty_rx:
+            ctx.recording.lines.append(hex_line(rx, uppercase) if rx else "")
 
 
 def _print_exchange(ctx: CommandContext, tx: bytes, rx: bytes, elapsed_ms: float, *, decode_override: bool | None = None) -> None:
@@ -177,6 +190,110 @@ def send_frame(ctx: CommandContext, payload: str, *, decode_override: bool | Non
     _print_exchange(ctx, exchange.tx, exchange.rx, exchange.elapsed_ms, decode_override=decode_override)
 
 
+def format_scan_progress(
+    language: str, endpoint: str, index: int, total: int, slave: int, found: int
+) -> str:
+    label = tr(language, "scan_label")
+    found_label = tr(language, "scan_found_progress")
+    return (
+        f"{label} {endpoint} | [{index:03d}/{total:03d}] "
+        f"ID {slave:03d} | {found_label} {found:03d}"
+    )
+
+
+def _scan_found_line(ctx: CommandContext, result: ScanResult) -> Text:
+    uppercase = ctx.config["runtime"].getboolean("uppercase_hex")
+    line = Text()
+    line.append(f"ID {result.slave:03d}", style="bold green")
+    line.append(f"  {tr(ctx.language, 'scan_found')}  ")
+    if result.exception_code is not None:
+        line.append(
+            f"{tr(ctx.language, 'scan_exception')} {result.exception_code:02X}  ",
+            style="yellow",
+        )
+    line.append(f"RX {hex_line(result.exchange.rx, uppercase)}", style="green")
+    line.append(f"  {result.exchange.elapsed_ms:.1f} ms")
+    return line
+
+
+def run_scan(ctx: CommandContext, parts: list[str]) -> None:
+    try:
+        options = parse_scan_arguments(
+            parts, ctx.config["runtime"].getint("scan_timeout_ms", fallback=100)
+        )
+    except ScanArgumentError as exc:
+        raise ValueError(tr(ctx.language, exc.key, **exc.values)) from None
+
+    ensure_connected(ctx)
+    clean = _clean_output(ctx)
+    use_live = ctx.console.is_terminal and not clean
+    found: list[ScanResult] = []
+    uppercase = ctx.config["runtime"].getboolean("uppercase_hex")
+    live: Live | None = None
+
+    def on_exchange(exchange: Exchange) -> None:
+        _record_exchange(
+            ctx, exchange.tx, exchange.rx, uppercase, record_empty_rx=False
+        )
+
+    def on_found(result: ScanResult) -> None:
+        found.append(result)
+        if clean:
+            ctx.console.print(str(result.slave), markup=False, highlight=False)
+        elif live is not None:
+            live.console.print(_scan_found_line(ctx, result), highlight=False)
+        else:
+            ctx.console.print(_scan_found_line(ctx, result), highlight=False)
+
+    def on_progress(index: int, total: int, slave: int, count: int) -> None:
+        if live is not None:
+            live.update(
+                format_scan_progress(ctx.language, ctx.transport.endpoint, index, total, slave, count),
+                refresh=True,
+            )
+
+    interrupted = False
+    initial = format_scan_progress(
+        ctx.language,
+        ctx.transport.endpoint,
+        0,
+        options.end - options.start + 1,
+        options.start,
+        0,
+    )
+    try:
+        if use_live:
+            with Live(initial, console=ctx.console, auto_refresh=False, transient=True) as active_live:
+                live = active_live
+                scan_devices(
+                    ctx.transport,
+                    options,
+                    on_exchange=on_exchange,
+                    on_progress=on_progress,
+                    on_found=on_found,
+                )
+        else:
+            scan_devices(ctx.transport, options, on_exchange=on_exchange, on_found=on_found)
+    except KeyboardInterrupt:
+        interrupted = True
+    finally:
+        live = None
+
+    if clean:
+        return
+    if interrupted:
+        ctx.console.print(tr(ctx.language, "scan_stopped"), markup=False)
+        ctx.console.print(tr(ctx.language, "scan_found_count", count=len(found)), markup=False)
+    elif found:
+        ctx.console.print(tr(ctx.language, "scan_found_count", count=len(found)), markup=False)
+        ctx.console.print(
+            tr(ctx.language, "scan_slave_ids", ids=", ".join(str(item.slave) for item in found)),
+            markup=False,
+        )
+    else:
+        ctx.console.print(tr(ctx.language, "scan_none"), markup=False)
+
+
 def _parse_decode_flags(parts: list[str], *, command: str) -> tuple[list[str], bool | None]:
     decode_override: bool | None = None; remaining: list[str] = []
     for part in parts:
@@ -243,6 +360,7 @@ def set_option(ctx: CommandContext, name: str, value: str) -> None:
     except ValueError:
         if spec.kind == "bool": raise ValueError(tr(ctx.language, "expected_boolean")) from None
         if spec.choices: raise ValueError(tr(ctx.language, "allowed_values", values=", ".join(spec.choices))) from None
+        if spec.name == "scan_timeout_ms": raise ValueError(tr(ctx.language, "scan_invalid_timeout")) from None
         raise
     if spec.section == "connection" and ctx.transport.connected:
         ctx.transport.disconnect(); ctx.console.print(f"[yellow]{tr(ctx.language, 'connection_option_disconnect')}[/yellow]")
@@ -357,6 +475,7 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         return None
     if command == "ports": show_ports(ctx); return None
     if command == "status": show_status(ctx); return None
+    if command == "scan": run_scan(ctx, parts[1:]); return None
     if command == "send":
         payload, explicit = _parse_send_arguments(parts[1:], ctx.language); send_frame(ctx, payload, decode_override=explicit if explicit is not None else inherited_decode_override); return None
     if command == "pause":

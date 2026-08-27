@@ -35,6 +35,7 @@ class FakeTransport:
 @pytest.fixture
 def command_context(tmp_path: Path):
     config = load_config(Path("config.ini"))
+    config["ui"]["language"] = "en"
     console = Console(record=True, width=120)
     transport = FakeTransport(config)
     return CommandContext(tmp_path / "config.ini", config, ScriptStore(tmp_path / "scripts.ini"), transport, console)
@@ -91,6 +92,7 @@ def test_status_reports_real_state_and_settings_without_connect(command_context,
         ("help show", "show record"),
         ("help record", "record script <name> <all|rx>"),
         ("help status", "Show real connection state"),
+        ("help scan", "valid IDs are 1..247"),
         ("help nonexistent", "Unknown help topic: nonexistent"),
     ],
 )
@@ -115,6 +117,15 @@ def test_russian_help(command_context):
     assert "Запрещены внутри скриптов" in text
     assert "show record" in text
     assert "record script <name>" in text
+
+
+def test_russian_scan_help(command_context):
+    command_context.config["ui"]["language"] = "ru"
+    execute_command(command_context, "help scan")
+    text = output(command_context)
+    assert "Допустимый диапазон slave ID: 1..247" in text
+    assert "exception response" in text
+    assert "--timeout" in text
 
 
 def test_russian_record_help_is_detailed(command_context):

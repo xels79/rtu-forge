@@ -8,6 +8,8 @@ def test_english_cli_help():
     assert "--clean" in text
     assert "Detailed command help:" in text
     assert "rtuforge help <command>" in text
+    assert "rtuforge help scan" in text
+    assert "rtuforge scan" in text
 
 
 def test_russian_cli_help():
@@ -18,6 +20,8 @@ def test_russian_cli_help():
     assert "Чистый HEX-вывод" in text
     assert "Подробная справка по командам:" in text
     assert "rtuforge help <command>" in text
+    assert "rtuforge help scan" in text
+    assert "rtuforge scan" in text
 
 
 def test_clean_flag_can_be_written_after_command():

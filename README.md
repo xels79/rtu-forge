@@ -37,6 +37,7 @@ connect
 disconnect
 ports
 status
+scan [start [end]] [--timeout ms] [--function 01|02|03|04] [--address address]
 
 send [-d|--decode|-r|--raw] <hex...>
 
@@ -103,7 +104,31 @@ record script idd-status <TAB>            -> all, rx
 record script idd-status rx <TAB>         -> buffer, clipboard, file
 record script idd-status rx file x <TAB>  -> --clean, --decode, --raw, -c, -d, -r
 send --d<TAB>                             -> --decode
+scan <TAB>                                -> --address, --function, --timeout
+scan 1 32 --function <TAB>                -> 01, 02, 03, 04
 ```
+
+## Device scanning
+
+`scan` searches the Modbus RTU bus for slave IDs using a read-only request. The default probe is function `03` (Read Holding Registers), address `0`, quantity `1`.
+
+```text
+scan
+scan 1
+scan 1 32
+scan 1 247 --timeout 200
+scan 1 32 --function 04 --address 0
+scan 1 32 --function 03 --address 0x0065
+scan -c
+```
+
+The default range is `1..247`. Functions `01`, `02`, `03`, and `04` are supported; write functions are never used. `--address` accepts decimal and `0x`-prefixed hexadecimal values.
+
+A device is reported only when the response has a valid Modbus RTU CRC, the expected slave ID, and either the requested function or its exception form. A valid Modbus exception response counts as a found device; bad CRC, unrelated frames, short data, and serial noise do not.
+
+The default per-device timeout is `runtime.scan_timeout_ms` (100 ms). `--timeout` overrides it for one scan without changing `connection.timeout_ms` or `config.ini`. Scan always sends exactly one valid CRC and does not change or depend on `runtime.crc_mode`.
+
+In an interactive terminal, Rich keeps progress on one stable fixed-width line and prints discovered devices above it. Redirected output omits progress. `scan -c` prints only found slave IDs, one per line, without ANSI formatting. Ctrl+C stops an active scan cleanly and returns to the shell.
 
 ## Sending frames
 
@@ -391,6 +416,7 @@ connect
 disconnect
 status
 ports
+scan [start [end]] [--timeout ms] [--function 01|02|03|04] [--address address]
 run script <name> [-d|-r]
 scripts | ls | list
 show script <name>
@@ -491,6 +517,7 @@ on / off
 - `show_rx`
 - `decode_rx`
 - `clean_output`
+- `scan_timeout_ms`: per-device scan timeout; must be greater than zero (default `100`).
 - `timestamps`
 - `uppercase_hex`
 
@@ -552,6 +579,7 @@ help connect
 help disconnect
 help ports
 help status
+help scan
 help send
 help add
 help run

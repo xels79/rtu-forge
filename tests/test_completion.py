@@ -44,6 +44,12 @@ def test_send_flag_completion():
     assert completion_candidates("send --d") == ["--decode"]
 
 
+def test_scan_completion():
+    assert "scan" in completion_candidates("sc")
+    assert set(completion_candidates("scan ")) == {"--timeout", "--function", "--address"}
+    assert completion_candidates("scan 1 32 --function ") == ["01", "02", "03", "04"]
+
+
 def test_run_script_flag_completion():
     choices = completion_candidates("run script idd-status ", ["idd-status"])
     assert set(choices) == {"--decode", "--raw", "-d", "-r"}

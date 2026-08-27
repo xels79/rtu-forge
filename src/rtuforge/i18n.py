@@ -14,6 +14,7 @@ GENERAL_HELP: dict[str, str] = {
   disconnect                      Close serial connection
   ports                           List available serial ports
   status                          Show connection state and current settings
+  scan [start [end]] [options]    Find Modbus RTU devices by slave ID
   send [-d|--decode|-r|--raw] <hex...>
                                   Send one Modbus RTU frame
   add script <name>               Capture commands until 'end script'
@@ -38,13 +39,14 @@ GENERAL_HELP: dict[str, str] = {
 One-shot global flag:
   -c, --clean                     Plain HEX output for this invocation only
 
-Use 'help scripts', 'help send', 'help run' and 'help record' for details.
+Use 'help scan', 'help scripts', 'help send', 'help run' and 'help record' for details.
 """,
     "ru": """Команды:
   connect                         Подключиться с текущими параметрами
   disconnect                      Закрыть последовательное соединение
   ports                           Показать доступные последовательные порты
   status                          Показать состояние и текущие параметры
+  scan [начало [конец]] [опции]   Найти Modbus RTU устройства по slave ID
   send [-d|--decode|-r|--raw] <hex...>
                                   Отправить один Modbus RTU кадр
   add script <name>               Записать скрипт до команды 'end script'
@@ -69,7 +71,7 @@ Use 'help scripts', 'help send', 'help run' and 'help record' for details.
 Глобальный флаг one-shot режима:
   -c, --clean                     Чистый HEX-вывод только для этого запуска
 
-Подробнее: help scripts, help send, help run, help record.
+Подробнее: help scan, help scripts, help send, help run, help record.
 """,
 }
 
@@ -104,6 +106,34 @@ Columns:
 Show real connection state and current settings without auto-connecting.
 
 Includes port, baud rate, serial format, timeout, CRC mode, RX decoding, clean output and interface language.
+""",
+        "scan": """scan [start [end]] [--timeout ms] [--function 01|02|03|04] [--address address]
+
+Search for Modbus RTU devices by slave ID. A slave ID is the device address on the bus; valid IDs are 1..247.
+
+Defaults:
+  range       1..247
+  function    03 Read Holding Registers
+  address     0
+  quantity    1
+  timeout     runtime.scan_timeout_ms (default 100 ms per device)
+
+Only read-only functions 01, 02, 03 and 04 are allowed. A device is found only when its response has a valid CRC, matching slave ID, and the requested function. A valid Modbus exception response also proves that the device was found.
+
+Options:
+  --timeout <ms>       Temporary per-device timeout; does not change config.ini.
+  --function <01..04>  Read function used by the probe.
+  --address <address>  Decimal or 0x-prefixed hexadecimal address.
+
+Examples:
+  scan
+  scan 7
+  scan 1 32 --timeout 200
+  scan 1 32 --function 04
+  scan 1 32 --function 03 --address 0x0065
+  rtuforge scan -c
+
+Normal TTY output uses one stable progress line. Ctrl+C stops the scan and returns to the shell. Clean mode prints only found slave IDs, one per line. Scan always sends one valid CRC without changing runtime.crc_mode.
 """,
         "send": """send [-d|--decode|-r|--raw] <hex bytes...>
 
@@ -326,6 +356,34 @@ Not allowed inside scripts.
 
 Выводятся порт, скорость, формат, таймаут, режим CRC, расшифровка RX, чистый вывод и язык интерфейса.
 """,
+        "scan": """scan [начало [конец]] [--timeout мс] [--function 01|02|03|04] [--address адрес]
+
+Найти устройства Modbus RTU по slave ID — адресу устройства на общей шине. Допустимый диапазон slave ID: 1..247.
+
+По умолчанию:
+  диапазон     1..247
+  функция      03 Read Holding Registers
+  адрес        0
+  quantity     1
+  таймаут      runtime.scan_timeout_ms (по умолчанию 100 мс на устройство)
+
+Используются только безопасные функции чтения 01, 02, 03 и 04. Устройство считается найденным, только если ответ имеет корректный CRC, совпадающий slave ID и ожидаемую функцию. Корректный Modbus exception response также означает, что устройство найдено.
+
+Параметры:
+  --timeout <мс>       Временный таймаут одного запроса; config.ini не изменяется.
+  --function <01..04>  Функция чтения для probe-запроса.
+  --address <адрес>    Десятичный адрес или HEX с префиксом 0x.
+
+Примеры:
+  scan
+  scan 7
+  scan 1 32 --timeout 200
+  scan 1 32 --function 04
+  scan 1 32 --function 03 --address 0x0065
+  rtuforge scan -c
+
+В обычном terminal прогресс занимает одну стабильную строку. Ctrl+C останавливает поиск и возвращает приглашение shell. В clean mode печатаются только найденные slave ID, по одному в строке. Scan всегда отправляет один корректный CRC и не изменяет runtime.crc_mode.
+""",
         "send": """send [-d|--decode|-r|--raw] <hex bytes...>
 
 Отправить один сырой Modbus RTU кадр и дождаться ответа.
@@ -529,6 +587,8 @@ CLI_TEXT: dict[str, dict[str, str]] = {
         "epilog": """examples:
   rtuforge
   rtuforge -c send 01 03 00 65 00 01
+  rtuforge scan 1 32 --timeout 200
+  rtuforge scan -c
   rtuforge run script idd-status -r
   rtuforge record script idd-status rx file capture.txt -r
   rtuforge help record
@@ -543,6 +603,8 @@ CLI_TEXT: dict[str, dict[str, str]] = {
         "epilog": """примеры:
   rtuforge
   rtuforge -c send 01 03 00 65 00 01
+  rtuforge scan 1 32 --timeout 200
+  rtuforge scan -c
   rtuforge run script idd-status -r
   rtuforge record script idd-status rx file capture.txt -r
   rtuforge help record

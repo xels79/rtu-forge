@@ -48,12 +48,19 @@ class SerialTransport:
             self.serial.close()
         self.serial = None
 
-    def exchange(self, raw_frame: bytes) -> Exchange:
+    def exchange(
+        self,
+        raw_frame: bytes,
+        *,
+        timeout_ms: int | None = None,
+        crc_mode_override: str | None = None,
+    ) -> Exchange:
         if not self.connected or self.serial is None:
             raise RuntimeError("Not connected")
 
         runtime = self.config["runtime"]
-        tx = apply_crc_mode(raw_frame, runtime.get("crc_mode", "auto"))
+        crc_mode = runtime.get("crc_mode", "auto") if crc_mode_override is None else crc_mode_override
+        tx = apply_crc_mode(raw_frame, crc_mode)
         silence = runtime.getint("response_silence_ms") / 1000.0
         max_bytes = runtime.getint("max_response_bytes")
         post_write = runtime.getint("post_write_delay_ms") / 1000.0
@@ -68,7 +75,12 @@ class SerialTransport:
         rx = bytearray()
         last_data = time.perf_counter()
         saw_data = False
-        timeout_s = self.config["connection"].getint("timeout_ms") / 1000.0
+        effective_timeout_ms = (
+            self.config["connection"].getint("timeout_ms")
+            if timeout_ms is None
+            else timeout_ms
+        )
+        timeout_s = effective_timeout_ms / 1000.0
         deadline = time.perf_counter() + timeout_s
 
         while len(rx) < max_bytes and time.perf_counter() < deadline:

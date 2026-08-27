@@ -35,6 +35,7 @@ class FakeTransport:
 
 def make_context(tmp_path: Path, *, one_shot: bool = False) -> CommandContext:
     config = load_config(Path("config.ini"))
+    config["ui"]["language"] = "en"
     return CommandContext(
         tmp_path / "config.ini",
         config,
