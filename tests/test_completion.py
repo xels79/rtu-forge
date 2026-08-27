@@ -12,6 +12,7 @@ def test_script_name_completion():
     assert completion_candidates("run script ", names) == names
     assert completion_candidates("show script ", names) == names
     assert completion_candidates("delete script ", names) == names
+    assert completion_candidates("record script ", names) == names
 
 
 def test_show_record_completion():
@@ -49,6 +50,15 @@ def test_run_script_flag_completion():
 
 
 def test_record_completion():
-    assert completion_candidates("record ") == ["cancel", "start", "status", "stop"]
+    assert completion_candidates("record ") == ["cancel", "script", "start", "status", "stop"]
     assert completion_candidates("record start ") == ["all", "rx"]
     assert completion_candidates("record stop ") == ["buffer", "clipboard", "file"]
+
+
+def test_record_script_completion():
+    names = ["idd-status"]
+    assert completion_candidates("record script ", names) == names
+    assert completion_candidates("record script idd-status ", names) == ["all", "rx"]
+    assert completion_candidates("record script idd-status rx ", names) == ["buffer", "clipboard", "file"]
+    flags = completion_candidates("record script idd-status rx file capture.txt ", names)
+    assert set(flags) == {"--clean", "--decode", "--raw", "-c", "-d", "-r"}
