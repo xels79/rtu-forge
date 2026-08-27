@@ -84,3 +84,31 @@ def test_record_rx_to_file_is_independent_of_output(tmp_path):
     execute_command(ctx, "record stop file capture.txt")
     text = (tmp_path / "capture.txt").read_text(encoding="utf-8")
     assert text.strip() == " ".join(f"{byte:02X}" for byte in rx)
+
+
+def test_record_all_matches_clean_screen_format(tmp_path):
+    ctx = make_context(tmp_path)
+    ctx.config["runtime"]["clean_output"] = "true"
+    execute_command(ctx, "record start all")
+    tx = bytes.fromhex("01 03 00 65 00 01 94 15")
+    rx = bytes.fromhex("01 03 02 00 05 78 47")
+    _print_exchange(ctx, tx, rx, 12.4)
+    assert ctx.recording.lines == [
+        "01 03 00 65 00 01 94 15",
+        "01 03 02 00 05 78 47",
+    ]
+
+
+def test_show_record_prints_buffer_without_stopping_recording(tmp_path):
+    ctx = make_context(tmp_path)
+    ctx.config["runtime"]["clean_output"] = "true"
+    execute_command(ctx, "record start all")
+    tx = bytes.fromhex("01 03 00 65 00 01 94 15")
+    rx = bytes.fromhex("01 03 02 00 05 78 47")
+    _print_exchange(ctx, tx, rx, 12.4)
+    ctx.console = Console(record=True, width=120)
+    execute_command(ctx, "show record")
+    text = output(ctx)
+    assert "01 03 00 65 00 01 94 15" in text
+    assert "01 03 02 00 05 78 47" in text
+    assert ctx.recording.active is True
