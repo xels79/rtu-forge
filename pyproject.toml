@@ -1,0 +1,30 @@
+[project]
+name = "rtu-forge"
+version = "0.1.0"
+description = "Interactive and one-shot Modbus RTU console for raw frame work and reusable scripts"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "prompt-toolkit>=3.0.48",
+  "pyserial>=3.5",
+  "rich>=13.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3",
+]
+
+[project.scripts]
+rtuforge = "rtuforge.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rtuforge"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
