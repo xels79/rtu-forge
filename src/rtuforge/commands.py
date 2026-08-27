@@ -80,9 +80,15 @@ def _clean_output(ctx: CommandContext) -> bool:
 def _record_exchange(ctx: CommandContext, tx: bytes, rx: bytes, uppercase: bool) -> None:
     if not ctx.recording.active:
         return
+
     if ctx.recording.mode == "all":
-        ctx.recording.lines.append(f"TX {hex_line(tx, uppercase)}")
-        ctx.recording.lines.append(f"RX {hex_line(rx, uppercase) if rx else ''}".rstrip())
+        if _clean_output(ctx):
+            ctx.recording.lines.append(hex_line(tx, uppercase))
+            if rx:
+                ctx.recording.lines.append(hex_line(rx, uppercase))
+        else:
+            ctx.recording.lines.append(f"TX {hex_line(tx, uppercase)}")
+            ctx.recording.lines.append(f"RX {hex_line(rx, uppercase) if rx else ''}".rstrip())
     elif ctx.recording.mode == "rx":
         ctx.recording.lines.append(hex_line(rx, uppercase) if rx else "")
 
@@ -385,9 +391,16 @@ def execute_command(
     if command in {"scripts", "ls", "list"}:
         names = ctx.scripts.list()
         if names:
-            for name in names: ctx.console.print(name, markup=False)
+            for name in names:
+                ctx.console.print(name, markup=False)
         else:
             ctx.console.print(tr(ctx.language, "no_scripts"), markup=False)
+        return None
+    if command == "show" and len(parts) == 2 and parts[1].lower() == "record":
+        if not ctx.recording.active:
+            raise ValueError(tr(ctx.language, "record_not_active"))
+        for item in ctx.recording.lines:
+            ctx.console.print(item, markup=False)
         return None
     if command == "show" and len(parts) >= 3 and parts[1].lower() == "script":
         name = " ".join(parts[2:])
@@ -395,7 +408,8 @@ def execute_command(
             lines = ctx.scripts.get(name)
         except KeyError:
             raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
-        for item in lines: ctx.console.print(item, markup=False)
+        for item in lines:
+            ctx.console.print(item, markup=False)
         return None
     if command == "delete" and len(parts) >= 3 and parts[1].lower() == "script":
         name = " ".join(parts[2:])
@@ -439,15 +453,19 @@ def execute_command(
             ctx.console.print(help_text, markup=False)
         return None
     if command in {"clear", "cls"}:
-        if from_script: raise ValueError(tr(ctx.language, "clear_script_forbidden"))
+        if from_script:
+            raise ValueError(tr(ctx.language, "clear_script_forbidden"))
         return "clear-screen"
     if command in {"exit", "quit"}:
-        if from_script: raise ValueError(tr(ctx.language, "exit_script_forbidden"))
+        if from_script:
+            raise ValueError(tr(ctx.language, "exit_script_forbidden"))
         return "exit"
     if command == "add" and len(parts) >= 3 and parts[1].lower() == "script":
-        if from_script: raise ValueError(tr(ctx.language, "add_script_interactive"))
+        if from_script:
+            raise ValueError(tr(ctx.language, "add_script_interactive"))
         return "add-script:" + " ".join(parts[2:])
     if command == "history":
-        if from_script: raise ValueError(tr(ctx.language, "history_script_forbidden"))
+        if from_script:
+            raise ValueError(tr(ctx.language, "history_script_forbidden"))
         return "history-clear" if len(parts) > 1 and parts[1].lower() == "clear" else "history-show"
     raise ValueError(tr(ctx.language, "unknown_command", command=command))
