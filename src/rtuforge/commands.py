@@ -19,6 +19,46 @@ from .transport import SerialTransport
 
 HELP_ALIASES = {"ls": "scripts", "list": "scripts", "cls": "clear", "quit": "exit"}
 
+OPTIONS_TABLE_TEXT = {
+    "en": {
+        "title": "RTU Forge options",
+        "section": "Section",
+        "name": "Name",
+        "value": "Value",
+        "description": "Description",
+    },
+    "ru": {
+        "title": "Параметры RTU Forge",
+        "section": "Раздел",
+        "name": "Параметр",
+        "value": "Значение",
+        "description": "Описание",
+    },
+}
+
+OPTION_DESCRIPTIONS_RU = {
+    "port": "Последовательный порт, например COM5 или /dev/ttyUSB0",
+    "baudrate": "Скорость обмена",
+    "bytesize": "Биты данных",
+    "parity": "Чётность: N/E/O/M/S",
+    "stopbits": "Стоп-биты",
+    "timeout_ms": "Таймаут чтения последовательного порта, мс",
+    "inter_command_delay_ms": "Пауза между командами скрипта, мс",
+    "post_write_delay_ms": "Пауза после записи в последовательный порт, мс",
+    "response_silence_ms": "Интервал тишины для определения конца ответа, мс",
+    "max_response_bytes": "Максимальное количество байт одного ответа",
+    "crc_mode": "Обработка CRC при отправке: auto/append/none",
+    "auto_connect": "Автоподключение для send/run в one-shot режиме",
+    "show_tx": "Показывать отправленные кадры",
+    "show_rx": "Показывать принятые кадры",
+    "decode_rx": "Расшифровывать Modbus RTU ответ после сырого RX",
+    "timestamps": "Показывать время в строках TX/RX",
+    "uppercase_hex": "Показывать HEX в верхнем регистре",
+    "file": "Файл постоянной истории интерактивных команд",
+    "max_entries": "Максимальное число записей истории",
+    "language": "Язык справки и интерфейса: en/ru",
+}
+
 
 @dataclass
 class CommandContext:
@@ -130,15 +170,18 @@ def _parse_send_arguments(parts: list[str]) -> tuple[str, bool | None]:
 
 
 def show_options(ctx: CommandContext, section: str | None = None) -> None:
-    table = Table(title="RTU Forge options")
-    table.add_column("Section")
-    table.add_column("Name")
-    table.add_column("Value")
-    table.add_column("Description")
+    language = "ru" if ctx.language.lower() == "ru" else "en"
+    labels = OPTIONS_TABLE_TEXT[language]
+    table = Table(title=labels["title"])
+    table.add_column(labels["section"])
+    table.add_column(labels["name"])
+    table.add_column(labels["value"])
+    table.add_column(labels["description"])
     for spec in OPTION_SPECS:
         if section and spec.section.lower() != section.lower():
             continue
-        table.add_row(spec.section, spec.name, ctx.config[spec.section].get(spec.name, ""), spec.description)
+        description = OPTION_DESCRIPTIONS_RU.get(spec.name, spec.description) if language == "ru" else spec.description
+        table.add_row(spec.section, spec.name, ctx.config[spec.section].get(spec.name, ""), description)
     ctx.console.print(table)
 
 
@@ -243,14 +286,14 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
 
     if command == "help":
         if len(parts) == 1:
-            ctx.console.print(interactive_help(ctx.language))
+            ctx.console.print(interactive_help(ctx.language), markup=False)
             return None
         topic = HELP_ALIASES.get(parts[1].lower(), parts[1].lower())
         help_text = command_help(ctx.language, topic)
         if help_text is None:
-            ctx.console.print(message(ctx.language, "unknown_help_topic", topic=parts[1]))
+            ctx.console.print(message(ctx.language, "unknown_help_topic", topic=parts[1]), markup=False)
         else:
-            ctx.console.print(help_text)
+            ctx.console.print(help_text, markup=False)
         return None
 
     if command in {"clear", "cls"}:
