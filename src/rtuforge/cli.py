@@ -9,6 +9,7 @@ from rich.console import Console
 from .commands import CommandContext, execute_command
 from .config import load_config
 from .i18n import cli_text
+from .runtime_text import tr
 from .scripts import ScriptStore
 from .shell import run_shell
 from .transport import SerialTransport
@@ -41,13 +42,19 @@ def _language_for_argv(argv: list[str]) -> str:
     return config.get("ui", "language", fallback="en")
 
 
-def main() -> None:
+def main() -> int:
     argv = sys.argv[1:]
     language = _language_for_argv(argv)
     args = build_parser(language).parse_args(argv)
     config_path = Path(args.config).resolve()
     scripts_path = Path(args.scripts).resolve()
-    config = load_config(config_path)
+
+    try:
+        config = load_config(config_path)
+    except Exception as exc:
+        Console(stderr=True).print(tr(language, "error", error=exc), markup=False)
+        return 1
+
     console = Console()
     ctx = CommandContext(
         config_path=config_path,
@@ -55,25 +62,31 @@ def main() -> None:
         scripts=ScriptStore(scripts_path),
         transport=SerialTransport(config),
         console=console,
+        one_shot=True,
     )
 
     command = args.command
     if not command or command == ["shell"]:
+        ctx.one_shot = False
         run_shell(ctx)
-        return
+        return 0
 
     line = " ".join(command)
     try:
         action = execute_command(ctx, line)
         if action and action.startswith("add-script:"):
-            raise ValueError("'add script' is available only in interactive mode")
+            raise ValueError(tr(ctx.language, "oneshot_add_script"))
         if action and action.startswith("history"):
-            raise ValueError("history commands are available only in interactive mode")
+            raise ValueError(tr(ctx.language, "oneshot_history"))
         if action == "clear-screen":
-            raise ValueError("clear/cls is available only in interactive mode")
+            raise ValueError(tr(ctx.language, "oneshot_clear"))
+        return 0
+    except (ValueError, KeyError, RuntimeError, OSError) as exc:
+        Console(stderr=True).print(tr(ctx.language, "error", error=exc), markup=False)
+        return 1
     finally:
         ctx.transport.disconnect()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
