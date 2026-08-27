@@ -1,9 +1,15 @@
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from rich.console import Console
 
-from rtuforge.commands import CommandContext, _parse_run_arguments, _print_exchange, execute_command
+from rtuforge.commands import (
+    CommandContext,
+    _parse_record_script_arguments,
+    _parse_run_arguments,
+    _print_exchange,
+    execute_command,
+)
 from rtuforge.config import load_config
 from rtuforge.crc import append_crc
 from rtuforge.scripts import ScriptStore
@@ -46,6 +52,16 @@ def output(ctx: CommandContext) -> str:
 def test_run_script_decode_flags_are_not_part_of_name():
     assert _parse_run_arguments(["idd-status", "-r"]) == ("idd-status", False)
     assert _parse_run_arguments(["idd-status", "--decode"]) == ("idd-status", True)
+
+
+def test_record_script_argument_parser():
+    assert _parse_record_script_arguments(
+        ["idd-status", "rx", "file", "captures/status.txt", "-r", "-c"], "en"
+    ) == ("idd-status", "rx", ["file", "captures/status.txt"], False, True)
+
+    assert _parse_record_script_arguments(
+        ["my", "script", "all", "buffer", "--decode"], "en"
+    ) == ("my script", "all", ["buffer"], True, False)
 
 
 def test_one_shot_connect_is_silent(tmp_path):
@@ -112,3 +128,30 @@ def test_show_record_prints_buffer_without_stopping_recording(tmp_path):
     assert "01 03 00 65 00 01 94 15" in text
     assert "01 03 02 00 05 78 47" in text
     assert ctx.recording.active is True
+
+
+def test_record_script_runs_captures_and_restores_clean_option(tmp_path):
+    ctx = make_context(tmp_path)
+    ctx.config["runtime"]["clean_output"] = "false"
+
+    def fake_run_script(context, name, *, decode_override=None):
+        assert name == "idd-status"
+        assert decode_override is False
+        assert context.config["runtime"].getboolean("clean_output") is True
+        _print_exchange(
+            context,
+            bytes.fromhex("01 03 00 65 00 01 94 15"),
+            bytes.fromhex("01 03 02 00 05 78 47"),
+            12.4,
+            decode_override=decode_override,
+        )
+
+    with patch("rtuforge.commands.run_script", side_effect=fake_run_script):
+        execute_command(ctx, "record script idd-status all file capture.txt -c -r")
+
+    assert ctx.config["runtime"].getboolean("clean_output") is False
+    assert ctx.recording.active is False
+    assert (tmp_path / "capture.txt").read_text(encoding="utf-8") == (
+        "01 03 00 65 00 01 94 15\n"
+        "01 03 02 00 05 78 47\n"
+    )
