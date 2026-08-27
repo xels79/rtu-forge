@@ -76,6 +76,7 @@ def test_status_reports_real_state_and_settings_without_connect(command_context,
     assert f"{connection.get('timeout_ms')} ms" in text
     assert command_context.config["runtime"].get("crc_mode") in text
     assert "Decode RX:" in text
+    assert "Clean output:" in text
     assert "Language:" in text
     command_context.transport.connect.assert_not_called()
 
@@ -83,11 +84,13 @@ def test_status_reports_real_state_and_settings_without_connect(command_context,
 @pytest.mark.parametrize(
     ("command", "expected"),
     [
-        ("help", "Commands:"),
+        ("help", "record script <name>"),
         ("help send", "send [-d|--decode|-r|--raw]"),
-        ("help run", "run script <name>"),
-        ("help scripts", "Useful commands inside scripts:"),
-        ("help status", "Show the real connection state"),
+        ("help run", "run script <name> [-d|--decode|-r|--raw]"),
+        ("help scripts", "record start [all|rx]"),
+        ("help show", "show record"),
+        ("help record", "record script <name> <all|rx>"),
+        ("help status", "Show real connection state"),
         ("help nonexistent", "Unknown help topic: nonexistent"),
     ],
 )
@@ -108,8 +111,20 @@ def test_russian_help(command_context):
     command_context.config["ui"]["language"] = "ru"
     execute_command(command_context, "help scripts")
     text = output(command_context)
-    assert "Создание скрипта" in text
+    assert "Создание:" in text
     assert "Запрещены внутри скриптов" in text
+    assert "show record" in text
+    assert "record script <name>" in text
+
+
+def test_russian_record_help_is_detailed(command_context):
+    command_context.config["ui"]["language"] = "ru"
+    execute_command(command_context, "help record")
+    text = output(command_context)
+    assert "Запись скрипта одной командой" in text
+    assert "-c, --clean" in text
+    assert "-r, --raw" in text
+    assert "show record" in text
 
 
 def test_russian_options_table(command_context):
