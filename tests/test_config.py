@@ -9,9 +9,16 @@ def test_default_config_loads():
     assert config["connection"].get("parity") == "E"
     assert config["runtime"].getint("inter_command_delay_ms") == 100
     assert config["runtime"].getboolean("decode_rx") is True
+    assert config["ui"].get("language") == "en"
 
 
 def test_boolean_option_parser():
     spec = option_spec("auto_connect")
     assert parse_value(spec, "yes") == "true"
     assert parse_value(spec, "off") == "false"
+
+
+def test_language_option_parser():
+    spec = option_spec("language")
+    assert parse_value(spec, "ru") == "ru"
+    assert parse_value(spec, "EN") == "EN"
