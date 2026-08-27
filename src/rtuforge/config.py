@@ -34,6 +34,7 @@ OPTION_SPECS: tuple[OptionSpec, ...] = (
     OptionSpec("runtime", "show_tx", "Print transmitted frames", "bool"),
     OptionSpec("runtime", "show_rx", "Print received frames", "bool"),
     OptionSpec("runtime", "decode_rx", "Decode received Modbus RTU frames after raw RX output", "bool", default="true"),
+    OptionSpec("runtime", "clean_output", "Print plain HEX frames without TX/RX labels or timing", "bool", default="false"),
     OptionSpec("runtime", "timestamps", "Show timestamps in TX/RX output", "bool"),
     OptionSpec("runtime", "uppercase_hex", "Use uppercase HEX output", "bool"),
     OptionSpec("history", "file", "Persistent interactive history file", "str"),
