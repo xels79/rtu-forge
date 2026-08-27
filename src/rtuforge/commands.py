@@ -12,7 +12,7 @@ from rich.table import Table
 
 from .config import OPTION_SPECS, option_spec, parse_value, save_config
 from .formatting import hex_line, parse_hex_bytes, prefix
-from .helptext import COMMAND_HELP, INTERACTIVE_HELP
+from .i18n import command_help, interactive_help, message
 from .modbus import decode_response, format_decoded_response
 from .scripts import ScriptStore
 from .transport import SerialTransport
@@ -28,8 +28,19 @@ class CommandContext:
     transport: SerialTransport
     console: Console
 
+    @property
+    def language(self) -> str:
+        return self.config.get("ui", "language", fallback="en")
 
-def _print_exchange(ctx: CommandContext, tx: bytes, rx: bytes, elapsed_ms: float) -> None:
+
+def _print_exchange(
+    ctx: CommandContext,
+    tx: bytes,
+    rx: bytes,
+    elapsed_ms: float,
+    *,
+    decode_override: bool | None = None,
+) -> None:
     runtime = ctx.config["runtime"]
     uppercase = runtime.getboolean("uppercase_hex")
     stamped = runtime.getboolean("timestamps")
@@ -38,7 +49,8 @@ def _print_exchange(ctx: CommandContext, tx: bytes, rx: bytes, elapsed_ms: float
     if runtime.getboolean("show_rx"):
         payload = hex_line(rx, uppercase) if rx else "<timeout / no data>"
         ctx.console.print(f"{prefix(stamped)}[green]RX[/green] {payload} [dim]({elapsed_ms:.1f} ms)[/dim]")
-        if rx and runtime.getboolean("decode_rx", fallback=True):
+        decode_enabled = runtime.getboolean("decode_rx", fallback=True) if decode_override is None else decode_override
+        if rx and decode_enabled:
             for line in format_decoded_response(decode_response(rx), uppercase):
                 ctx.console.print(f"   {line}")
 
@@ -71,6 +83,8 @@ def show_status(ctx: CommandContext) -> None:
     )
     ctx.console.print(f"Timeout:    {connection.get('timeout_ms')} ms")
     ctx.console.print(f"CRC mode:   {runtime.get('crc_mode')}")
+    ctx.console.print(f"Decode RX:  {runtime.get('decode_rx', 'true')}")
+    ctx.console.print(f"Language:   {ctx.language}")
 
 
 def ensure_connected(ctx: CommandContext) -> None:
@@ -82,11 +96,37 @@ def ensure_connected(ctx: CommandContext) -> None:
     ctx.console.print(f"[green]Connected[/green] {ctx.transport.endpoint}")
 
 
-def send_frame(ctx: CommandContext, payload: str) -> None:
+def send_frame(ctx: CommandContext, payload: str, *, decode_override: bool | None = None) -> None:
     ensure_connected(ctx)
     raw = parse_hex_bytes(payload)
     exchange = ctx.transport.exchange(raw)
-    _print_exchange(ctx, exchange.tx, exchange.rx, exchange.elapsed_ms)
+    _print_exchange(
+        ctx,
+        exchange.tx,
+        exchange.rx,
+        exchange.elapsed_ms,
+        decode_override=decode_override,
+    )
+
+
+def _parse_send_arguments(parts: list[str]) -> tuple[str, bool | None]:
+    decode_override: bool | None = None
+    payload_parts: list[str] = []
+    for part in parts:
+        lowered = part.lower()
+        if lowered in {"-d", "--decode"}:
+            if decode_override is False:
+                raise ValueError("send: --decode and --raw cannot be used together")
+            decode_override = True
+        elif lowered in {"-r", "--raw"}:
+            if decode_override is True:
+                raise ValueError("send: --decode and --raw cannot be used together")
+            decode_override = False
+        else:
+            payload_parts.append(part)
+    if not payload_parts:
+        raise ValueError("Usage: send [-d|--decode|-r|--raw] <hex bytes...>")
+    return " ".join(payload_parts), decode_override
 
 
 def show_options(ctx: CommandContext, section: str | None = None) -> None:
@@ -154,9 +194,8 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         return None
 
     if command == "send":
-        if len(parts) < 2:
-            raise ValueError("Usage: send <hex bytes...>")
-        send_frame(ctx, " ".join(parts[1:]))
+        payload, decode_override = _parse_send_arguments(parts[1:])
+        send_frame(ctx, payload, decode_override=decode_override)
         return None
 
     if command == "pause":
@@ -204,12 +243,12 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
 
     if command == "help":
         if len(parts) == 1:
-            ctx.console.print(INTERACTIVE_HELP)
+            ctx.console.print(interactive_help(ctx.language))
             return None
         topic = HELP_ALIASES.get(parts[1].lower(), parts[1].lower())
-        help_text = COMMAND_HELP.get(topic)
+        help_text = command_help(ctx.language, topic)
         if help_text is None:
-            ctx.console.print(f"Unknown help topic: {parts[1]}")
+            ctx.console.print(message(ctx.language, "unknown_help_topic", topic=parts[1]))
         else:
             ctx.console.print(help_text)
         return None
