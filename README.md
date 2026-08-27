@@ -44,6 +44,7 @@ end script
 run script <name> [-d|--decode|-r|--raw]
 scripts | ls | list
 show script <name>
+show record
 delete script <name>
 record start [all|rx]
 record stop buffer
@@ -68,6 +69,7 @@ Examples:
 
 ```text
 co<TAB>                         -> connect
+show <TAB>                      -> script, record
 run script <TAB>                -> stored script names
 run script idd-status <TAB>     -> --decode, --raw, -d, -r
 set options <TAB>               -> mutable option names
@@ -117,33 +119,19 @@ Decode priority is:
 flag on individual send > flag on run script > runtime.decode_rx
 ```
 
-So:
-
-```text
-run script idd-status -r
-```
-
-suppresses decoding for all ordinary `send` commands inside the script, while a stored line such as:
-
-```text
-send --decode 01 03 00 65 00 01
-```
-
-still forces decoding for that particular exchange.
-
 ## Clean output
 
-Enable:
+Enable persistently:
 
 ```text
 set options clean_output true
 ```
 
-or in `config.ini`:
+or only for one one-shot invocation:
 
-```ini
-[runtime]
-clean_output = true
+```bash
+uv run rtuforge -c run script idd-status
+uv run rtuforge run script idd-status --clean
 ```
 
 Normal output:
@@ -151,89 +139,80 @@ Normal output:
 ```text
 TX 01 03 00 65 00 01 94 15
 RX 01 03 02 00 05 78 47 (12.4 ms)
-   Slave: 1
-   Function: 03 Read Holding Registers
-   ...
 ```
 
-Clean output contains only HEX frame lines:
+Clean output:
 
 ```text
 01 03 00 65 00 01 94 15
 01 03 02 00 05 78 47
 ```
 
-In clean mode:
-
-- `TX` / `RX` labels are hidden;
-- timestamps and elapsed time are hidden;
-- automatic response decoding is hidden;
-- `show_tx` and `show_rx` still select which frame lines are printed;
-- an explicit `send --decode` or `run script ... --decode` has priority and restores decoding.
-
-This makes output convenient for direct copying into other tools without trimming labels manually, because apparently copying eight bytes should not require text surgery.
+In clean mode TX/RX labels, timestamps, elapsed time and automatic decoding are hidden. Explicit `--decode/-d` still has priority.
 
 ## Exchange recording
 
-Recording is process-local and independent of screen output settings.
+Recording is process-local. `record start all` stores both request and response; `record start rx` stores responses only.
 
-### Record request and response
+### Normal output mode
 
 ```text
 record start all
 send 01 03 00 65 00 01
-send 01 03 00 66 00 01
-record stop buffer
 ```
 
-`buffer` and `clipboard` are aliases and copy the recording to the system clipboard.
-
-`all` format:
+The buffer contains:
 
 ```text
 TX 01 03 00 65 00 01 94 15
 RX 01 03 02 00 05 78 47
-TX 01 03 00 66 00 01 64 15
-RX 01 03 02 00 02 39 85
 ```
 
-### Record responses only
+### Clean output mode
+
+If `clean_output=true` or one-shot `-c/--clean` is active, `record start all` matches the visible clean format:
 
 ```text
-record start rx
-run script idd-status
+01 03 00 65 00 01 94 15
+01 03 02 00 05 78 47
+```
+
+So copying from the screen and saving the recording no longer produces two subtly different formats, a small victory over unnecessary inconsistency.
+
+### Inspect current recording
+
+Without stopping recording:
+
+```text
+show record
+```
+
+It prints the current in-memory record buffer exactly as it will be copied or saved. Recording remains active afterwards.
+
+### Save/copy
+
+```text
+record stop buffer
+record stop clipboard
 record stop file captures/idd-status.txt
 ```
 
-`rx` stores plain response HEX only:
+`buffer` and `clipboard` copy to the system clipboard. Relative file paths are resolved relative to `config.ini`. Parent directories are created automatically. Files are UTF-8 text.
 
-```text
-01 03 02 00 05 78 47
-01 03 02 00 02 39 85
-```
-
-Relative file paths are resolved relative to `config.ini`. Parent directories are created automatically. Files are UTF-8 text.
-
-Other recording commands:
+Other commands:
 
 ```text
 record status
 record cancel
 ```
 
-Recording can also be embedded into a stored script, which allows one-shot capture to a file in a single process:
+Recording can also be embedded in a stored script:
 
 ```text
 record start rx
 send 01 03 00 65 00 01
 send 01 03 00 66 00 01
 record stop file capture.txt
-```
-
-Then:
-
-```bash
-uv run rtuforge run script capture-status
 ```
 
 ## Scripts
@@ -254,87 +233,26 @@ Run:
 run script read-basic
 ```
 
-Useful script commands include:
+Useful script commands include `send`, `pause`, `connect`, `disconnect`, `status`, `ports`, nested `run script`, recording commands, `show record`, `options`, `set options`, and `help`.
 
-```text
-send ...
-send --decode ...
-send --raw ...
-pause <ms>
-connect
-disconnect
-status
-ports
-run script <name>
-record start ...
-record stop ...
-record status
-record cancel
-scripts | ls | list
-show script <name>
-options [section]
-set options <name> <value>
-help [command]
-```
-
-Not allowed inside scripts:
-
-```text
-add script ...
-history
-history clear
-clear | cls
-exit | quit
-```
-
-Empty lines and lines beginning with `#` are ignored. `runtime.inter_command_delay_ms` is inserted between stored script lines. `pause <ms>` adds an explicit additional delay.
-
-Detailed built-in help:
-
-```text
-help scripts
-help run
-help send
-help record
-```
+Not allowed inside scripts: `add script`, `history`, `clear/cls`, `exit/quit`.
 
 ## Language
-
-Configuration:
 
 ```ini
 [ui]
 language = en
 ```
 
-Supported values:
+Supported values: `en`, `ru`.
 
-```text
-en
-ru
-```
-
-Switch to Russian:
+Switch:
 
 ```text
 set options language ru
 ```
 
-This localizes built-in help, option table headings/descriptions, status text, shell messages, common command errors, recording messages, and Modbus response decoding labels/function names.
-
-Technical command names and option identifiers remain unchanged:
-
-```text
-send
-run script
-set options timeout_ms 1000
-```
-
-CLI invocation help also follows the selected language:
-
-```bash
-uv run rtuforge --help
-```
+This localizes help, option table headings/descriptions, status text, shell messages, common errors, recording messages, and Modbus decoding labels/function names. Technical command names stay unchanged.
 
 ## One-shot behavior and errors
 
@@ -342,15 +260,11 @@ Examples:
 
 ```bash
 uv run rtuforge send 01 03 00 65 00 01
-uv run rtuforge send --raw 01 03 00 65 00 01
 uv run rtuforge run script idd-status -r
-uv run rtuforge help record
-uv run rtuforge options
+uv run rtuforge run script idd-status -c -r
 ```
 
-One-shot mode suppresses the automatic `Connected ...` message.
-
-Expected user/runtime errors are caught and returned as a concise error with exit code `1` instead of a Python traceback. For example, a missing script produces a normal message rather than exposing the internals of `KeyError`, which was never anyone's idea of a user interface.
+One-shot mode suppresses automatic `Connected ...`. Expected user/runtime errors are caught and returned as concise messages with exit code `1`, without Python traceback.
 
 ## Configuration
 
@@ -365,17 +279,17 @@ Expected user/runtime errors are caught and returned as a concise error with exi
 
 ### Runtime
 
-- `inter_command_delay_ms`: delay between script commands.
-- `post_write_delay_ms`: delay after a serial write.
-- `response_silence_ms`: silence interval used to detect the end of a response.
-- `max_response_bytes`: receive size cap.
-- `crc_mode`: `auto`, `append`, or `none`.
-- `auto_connect`: auto-connect for send/run.
-- `show_tx`, `show_rx`: frame output toggles.
-- `decode_rx`: default response decoding.
-- `clean_output`: print copy-friendly plain HEX and suppress automatic decoding.
-- `timestamps`: timestamp normal TX/RX output.
-- `uppercase_hex`: HEX letter case.
+- `inter_command_delay_ms`
+- `post_write_delay_ms`
+- `response_silence_ms`
+- `max_response_bytes`
+- `crc_mode`
+- `auto_connect`
+- `show_tx`, `show_rx`
+- `decode_rx`
+- `clean_output`
+- `timestamps`
+- `uppercase_hex`
 
 ### History
 
@@ -385,19 +299,6 @@ Expected user/runtime errors are caught and returned as a concise error with exi
 ### UI
 
 - `language`: `en` or `ru`.
-
-Examples:
-
-```text
-set options port COM6
-set options timeout_ms 1000
-set options crc_mode auto
-set options decode_rx false
-set options clean_output true
-set options language ru
-```
-
-Changing a connection option while connected forces a disconnect.
 
 ## Development
 
