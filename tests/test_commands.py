@@ -97,12 +97,32 @@ def test_contextual_help(command_context, command, expected):
     command_context.transport.connect.assert_not_called()
 
 
+def test_help_preserves_literal_placeholders(command_context):
+    execute_command(command_context, "help")
+    text = output(command_context)
+    assert "options [section]" in text
+    assert "help [command]" in text
+
+
 def test_russian_help(command_context):
     command_context.config["ui"]["language"] = "ru"
     execute_command(command_context, "help scripts")
     text = output(command_context)
     assert "Создание скрипта" in text
     assert "Запрещены внутри скриптов" in text
+
+
+def test_russian_options_table(command_context):
+    command_context.config["ui"]["language"] = "ru"
+    execute_command(command_context, "options")
+    text = output(command_context)
+    assert "Параметры RTU Forge" in text
+    assert "Раздел" in text
+    assert "Параметр" in text
+    assert "Значение" in text
+    assert "Описание" in text
+    assert "Пауза между командами скрипта" in text
+    assert "Язык справки и интерфейса" in text
 
 
 def test_send_decode_argument_parser():
