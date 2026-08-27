@@ -5,8 +5,8 @@ from collections.abc import Iterable, Iterator
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
 
-from .config import OPTION_SPECS
-from .helptext import COMMAND_HELP
+from .config import OPTION_SPECS, option_spec
+from .i18n import help_topics
 from .scripts import ScriptStore
 
 
@@ -20,7 +20,7 @@ TOP_LEVEL_COMMANDS: tuple[str, ...] = (
 def completion_candidates(
     text: str,
     script_names: Iterable[str] = (),
-    sections: Iterable[str] = ("connection", "runtime", "history"),
+    sections: Iterable[str] = ("connection", "runtime", "history", "ui"),
 ) -> list[str]:
     trailing_space = bool(text) and text[-1].isspace()
     words = text.lower().split()
@@ -28,7 +28,7 @@ def completion_candidates(
     completed = words if trailing_space else words[:-1]
 
     choices: Iterable[str]
-    if completed in (["run"], ["show"], ["delete"]):
+    if completed in (["run"], ["show"], ["delete"], ["add"]):
         choices = ("script",)
     elif len(completed) == 2 and completed[0] in {"run", "show", "delete"} and completed[1] == "script":
         choices = script_names
@@ -36,10 +36,19 @@ def completion_candidates(
         choices = ("options",)
     elif completed == ["set", "options"]:
         choices = (spec.name for spec in OPTION_SPECS)
+    elif len(completed) == 3 and completed[:2] == ["set", "options"]:
+        try:
+            choices = option_spec(completed[2]).choices
+        except KeyError:
+            choices = ()
     elif completed == ["options"]:
         choices = sections
     elif completed == ["help"]:
-        choices = COMMAND_HELP.keys()
+        choices = help_topics()
+    elif completed == ["history"]:
+        choices = ("clear",)
+    elif completed == ["send"]:
+        choices = ("--decode", "--raw", "-d", "-r")
     elif not completed:
         choices = TOP_LEVEL_COMMANDS
     else:
