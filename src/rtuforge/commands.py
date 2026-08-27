@@ -100,16 +100,26 @@ def _print_exchange(ctx: CommandContext, tx: bytes, rx: bytes, elapsed_ms: float
 
     if clean:
         if runtime.getboolean("show_tx"):
-            ctx.console.print(hex_line(tx, uppercase), markup=False)
+            ctx.console.print(hex_line(tx, uppercase), style="cyan", markup=False, highlight=False)
         if runtime.getboolean("show_rx") and rx:
-            ctx.console.print(hex_line(rx, uppercase), markup=False)
+            ctx.console.print(hex_line(rx, uppercase), style="green", markup=False, highlight=False)
     else:
         stamped = runtime.getboolean("timestamps")
         if runtime.getboolean("show_tx"):
-            ctx.console.print(f"{prefix(stamped)}[cyan]TX[/cyan] {hex_line(tx, uppercase)}")
+            ctx.console.print(
+                f"{prefix(stamped)}TX {hex_line(tx, uppercase)}",
+                style="cyan",
+                markup=False,
+                highlight=False,
+            )
         if runtime.getboolean("show_rx"):
             payload = hex_line(rx, uppercase) if rx else tr(ctx.language, "no_data")
-            ctx.console.print(f"{prefix(stamped)}[green]RX[/green] {payload} [dim]({elapsed_ms:.1f} ms)[/dim]")
+            ctx.console.print(
+                f"{prefix(stamped)}RX {payload} ({elapsed_ms:.1f} ms)",
+                style="green",
+                markup=False,
+                highlight=False,
+            )
 
     if decode_override is not None:
         decode_enabled = decode_override
