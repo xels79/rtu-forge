@@ -17,6 +17,7 @@ TOP_LEVEL_COMMANDS: tuple[str, ...] = (
 )
 
 DECODE_FLAGS: tuple[str, ...] = ("--decode", "--raw", "-d", "-r")
+RECORD_SCRIPT_FLAGS: tuple[str, ...] = (*DECODE_FLAGS, "--clean", "-c")
 
 
 def completion_candidates(
@@ -58,11 +59,21 @@ def completion_candidates(
     elif completed == ["send"]:
         choices = DECODE_FLAGS
     elif completed == ["record"]:
-        choices = ("start", "stop", "status", "cancel")
+        choices = ("start", "stop", "status", "cancel", "script")
     elif completed == ["record", "start"]:
         choices = ("all", "rx")
     elif completed == ["record", "stop"]:
         choices = ("buffer", "clipboard", "file")
+    elif completed == ["record", "script"]:
+        choices = script_names
+    elif len(completed) >= 3 and completed[:2] == ["record", "script"]:
+        tail = completed[2:]
+        if not any(word in {"all", "rx"} for word in tail):
+            choices = ("all", "rx")
+        elif tail and tail[-1] in {"all", "rx"}:
+            choices = ("buffer", "clipboard", "file")
+        else:
+            choices = RECORD_SCRIPT_FLAGS
     elif not completed:
         choices = TOP_LEVEL_COMMANDS
     else:
@@ -75,9 +86,7 @@ class RTUForgeCompleter(Completer):
         self.scripts = scripts
         self.sections = tuple(sections)
 
-    def get_completions(
-        self, document: Document, complete_event: CompleteEvent
-    ) -> Iterator[Completion]:
+    def get_completions(self, document: Document, complete_event: CompleteEvent) -> Iterator[Completion]:
         text = document.text_before_cursor
         fragment = "" if not text or text[-1].isspace() else text.split()[-1]
         for candidate in completion_candidates(text, self.scripts.list(), self.sections):
