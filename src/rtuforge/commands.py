@@ -80,7 +80,6 @@ def _clean_output(ctx: CommandContext) -> bool:
 def _record_exchange(ctx: CommandContext, tx: bytes, rx: bytes, uppercase: bool) -> None:
     if not ctx.recording.active:
         return
-
     if ctx.recording.mode == "all":
         if _clean_output(ctx):
             ctx.recording.lines.append(hex_line(tx, uppercase))
@@ -93,14 +92,7 @@ def _record_exchange(ctx: CommandContext, tx: bytes, rx: bytes, uppercase: bool)
         ctx.recording.lines.append(hex_line(rx, uppercase) if rx else "")
 
 
-def _print_exchange(
-    ctx: CommandContext,
-    tx: bytes,
-    rx: bytes,
-    elapsed_ms: float,
-    *,
-    decode_override: bool | None = None,
-) -> None:
+def _print_exchange(ctx: CommandContext, tx: bytes, rx: bytes, elapsed_ms: float, *, decode_override: bool | None = None) -> None:
     runtime = ctx.config["runtime"]
     uppercase = runtime.getboolean("uppercase_hex")
     clean = _clean_output(ctx)
@@ -137,17 +129,14 @@ def show_ports(ctx: CommandContext) -> None:
         ctx.console.print(tr(ctx.language, "no_ports"), markup=False)
         return
     table = Table(show_header=True, header_style="bold")
-    table.add_column(tr(ctx.language, "port_col"))
-    table.add_column(tr(ctx.language, "description_col"))
-    table.add_column(tr(ctx.language, "hwid_col"))
+    table.add_column(tr(ctx.language, "port_col")); table.add_column(tr(ctx.language, "description_col")); table.add_column(tr(ctx.language, "hwid_col"))
     for port in ports:
         table.add_row(str(port.device), str(port.description), str(port.hwid))
     ctx.console.print(table)
 
 
 def show_status(ctx: CommandContext) -> None:
-    connection = ctx.config["connection"]
-    runtime = ctx.config["runtime"]
+    connection = ctx.config["connection"]; runtime = ctx.config["runtime"]
     state = tr(ctx.language, "connected_state" if ctx.transport.connected else "disconnected_state")
     ctx.console.print(f"{tr(ctx.language, 'connection')}: {state}", markup=False)
     if ctx.transport.connected:
@@ -174,14 +163,12 @@ def ensure_connected(ctx: CommandContext) -> None:
 
 def send_frame(ctx: CommandContext, payload: str, *, decode_override: bool | None = None) -> None:
     ensure_connected(ctx)
-    raw = parse_hex_bytes(payload)
-    exchange = ctx.transport.exchange(raw)
+    exchange = ctx.transport.exchange(parse_hex_bytes(payload))
     _print_exchange(ctx, exchange.tx, exchange.rx, exchange.elapsed_ms, decode_override=decode_override)
 
 
 def _parse_decode_flags(parts: list[str], *, command: str) -> tuple[list[str], bool | None]:
-    decode_override: bool | None = None
-    remaining: list[str] = []
+    decode_override: bool | None = None; remaining: list[str] = []
     for part in parts:
         lowered = part.lower()
         if lowered in {"-d", "--decode"}:
@@ -210,17 +197,14 @@ def _parse_send_arguments(parts: list[str], language: str = "en") -> tuple[str, 
 def _parse_run_arguments(parts: list[str], language: str = "en") -> tuple[str, bool | None]:
     if not parts:
         raise ValueError(tr(language, "run_usage"))
-    decode_override: bool | None = None
-    name_parts: list[str] = []
+    decode_override: bool | None = None; name_parts: list[str] = []
     for part in parts:
         lowered = part.lower()
         if lowered in {"-d", "--decode"}:
-            if decode_override is False:
-                raise ValueError(tr(language, "run_conflict"))
+            if decode_override is False: raise ValueError(tr(language, "run_conflict"))
             decode_override = True
         elif lowered in {"-r", "--raw"}:
-            if decode_override is True:
-                raise ValueError(tr(language, "run_conflict"))
+            if decode_override is True: raise ValueError(tr(language, "run_conflict"))
             decode_override = False
         elif part.startswith("-"):
             raise ValueError(tr(language, "run_unknown_flag", flag=part))
@@ -232,240 +216,191 @@ def _parse_run_arguments(parts: list[str], language: str = "en") -> tuple[str, b
 
 
 def show_options(ctx: CommandContext, section: str | None = None) -> None:
-    language = "ru" if ctx.language.lower() == "ru" else "en"
-    labels = OPTIONS_TABLE_TEXT[language]
+    language = "ru" if ctx.language.lower() == "ru" else "en"; labels = OPTIONS_TABLE_TEXT[language]
     table = Table(title=labels["title"])
-    table.add_column(labels["section"])
-    table.add_column(labels["name"])
-    table.add_column(labels["value"])
-    table.add_column(labels["description"])
+    for key in ("section", "name", "value", "description"): table.add_column(labels[key])
     for spec in OPTION_SPECS:
-        if section and spec.section.lower() != section.lower():
-            continue
+        if section and spec.section.lower() != section.lower(): continue
         description = OPTION_DESCRIPTIONS_RU.get(spec.name, spec.description) if language == "ru" else spec.description
         table.add_row(spec.section, spec.name, ctx.config[spec.section].get(spec.name, ""), description)
     ctx.console.print(table)
 
 
 def set_option(ctx: CommandContext, name: str, value: str) -> None:
-    try:
-        spec = option_spec(name)
-    except KeyError:
-        raise ValueError(tr(ctx.language, "unknown_option", name=name)) from None
-    try:
-        parsed = parse_value(spec, value)
+    try: spec = option_spec(name)
+    except KeyError: raise ValueError(tr(ctx.language, "unknown_option", name=name)) from None
+    try: parsed = parse_value(spec, value)
     except ValueError:
-        if spec.kind == "bool":
-            raise ValueError(tr(ctx.language, "expected_boolean")) from None
-        if spec.choices:
-            raise ValueError(tr(ctx.language, "allowed_values", values=", ".join(spec.choices))) from None
+        if spec.kind == "bool": raise ValueError(tr(ctx.language, "expected_boolean")) from None
+        if spec.choices: raise ValueError(tr(ctx.language, "allowed_values", values=", ".join(spec.choices))) from None
         raise
-    was_connection = spec.section == "connection"
-    if was_connection and ctx.transport.connected:
-        ctx.transport.disconnect()
-        ctx.console.print(f"[yellow]{tr(ctx.language, 'connection_option_disconnect')}[/yellow]")
-    ctx.config[spec.section][spec.name] = parsed
-    save_config(ctx.config_path, ctx.config)
+    if spec.section == "connection" and ctx.transport.connected:
+        ctx.transport.disconnect(); ctx.console.print(f"[yellow]{tr(ctx.language, 'connection_option_disconnect')}[/yellow]")
+    ctx.config[spec.section][spec.name] = parsed; save_config(ctx.config_path, ctx.config)
     ctx.console.print(f"[green]{tr(ctx.language, 'option_saved', section=spec.section, name=spec.name, value=parsed)}[/green]")
 
 
 def run_script(ctx: CommandContext, name: str, *, decode_override: bool | None = None) -> None:
-    try:
-        lines = ctx.scripts.get(name)
-    except KeyError:
-        raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
+    try: lines = ctx.scripts.get(name)
+    except KeyError: raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
     if not lines:
-        ctx.console.print(f"[yellow]{tr(ctx.language, 'script_empty', name=name)}[/yellow]")
-        return
+        ctx.console.print(f"[yellow]{tr(ctx.language, 'script_empty', name=name)}[/yellow]"); return
     delay = ctx.config["runtime"].getint("inter_command_delay_ms") / 1000.0
     for index, line in enumerate(lines, start=1):
-        if not _clean_output(ctx):
-            ctx.console.print(f"[dim]{index:02d}> {line}[/dim]")
+        if not _clean_output(ctx): ctx.console.print(f"[dim]{index:02d}> {line}[/dim]")
         execute_command(ctx, line, from_script=True, inherited_decode_override=decode_override)
-        if index < len(lines) and delay > 0:
-            time.sleep(delay)
+        if index < len(lines) and delay > 0: time.sleep(delay)
 
 
 def _copy_to_clipboard(text: str) -> None:
     import tkinter
-
-    root = tkinter.Tk()
-    root.withdraw()
-    root.clipboard_clear()
-    root.clipboard_append(text)
-    root.update()
-    root.destroy()
+    root = tkinter.Tk(); root.withdraw(); root.clipboard_clear(); root.clipboard_append(text); root.update(); root.destroy()
 
 
-def _record_command(ctx: CommandContext, parts: list[str]) -> None:
-    if not parts:
-        raise ValueError(tr(ctx.language, "record_usage"))
-    action = parts[0].lower()
-    if action == "start":
-        mode = parts[1].lower() if len(parts) > 1 else "all"
-        if len(parts) > 2 or mode not in {"all", "rx"}:
-            raise ValueError(tr(ctx.language, "record_usage"))
-        if ctx.recording.active:
-            raise ValueError(tr(ctx.language, "record_already_active", mode=ctx.recording.mode))
-        ctx.recording.start(mode)
-        ctx.console.print(tr(ctx.language, "record_started", mode=tr(ctx.language, f"record_mode_{mode}")), markup=False)
-        return
-    if action == "status":
-        if ctx.recording.active:
-            ctx.console.print(tr(ctx.language, "record_status_active", mode=ctx.recording.mode, count=len(ctx.recording.lines)), markup=False)
-        else:
-            ctx.console.print(tr(ctx.language, "record_status_inactive"), markup=False)
-        return
-    if action == "cancel":
-        if not ctx.recording.active:
-            raise ValueError(tr(ctx.language, "record_not_active"))
-        ctx.recording.clear()
-        ctx.console.print(tr(ctx.language, "record_cancelled"), markup=False)
-        return
-    if action != "stop" or len(parts) < 2:
-        raise ValueError(tr(ctx.language, "record_usage"))
-    if not ctx.recording.active:
-        raise ValueError(tr(ctx.language, "record_not_active"))
-
-    destination = parts[1].lower()
-    lines = list(ctx.recording.lines)
-    text = "\n".join(lines) + ("\n" if lines else "")
-    if destination in {"buffer", "clipboard"} and len(parts) == 2:
-        try:
-            _copy_to_clipboard(text)
-        except Exception as exc:
-            raise RuntimeError(tr(ctx.language, "clipboard_error", error=exc)) from None
-        ctx.recording.clear()
-        ctx.console.print(tr(ctx.language, "record_copied", count=len(lines)), markup=False)
-        return
-    if destination == "file" and len(parts) >= 3:
-        path = Path(" ".join(parts[2:])).expanduser()
-        if not path.is_absolute():
-            path = ctx.config_path.parent / path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
-        ctx.recording.clear()
-        ctx.console.print(tr(ctx.language, "record_saved", path=path, count=len(lines)), markup=False)
-        return
+def _finish_recording(ctx: CommandContext, destination_parts: list[str]) -> None:
+    if not ctx.recording.active: raise ValueError(tr(ctx.language, "record_not_active"))
+    if not destination_parts: raise ValueError(tr(ctx.language, "record_usage"))
+    destination = destination_parts[0].lower(); lines = list(ctx.recording.lines); text = "\n".join(lines) + ("\n" if lines else "")
+    if destination in {"buffer", "clipboard"} and len(destination_parts) == 1:
+        try: _copy_to_clipboard(text)
+        except Exception as exc: raise RuntimeError(tr(ctx.language, "clipboard_error", error=exc)) from None
+        ctx.recording.clear(); ctx.console.print(tr(ctx.language, "record_copied", count=len(lines)), markup=False); return
+    if destination == "file" and len(destination_parts) >= 2:
+        path = Path(" ".join(destination_parts[1:])).expanduser()
+        if not path.is_absolute(): path = ctx.config_path.parent / path
+        path.parent.mkdir(parents=True, exist_ok=True); path.write_text(text, encoding="utf-8")
+        ctx.recording.clear(); ctx.console.print(tr(ctx.language, "record_saved", path=path, count=len(lines)), markup=False); return
     raise ValueError(tr(ctx.language, "record_usage"))
 
 
-def execute_command(
-    ctx: CommandContext,
-    line: str,
-    *,
-    from_script: bool = False,
-    inherited_decode_override: bool | None = None,
-) -> str | None:
-    stripped = line.strip()
-    if not stripped or stripped.startswith("#"):
-        return None
+def _parse_record_script_arguments(parts: list[str], language: str) -> tuple[str, str, list[str], bool | None, bool]:
+    if not parts: raise ValueError(tr(language, "record_script_usage"))
+    decode_override: bool | None = None; clean = False; plain: list[str] = []
+    for part in parts:
+        low = part.lower()
+        if low in {"-d", "--decode"}:
+            if decode_override is False: raise ValueError(tr(language, "record_script_conflict"))
+            decode_override = True
+        elif low in {"-r", "--raw"}:
+            if decode_override is True: raise ValueError(tr(language, "record_script_conflict"))
+            decode_override = False
+        elif low in {"-c", "--clean"}: clean = True
+        elif part.startswith("-"): raise ValueError(tr(language, "record_script_unknown_flag", flag=part))
+        else: plain.append(part)
+    marker = next((i for i in range(1, len(plain) - 1) if plain[i].lower() in {"all", "rx"} and plain[i + 1].lower() in {"buffer", "clipboard", "file"}), None)
+    if marker is None: raise ValueError(tr(language, "record_script_usage"))
+    name = " ".join(plain[:marker]); mode = plain[marker].lower(); destination = plain[marker + 1:]
+    if not name or not destination: raise ValueError(tr(language, "record_script_usage"))
+    if destination[0].lower() in {"buffer", "clipboard"} and len(destination) != 1: raise ValueError(tr(language, "record_script_usage"))
+    if destination[0].lower() == "file" and len(destination) < 2: raise ValueError(tr(language, "record_script_usage"))
+    return name, mode, destination, decode_override, clean
 
-    parts = shlex.split(stripped)
-    command = parts[0].lower()
+
+def _record_script(ctx: CommandContext, parts: list[str]) -> None:
+    if ctx.recording.active: raise ValueError(tr(ctx.language, "record_already_active", mode=ctx.recording.mode))
+    name, mode, destination, decode_override, clean = _parse_record_script_arguments(parts, ctx.language)
+    previous_clean = ctx.config["runtime"].get("clean_output", "false")
+    if clean: ctx.config["runtime"]["clean_output"] = "true"
+    ctx.recording.start(mode)
+    try:
+        run_script(ctx, name, decode_override=decode_override)
+        _finish_recording(ctx, destination)
+    except Exception:
+        ctx.recording.clear()
+        raise
+    finally:
+        ctx.config["runtime"]["clean_output"] = previous_clean
+
+
+def _record_command(ctx: CommandContext, parts: list[str]) -> None:
+    if not parts: raise ValueError(tr(ctx.language, "record_usage"))
+    action = parts[0].lower()
+    if action == "script": _record_script(ctx, parts[1:]); return
+    if action == "start":
+        mode = parts[1].lower() if len(parts) > 1 else "all"
+        if len(parts) > 2 or mode not in {"all", "rx"}: raise ValueError(tr(ctx.language, "record_usage"))
+        if ctx.recording.active: raise ValueError(tr(ctx.language, "record_already_active", mode=ctx.recording.mode))
+        ctx.recording.start(mode); ctx.console.print(tr(ctx.language, "record_started", mode=tr(ctx.language, f"record_mode_{mode}")), markup=False); return
+    if action == "status":
+        key = "record_status_active" if ctx.recording.active else "record_status_inactive"
+        values = {"mode": ctx.recording.mode, "count": len(ctx.recording.lines)} if ctx.recording.active else {}
+        ctx.console.print(tr(ctx.language, key, **values), markup=False); return
+    if action == "cancel":
+        if not ctx.recording.active: raise ValueError(tr(ctx.language, "record_not_active"))
+        ctx.recording.clear(); ctx.console.print(tr(ctx.language, "record_cancelled"), markup=False); return
+    if action == "stop": _finish_recording(ctx, parts[1:]); return
+    raise ValueError(tr(ctx.language, "record_usage"))
+
+
+def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False, inherited_decode_override: bool | None = None) -> str | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"): return None
+    parts = shlex.split(stripped); command = parts[0].lower()
 
     if command == "connect":
         ctx.transport.connect()
-        if not ctx.one_shot and not _clean_output(ctx):
-            ctx.console.print(f"[green]{tr(ctx.language, 'connected', endpoint=ctx.transport.endpoint)}[/green]")
+        if not ctx.one_shot and not _clean_output(ctx): ctx.console.print(f"[green]{tr(ctx.language, 'connected', endpoint=ctx.transport.endpoint)}[/green]")
         return None
     if command == "disconnect":
         ctx.transport.disconnect()
-        if not ctx.one_shot and not _clean_output(ctx):
-            ctx.console.print(f"[yellow]{tr(ctx.language, 'disconnected')}[/yellow]")
+        if not ctx.one_shot and not _clean_output(ctx): ctx.console.print(f"[yellow]{tr(ctx.language, 'disconnected')}[/yellow]")
         return None
-    if command == "ports":
-        show_ports(ctx); return None
-    if command == "status":
-        show_status(ctx); return None
+    if command == "ports": show_ports(ctx); return None
+    if command == "status": show_status(ctx); return None
     if command == "send":
-        payload, explicit_override = _parse_send_arguments(parts[1:], ctx.language)
-        effective_override = explicit_override if explicit_override is not None else inherited_decode_override
-        send_frame(ctx, payload, decode_override=effective_override)
-        return None
+        payload, explicit = _parse_send_arguments(parts[1:], ctx.language); send_frame(ctx, payload, decode_override=explicit if explicit is not None else inherited_decode_override); return None
     if command == "pause":
-        if len(parts) != 2:
-            raise ValueError(tr(ctx.language, "pause_usage"))
-        time.sleep(float(parts[1].replace(",", ".")) / 1000.0)
-        return None
+        if len(parts) != 2: raise ValueError(tr(ctx.language, "pause_usage"))
+        time.sleep(float(parts[1].replace(",", ".")) / 1000.0); return None
     if command in {"scripts", "ls", "list"}:
         names = ctx.scripts.list()
         if names:
-            for name in names:
-                ctx.console.print(name, markup=False)
-        else:
-            ctx.console.print(tr(ctx.language, "no_scripts"), markup=False)
+            for name in names: ctx.console.print(name, markup=False)
+        else: ctx.console.print(tr(ctx.language, "no_scripts"), markup=False)
         return None
     if command == "show" and len(parts) == 2 and parts[1].lower() == "record":
-        if not ctx.recording.active:
-            raise ValueError(tr(ctx.language, "record_not_active"))
-        for item in ctx.recording.lines:
-            ctx.console.print(item, markup=False)
+        if not ctx.recording.active: raise ValueError(tr(ctx.language, "record_not_active"))
+        for item in ctx.recording.lines: ctx.console.print(item, markup=False)
         return None
     if command == "show" and len(parts) >= 3 and parts[1].lower() == "script":
         name = " ".join(parts[2:])
-        try:
-            lines = ctx.scripts.get(name)
-        except KeyError:
-            raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
-        for item in lines:
-            ctx.console.print(item, markup=False)
+        try: lines = ctx.scripts.get(name)
+        except KeyError: raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
+        for item in lines: ctx.console.print(item, markup=False)
         return None
     if command == "delete" and len(parts) >= 3 and parts[1].lower() == "script":
         name = " ".join(parts[2:])
-        try:
-            ctx.scripts.delete(name)
-        except KeyError:
-            raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
-        ctx.console.print(f"[green]{tr(ctx.language, 'script_deleted', name=name)}[/green]")
-        return None
+        try: ctx.scripts.delete(name)
+        except KeyError: raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
+        ctx.console.print(f"[green]{tr(ctx.language, 'script_deleted', name=name)}[/green]"); return None
     if command == "run" and len(parts) >= 2 and parts[1].lower() == "script":
-        name, explicit_override = _parse_run_arguments(parts[2:], ctx.language)
-        effective_override = explicit_override if explicit_override is not None else inherited_decode_override
-        run_script(ctx, name, decode_override=effective_override)
-        return None
-    if command == "record":
-        _record_command(ctx, parts[1:]); return None
+        name, explicit = _parse_run_arguments(parts[2:], ctx.language); run_script(ctx, name, decode_override=explicit if explicit is not None else inherited_decode_override); return None
+    if command == "record": _record_command(ctx, parts[1:]); return None
     if command == "options":
         section = parts[1] if len(parts) > 1 else None
-        if section and section not in ctx.config.sections():
-            raise ValueError(tr(ctx.language, "unknown_section", section=section))
+        if section and section not in ctx.config.sections(): raise ValueError(tr(ctx.language, "unknown_section", section=section))
         show_options(ctx, section); return None
-    if command == "set" and len(parts) >= 4 and parts[1].lower() in {"option", "options"}:
-        set_option(ctx, parts[2], " ".join(parts[3:])); return None
+    if command == "set" and len(parts) >= 4 and parts[1].lower() in {"option", "options"}: set_option(ctx, parts[2], " ".join(parts[3:])); return None
     if command == "help":
-        if len(parts) == 1:
-            ctx.console.print(interactive_help(ctx.language), markup=False)
-            return None
+        if len(parts) == 1: ctx.console.print(interactive_help(ctx.language), markup=False); return None
         topic = HELP_ALIASES.get(parts[1].lower(), parts[1].lower())
-        if topic == "record":
+        if topic in {"record", "run"}:
             from .runtime_text import TEXT
-            ctx.console.print(TEXT["ru" if ctx.language.lower() == "ru" else "en"].get("help_record", "record"), markup=False)
-            return None
-        if topic == "run":
-            from .runtime_text import TEXT
-            ctx.console.print(TEXT["ru" if ctx.language.lower() == "ru" else "en"].get("help_run", "run"), markup=False)
-            return None
-        help_text = command_help(ctx.language, topic)
-        if help_text is None:
-            ctx.console.print(message(ctx.language, "unknown_help_topic", topic=parts[1]), markup=False)
-        else:
-            ctx.console.print(help_text, markup=False)
+            ctx.console.print(TEXT["ru" if ctx.language.lower() == "ru" else "en"].get(f"help_{topic}", topic), markup=False); return None
+        text = command_help(ctx.language, topic)
+        if text is None: ctx.console.print(message(ctx.language, "unknown_help_topic", topic=parts[1]), markup=False)
+        else: ctx.console.print(text, markup=False)
         return None
     if command in {"clear", "cls"}:
-        if from_script:
-            raise ValueError(tr(ctx.language, "clear_script_forbidden"))
+        if from_script: raise ValueError(tr(ctx.language, "clear_script_forbidden"))
         return "clear-screen"
     if command in {"exit", "quit"}:
-        if from_script:
-            raise ValueError(tr(ctx.language, "exit_script_forbidden"))
+        if from_script: raise ValueError(tr(ctx.language, "exit_script_forbidden"))
         return "exit"
     if command == "add" and len(parts) >= 3 and parts[1].lower() == "script":
-        if from_script:
-            raise ValueError(tr(ctx.language, "add_script_interactive"))
+        if from_script: raise ValueError(tr(ctx.language, "add_script_interactive"))
         return "add-script:" + " ".join(parts[2:])
     if command == "history":
-        if from_script:
-            raise ValueError(tr(ctx.language, "history_script_forbidden"))
+        if from_script: raise ValueError(tr(ctx.language, "history_script_forbidden"))
         return "history-clear" if len(parts) > 1 and parts[1].lower() == "clear" else "history-show"
     raise ValueError(tr(ctx.language, "unknown_command", command=command))
