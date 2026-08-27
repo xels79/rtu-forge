@@ -38,6 +38,7 @@ OPTION_SPECS: tuple[OptionSpec, ...] = (
     OptionSpec("runtime", "uppercase_hex", "Use uppercase HEX output", "bool"),
     OptionSpec("history", "file", "Persistent interactive history file", "str"),
     OptionSpec("history", "max_entries", "History trimming limit", "int"),
+    OptionSpec("ui", "language", "Help and CLI language: en/ru", "str", ("en", "ru"), default="en"),
 )
 
 
