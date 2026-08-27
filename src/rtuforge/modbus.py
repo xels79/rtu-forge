@@ -4,15 +4,19 @@ from dataclasses import dataclass
 
 from .crc import has_valid_crc
 from .formatting import hex_line
-from .runtime_text import exception_name, function_name, tr
+from .runtime_text import exception_name as localized_exception_name
+from .runtime_text import function_name as localized_function_name
+from .runtime_text import tr
 
 
 @dataclass(frozen=True)
 class DecodedFrame:
     slave: int | None = None
     function: int | None = None
+    function_name: str | None = None
     crc_valid: bool | None = None
     exception_code: int | None = None
+    exception_name: str | None = None
     byte_count: int | None = None
     data: bytes = b""
     registers: tuple[int, ...] = ()
@@ -32,7 +36,9 @@ def decode_response(frame: bytes) -> DecodedFrame:
 
     is_exception = bool(raw_function & 0x80)
     function = raw_function & 0x7F if is_exception else raw_function
+    function_name = localized_function_name("en", function)
     exception_code = frame[2] if is_exception and len(frame) > 2 else None
+    exception_name = localized_exception_name("en", exception_code) if exception_code is not None else None
 
     byte_count: int | None = None
     data = b""
@@ -58,8 +64,10 @@ def decode_response(frame: bytes) -> DecodedFrame:
     return DecodedFrame(
         slave=slave,
         function=function,
+        function_name=function_name,
         crc_valid=crc_valid,
         exception_code=exception_code,
+        exception_name=exception_name,
         byte_count=byte_count,
         data=data,
         registers=registers,
@@ -83,11 +91,11 @@ def format_decoded_response(
     if decoded.slave is not None:
         lines.append(f"{tr(language, 'slave')}: {decoded.slave}")
     if decoded.function is not None:
-        name = function_name(language, decoded.function)
+        name = localized_function_name(language, decoded.function)
         suffix = f" {name}" if name and decoded.exception_code is None else ""
         lines.append(f"{tr(language, 'function')}: {decoded.function:02X}{suffix}")
     if decoded.exception_code is not None:
-        name = exception_name(language, decoded.exception_code)
+        name = localized_exception_name(language, decoded.exception_code)
         suffix = f" {name}" if name else ""
         lines.append(f"{tr(language, 'exception')}: {decoded.exception_code:02X}{suffix}")
     else:
