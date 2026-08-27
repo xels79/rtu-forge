@@ -30,8 +30,10 @@ def completion_candidates(
     completed = words if trailing_space else words[:-1]
 
     choices: Iterable[str]
-    if completed in (["run"], ["show"], ["delete"], ["add"]):
+    if completed in (["run"], ["delete"], ["add"]):
         choices = ("script",)
+    elif completed == ["show"]:
+        choices = ("script", "record")
     elif completed == ["run", "script"]:
         choices = script_names
     elif len(completed) >= 3 and completed[:2] == ["run", "script"]:
