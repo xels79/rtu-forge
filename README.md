@@ -1,21 +1,21 @@
 # RTU Forge
 
-A compact Python console for raw Modbus RTU work, reusable scripts, response decoding, clean copy-friendly output, and exchange recording.
+RTU Forge is a compact Python console for raw Modbus RTU work, reusable scripts, localized help, response decoding, clean copy-friendly output, and exchange recording.
 
 ## Highlights
 
 - Interactive shell with persistent history and Tab completion.
-- One-shot mode for quick terminal commands and scripts.
-- Raw HEX `send` with automatic Modbus CRC handling.
-- Named scripts in `scripts.ini`.
-- English and Russian help/UI selected in `config.ini`.
-- Optional Modbus RX decoding.
-- Per-command and per-script decode overrides.
+- One-shot mode for terminal commands and stored scripts.
+- Raw HEX `send` with configurable Modbus CRC handling.
+- Named scripts stored in `scripts.ini`.
+- English and Russian help/UI selected by `ui.language`.
+- Optional Modbus RX decoding with per-send and per-script overrides.
 - Clean output mode with plain HEX only.
-- Recording of TX+RX or RX-only data to clipboard or file.
-- Windows COM and Linux `/dev/tty*` paths.
+- Recording of TX+RX or RX-only data to clipboard or UTF-8 files.
+- One-command script recording with decode and clean-output flags.
+- Windows COM and Linux `/dev/tty*` serial paths.
 
-## Install / run
+## Install and run
 
 ```bash
 uv sync --extra dev
@@ -30,58 +30,98 @@ uv run rtuforge send 01 03 00 65 00 01
 
 One-shot auto-connect is silent: it does not print `Connected COM...` before command output.
 
-## Interactive commands
+## Command reference
 
 ```text
 connect
 disconnect
 ports
 status
+
 send [-d|--decode|-r|--raw] <hex...>
+
 add script <name>
   ...commands...
 end script
+
 run script <name> [-d|--decode|-r|--raw]
 scripts | ls | list
 show script <name>
-show record
 delete script <name>
+
+show record
 record start [all|rx]
 record stop buffer
 record stop clipboard
 record stop file <path>
 record status
 record cancel
+record script <name> <all|rx> <buffer|clipboard|file PATH> [-d|--decode|-r|--raw] [-c|--clean]
+
 options
-options connection
+options <section>
 set options <name> <value>
+
 pause <ms>
+
 history
 history clear
+
 clear | cls
-help [command]
+
+help
+help <command>
+
 exit | quit
 ```
+
+Global one-shot flag:
+
+```text
+-c, --clean
+```
+
+It temporarily enables clean output for the current CLI invocation and does not change `config.ini`.
 
 ## Tab completion
 
 Examples:
 
 ```text
-co<TAB>                         -> connect
-show <TAB>                      -> script, record
-run script <TAB>                -> stored script names
-run script idd-status <TAB>     -> --decode, --raw, -d, -r
-set options <TAB>               -> mutable option names
-set options language <TAB>      -> en, ru
-history <TAB>                   -> clear
-record <TAB>                    -> start, stop, status, cancel
-record start <TAB>              -> all, rx
-record stop <TAB>               -> buffer, clipboard, file
-send --d<TAB>                   -> --decode
+co<TAB>                                   -> connect
+show <TAB>                                -> record, script
+run script <TAB>                          -> stored script names
+run script idd-status <TAB>               -> --decode, --raw, -d, -r
+set options <TAB>                         -> mutable option names
+set options language <TAB>                -> en, ru
+history <TAB>                             -> clear
+record <TAB>                              -> cancel, script, start, status, stop
+record start <TAB>                        -> all, rx
+record stop <TAB>                         -> buffer, clipboard, file
+record script <TAB>                       -> stored script names
+record script idd-status <TAB>            -> all, rx
+record script idd-status rx <TAB>         -> buffer, clipboard, file
+record script idd-status rx file x <TAB>  -> --clean, --decode, --raw, -c, -d, -r
+send --d<TAB>                             -> --decode
 ```
 
-## Response decoding
+## Sending frames
+
+Basic raw request:
+
+```text
+send 01 03 00 65 00 01
+```
+
+CRC handling is controlled by `runtime.crc_mode`:
+
+```text
+auto    Preserve a valid supplied CRC, otherwise append one
+append  Always append CRC
+none    Send exactly the bytes entered
+```
+
+### Response decoding
 
 Global default:
 
@@ -90,27 +130,27 @@ Global default:
 decode_rx = true
 ```
 
-Force decoding for one frame:
+Force decoding for one request:
 
 ```text
 send --decode 01 03 00 65 00 01
 send -d 01 03 00 65 00 01
 ```
 
-Suppress decoding for one frame:
+Suppress decoding for one request:
 
 ```text
 send --raw 01 03 00 65 00 01
 send -r 01 03 00 65 00 01
 ```
 
-The same flags can be applied to a whole script:
+For a script:
 
 ```text
-run script idd-status -r
-run script idd-status --raw
 run script idd-status -d
 run script idd-status --decode
+run script idd-status -r
+run script idd-status --raw
 ```
 
 Decode priority is:
@@ -119,20 +159,31 @@ Decode priority is:
 flag on individual send > flag on run script > runtime.decode_rx
 ```
 
+For example, `run script idd-status -r` suppresses decoding for ordinary `send` lines in that script, while a stored `send --decode ...` still enables decoding for that specific exchange.
+
 ## Clean output
 
-Enable persistently:
+Persistent setting:
 
 ```text
 set options clean_output true
 ```
 
-or only for one one-shot invocation:
+or:
+
+```ini
+[runtime]
+clean_output = true
+```
+
+Temporary one-shot mode:
 
 ```bash
-uv run rtuforge -c run script idd-status
-uv run rtuforge run script idd-status --clean
+uv run rtuforge -c send 01 03 00 65 00 01
+uv run rtuforge run script idd-status -c -r
 ```
+
+The global `-c/--clean` flag can be placed before or after the one-shot command. RTU Forge promotes it to the CLI level internally.
 
 Normal output:
 
@@ -148,72 +199,156 @@ Clean output:
 01 03 02 00 05 78 47
 ```
 
-In clean mode TX/RX labels, timestamps, elapsed time and automatic decoding are hidden. Explicit `--decode/-d` still has priority.
+In clean mode:
 
-## Exchange recording
+- `TX` / `RX` labels are hidden;
+- timestamps are hidden;
+- elapsed response time is hidden;
+- automatic response decoding is hidden;
+- `show_tx` and `show_rx` still determine which raw frame lines are printed;
+- explicit `-d/--decode` still has priority and can restore decoding.
 
-Recording is process-local. `record start all` stores both request and response; `record start rx` stores responses only.
+## Recording
 
-### Normal output mode
+Recording is process-local. It stores raw Modbus frames, not decoded explanatory text.
+
+### Session recording
+
+Start request + response recording:
 
 ```text
 record start all
-send 01 03 00 65 00 01
 ```
 
-The buffer contains:
+Start RX-only recording:
+
+```text
+record start rx
+```
+
+Inspect the current in-memory buffer without stopping recording:
+
+```text
+show record
+```
+
+Show recording state:
+
+```text
+record status
+```
+
+Discard the current buffer:
+
+```text
+record cancel
+```
+
+### Stop and save/copy
+
+Copy to the system clipboard:
+
+```text
+record stop buffer
+record stop clipboard
+```
+
+`buffer` and `clipboard` are aliases.
+
+Save to a UTF-8 file:
+
+```text
+record stop file capture.txt
+record stop file captures/idd-status.txt
+```
+
+Relative paths are resolved relative to the directory containing `config.ini`. Parent directories are created automatically.
+
+### Recording format
+
+`record start rx` always stores only response HEX lines:
+
+```text
+01 03 02 00 05 78 47
+01 03 02 00 02 39 85
+```
+
+`record start all` follows the active output style.
+
+Normal mode:
 
 ```text
 TX 01 03 00 65 00 01 94 15
 RX 01 03 02 00 05 78 47
 ```
 
-### Clean output mode
-
-If `clean_output=true` or one-shot `-c/--clean` is active, `record start all` matches the visible clean format:
+Clean mode (`runtime.clean_output=true`, one-shot `-c/--clean`, or `record script ... -c`):
 
 ```text
 01 03 00 65 00 01 94 15
 01 03 02 00 05 78 47
 ```
 
-So copying from the screen and saving the recording no longer produces two subtly different formats, a small victory over unnecessary inconsistency.
+The recording buffer therefore matches the visible clean format when clean output is active.
 
-### Inspect current recording
+## Record a script in one command
 
-Without stopping recording:
-
-```text
-show record
-```
-
-It prints the current in-memory record buffer exactly as it will be copied or saved. Recording remains active afterwards.
-
-### Save/copy
+Syntax:
 
 ```text
-record stop buffer
-record stop clipboard
-record stop file captures/idd-status.txt
+record script <name> <all|rx> <buffer|clipboard|file PATH> [-d|--decode|-r|--raw] [-c|--clean]
 ```
 
-`buffer` and `clipboard` copy to the system clipboard. Relative file paths are resolved relative to `config.ini`. Parent directories are created automatically. Files are UTF-8 text.
+This command performs the complete sequence internally:
 
-Other commands:
+1. starts a fresh recording;
+2. runs the named script;
+3. applies the selected recording mode;
+4. applies optional decode/clean overrides;
+5. saves or copies the result;
+6. restores the previous `clean_output` setting.
+
+Examples:
 
 ```text
-record status
-record cancel
+record script idd-status rx file captures/idd-status.txt -r
+record script idd-status all buffer -c -r
+record script idd-status all clipboard --decode
 ```
 
-Recording can also be embedded in a stored script:
+One-shot examples:
+
+```bash
+uv run rtuforge record script idd-status rx file capture.txt -r
+uv run rtuforge record script idd-status all file capture.txt -c -r
+```
+
+Recording modes:
 
 ```text
-record start rx
-send 01 03 00 65 00 01
-send 01 03 00 66 00 01
-record stop file capture.txt
+all   Record both transmitted and received frames
+rx    Record received frames only
 ```
+
+Destinations:
+
+```text
+buffer       Copy to system clipboard
+clipboard    Same as buffer
+file PATH    Save to a UTF-8 text file
+```
+
+Flags:
+
+```text
+-d, --decode   Force Modbus response decoding while the script runs
+-r, --raw      Suppress Modbus response decoding while the script runs
+-c, --clean    Temporarily enable clean screen output and clean 'all' recording format
+```
+
+`-c/--clean` used by `record script` is temporary and does not persist to `config.ini`.
+
+If the script fails, the temporary recording is discarded and the previous clean-output setting is restored.
 
 ## Scripts
 
@@ -233,42 +368,109 @@ Run:
 run script read-basic
 ```
 
-Useful script commands include `send`, `pause`, `connect`, `disconnect`, `status`, `ports`, nested `run script`, recording commands, `show record`, `options`, `set options`, and `help`.
-
-Not allowed inside scripts: `add script`, `history`, `clear/cls`, `exit/quit`.
-
-## Language
-
-```ini
-[ui]
-language = en
-```
-
-Supported values: `en`, `ru`.
-
-Switch:
+Inspect:
 
 ```text
+show script read-basic
+```
+
+Delete:
+
+```text
+delete script read-basic
+```
+
+### Commands useful inside scripts
+
+```text
+send ...
+send --decode ...
+send --raw ...
+pause <ms>
+connect
+disconnect
+status
+ports
+run script <name> [-d|-r]
+scripts | ls | list
+show script <name>
+show record
+record start [all|rx]
+record stop <buffer|clipboard|file PATH>
+record status
+record cancel
+record script <name> ...
+options [section]
+set options <name> <value>
+help [command]
+```
+
+For example, a script can contain its own RX capture:
+
+```text
+record start rx
+send 01 03 00 65 00 01
+send 01 03 00 66 00 01
+show record
+record stop file capture.txt
+```
+
+Commands not allowed inside scripts:
+
+```text
+add script ...
+history
+history clear
+clear | cls
+exit | quit
+```
+
+Empty lines and lines beginning with `#` are ignored.
+
+`runtime.inter_command_delay_ms` is applied between stored script lines. `pause <ms>` adds an explicit additional delay.
+
+Nested `run script` calls are supported. Recursive/cyclic script calls should be avoided.
+
+## Options
+
+Show all mutable options:
+
+```text
+options
+```
+
+Show one section:
+
+```text
+options connection
+options runtime
+options history
+options ui
+```
+
+Change an option:
+
+```text
+set options port COM6
+set options timeout_ms 1000
+set options crc_mode auto
+set options decode_rx false
+set options clean_output true
 set options language ru
 ```
 
-This localizes help, option table headings/descriptions, status text, shell messages, common errors, recording messages, and Modbus decoding labels/function names. Technical command names stay unchanged.
+Changing a connection option while connected forces a disconnect.
 
-## One-shot behavior and errors
+Boolean values accept:
 
-Examples:
-
-```bash
-uv run rtuforge send 01 03 00 65 00 01
-uv run rtuforge run script idd-status -r
-uv run rtuforge run script idd-status -c -r
+```text
+true / false
+yes / no
+on / off
+1 / 0
 ```
 
-One-shot mode suppresses automatic `Connected ...`. Expected user/runtime errors are caught and returned as concise messages with exit code `1`, without Python traceback.
-
-## Configuration
-
-### Connection
+### Connection options
 
 - `port`
 - `baudrate`
@@ -277,7 +479,7 @@ One-shot mode suppresses automatic `Connected ...`. Expected user/runtime errors
 - `stopbits`
 - `timeout_ms`
 
-### Runtime
+### Runtime options
 
 - `inter_command_delay_ms`
 - `post_write_delay_ms`
@@ -285,20 +487,108 @@ One-shot mode suppresses automatic `Connected ...`. Expected user/runtime errors
 - `max_response_bytes`
 - `crc_mode`
 - `auto_connect`
-- `show_tx`, `show_rx`
+- `show_tx`
+- `show_rx`
 - `decode_rx`
 - `clean_output`
 - `timestamps`
 - `uppercase_hex`
 
-### History
+### History options
 
 - `file`
 - `max_entries`
 
-### UI
+### UI options
 
-- `language`: `en` or `ru`.
+- `language`: `en` or `ru`
+
+## Language
+
+Configuration:
+
+```ini
+[ui]
+language = en
+```
+
+Switch to Russian:
+
+```text
+set options language ru
+```
+
+Supported values:
+
+```text
+en
+ru
+```
+
+Localization covers:
+
+- general and command-specific help;
+- option table headings and descriptions;
+- status output;
+- common shell messages and errors;
+- recording messages;
+- Modbus response decoding labels, function names and exception names;
+- CLI `--help` descriptions/examples.
+
+Technical command names and option identifiers are intentionally not translated.
+
+## Help
+
+General help:
+
+```text
+help
+```
+
+Detailed topics:
+
+```text
+help connect
+help disconnect
+help ports
+help status
+help send
+help add
+help run
+help scripts
+help show
+help delete
+help record
+help options
+help set
+help pause
+help history
+help clear
+help help
+help exit
+```
+
+The detailed help is available in both interactive and one-shot mode:
+
+```bash
+uv run rtuforge help record
+uv run rtuforge help scripts
+```
+
+## One-shot behavior and errors
+
+Examples:
+
+```bash
+uv run rtuforge send 01 03 00 65 00 01
+uv run rtuforge -c send 01 03 00 65 00 01
+uv run rtuforge run script idd-status -r
+uv run rtuforge record script idd-status rx file capture.txt -r
+```
+
+One-shot mode suppresses the automatic `Connected ...` message.
+
+Expected user/runtime errors are returned as concise messages with exit code `1`, without a Python traceback.
 
 ## Development
 
