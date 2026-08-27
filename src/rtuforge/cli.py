@@ -1,43 +1,50 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from rich.console import Console
 
 from .commands import CommandContext, execute_command
 from .config import load_config
+from .i18n import cli_text
 from .scripts import ScriptStore
 from .shell import run_shell
 from .transport import SerialTransport
 
 
-CLI_HELP_EPILOG = """examples:
-  rtuforge                         interactive mode
-  rtuforge shell                   interactive mode
-  rtuforge send 01 03 00 65 00 01
-  rtuforge run script read-basic
-  rtuforge options
-  rtuforge options connection
-  rtuforge set options port COM7
-"""
-
-
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(language: str = "en") -> argparse.ArgumentParser:
+    text = cli_text(language)
     parser = argparse.ArgumentParser(
         prog="rtuforge",
-        description="RTU Forge - Modbus RTU console and script runner",
-        epilog=CLI_HELP_EPILOG,
+        description=text["description"],
+        epilog=text["epilog"],
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        add_help=False,
     )
-    parser.add_argument("--config", default="config.ini", help="Path to settings INI")
-    parser.add_argument("--scripts", default="scripts.ini", help="Path to scripts INI")
-    parser.add_argument("command", nargs=argparse.REMAINDER, help="One-shot command; omit for interactive shell")
+    parser.add_argument("-h", "--help", action="help", help=text["help"])
+    parser.add_argument("--config", default="config.ini", help=text["config"])
+    parser.add_argument("--scripts", default="scripts.ini", help=text["scripts"])
+    parser.add_argument("command", nargs=argparse.REMAINDER, help=text["command"])
     return parser
 
 
+def _language_for_argv(argv: list[str]) -> str:
+    probe = argparse.ArgumentParser(add_help=False)
+    probe.add_argument("--config", default="config.ini")
+    probe_args, _ = probe.parse_known_args(argv)
+    config_path = Path(probe_args.config).resolve()
+    if not config_path.exists():
+        return "en"
+    config = load_config(config_path)
+    return config.get("ui", "language", fallback="en")
+
+
 def main() -> None:
-    args = build_parser().parse_args()
+    argv = sys.argv[1:]
+    language = _language_for_argv(argv)
+    args = build_parser(language).parse_args(argv)
     config_path = Path(args.config).resolve()
     scripts_path = Path(args.scripts).resolve()
     config = load_config(config_path)
