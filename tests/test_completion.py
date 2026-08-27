@@ -12,7 +12,11 @@ def test_script_name_completion():
     assert completion_candidates("run script ", names) == names
     assert completion_candidates("show script ", names) == names
     assert completion_candidates("delete script ", names) == names
-    assert "--raw" in completion_candidates("run script idd-status ", names)
+
+
+def test_show_record_completion():
+    assert completion_candidates("show ") == ["record", "script"]
+    assert completion_candidates("show r") == ["record"]
 
 
 def test_option_completion_comes_from_specs():
@@ -24,8 +28,9 @@ def test_option_value_completion_uses_choices():
     assert completion_candidates("set options parity e") == ["E"]
 
 
-def test_help_completion_comes_from_registry_plus_record():
-    assert set(completion_candidates("help ")) == set(help_topics()) | {"record"}
+def test_help_completion_comes_from_registry():
+    expected = set(help_topics()) | {"record"}
+    assert set(completion_candidates("help ")) == expected
 
 
 def test_history_clear_completion():
@@ -38,7 +43,12 @@ def test_send_flag_completion():
     assert completion_candidates("send --d") == ["--decode"]
 
 
+def test_run_script_flag_completion():
+    choices = completion_candidates("run script idd-status ", ["idd-status"])
+    assert set(choices) == {"--decode", "--raw", "-d", "-r"}
+
+
 def test_record_completion():
-    assert set(completion_candidates("record ")) == {"start", "stop", "status", "cancel"}
+    assert completion_candidates("record ") == ["cancel", "start", "status", "stop"]
     assert completion_candidates("record start ") == ["all", "rx"]
-    assert set(completion_candidates("record stop ")) == {"buffer", "clipboard", "file"}
+    assert completion_candidates("record stop ") == ["buffer", "clipboard", "file"]
