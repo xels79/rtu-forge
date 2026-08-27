@@ -68,12 +68,13 @@ def test_status_reports_real_state_and_settings_without_connect(command_context,
     command_context.transport.connected = connected
     execute_command(command_context, "status")
     text = output(command_context)
+    connection = command_context.config["connection"]
     assert ("CONNECTED" if connected else "DISCONNECTED") in text
-    assert "com4" in text
-    assert "9600" in text
-    assert "8E1" in text
-    assert "500 ms" in text
-    assert "auto" in text
+    assert connection.get("port") in text
+    assert connection.get("baudrate") in text
+    assert f"{connection.get('bytesize')}{connection.get('parity')}{connection.get('stopbits')}" in text
+    assert f"{connection.get('timeout_ms')} ms" in text
+    assert command_context.config["runtime"].get("crc_mode") in text
     command_context.transport.connect.assert_not_called()
 
 
