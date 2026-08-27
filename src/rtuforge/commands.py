@@ -6,34 +6,18 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import serial.tools.list_ports
 from rich.console import Console
 from rich.table import Table
 
 from .config import OPTION_SPECS, option_spec, parse_value, save_config
 from .formatting import hex_line, parse_hex_bytes, prefix
+from .helptext import COMMAND_HELP, INTERACTIVE_HELP
+from .modbus import decode_response, format_decoded_response
 from .scripts import ScriptStore
 from .transport import SerialTransport
 
-
-INTERACTIVE_HELP = """\
-Commands:
-  connect                         Connect using current connection options
-  disconnect                      Close serial connection
-  send <hex...>                   Send one Modbus RTU frame and print response
-  add script <name>               Capture commands until 'end script'
-  run script <name>               Run a stored script
-  scripts | ls | list             List stored scripts
-  show script <name>              Show script contents
-  delete script <name>            Delete a stored script
-  options                         Show all mutable options
-  options connection              Show connection options only
-  set options <name> <value>      Change and persist an option
-  pause <ms>                      Sleep; useful inside scripts
-  history                         Show recent interactive commands
-  history clear                   Clear persistent history
-  help                            Show this help
-  exit | quit                     Leave the shell
-"""
+HELP_ALIASES = {"ls": "scripts", "list": "scripts", "cls": "clear", "quit": "exit"}
 
 
 @dataclass
@@ -54,6 +38,39 @@ def _print_exchange(ctx: CommandContext, tx: bytes, rx: bytes, elapsed_ms: float
     if runtime.getboolean("show_rx"):
         payload = hex_line(rx, uppercase) if rx else "<timeout / no data>"
         ctx.console.print(f"{prefix(stamped)}[green]RX[/green] {payload} [dim]({elapsed_ms:.1f} ms)[/dim]")
+        if rx and runtime.getboolean("decode_rx", fallback=True):
+            for line in format_decoded_response(decode_response(rx), uppercase):
+                ctx.console.print(f"   {line}")
+
+
+def show_ports(ctx: CommandContext) -> None:
+    ports = list(serial.tools.list_ports.comports())
+    if not ports:
+        ctx.console.print("No serial ports found.")
+        return
+    table = Table(show_header=True, header_style="bold")
+    table.add_column("Port")
+    table.add_column("Description")
+    table.add_column("HWID")
+    for port in ports:
+        table.add_row(str(port.device), str(port.description), str(port.hwid))
+    ctx.console.print(table)
+
+
+def show_status(ctx: CommandContext) -> None:
+    connection = ctx.config["connection"]
+    runtime = ctx.config["runtime"]
+    state = "CONNECTED" if ctx.transport.connected else "DISCONNECTED"
+    ctx.console.print(f"Connection: {state}")
+    if ctx.transport.connected:
+        ctx.console.print(f"\nEndpoint:   {ctx.transport.endpoint}")
+    ctx.console.print(f"Port:       {connection.get('port')}")
+    ctx.console.print(f"Baudrate:   {connection.get('baudrate')}")
+    ctx.console.print(
+        f"Format:     {connection.get('bytesize')}{connection.get('parity')}{connection.get('stopbits')}"
+    )
+    ctx.console.print(f"Timeout:    {connection.get('timeout_ms')} ms")
+    ctx.console.print(f"CRC mode:   {runtime.get('crc_mode')}")
 
 
 def ensure_connected(ctx: CommandContext) -> None:
@@ -128,6 +145,14 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         ctx.console.print("[yellow]Disconnected[/yellow]")
         return None
 
+    if command == "ports":
+        show_ports(ctx)
+        return None
+
+    if command == "status":
+        show_status(ctx)
+        return None
+
     if command == "send":
         if len(parts) < 2:
             raise ValueError("Usage: send <hex bytes...>")
@@ -178,8 +203,21 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         return None
 
     if command == "help":
-        ctx.console.print(INTERACTIVE_HELP)
+        if len(parts) == 1:
+            ctx.console.print(INTERACTIVE_HELP)
+            return None
+        topic = HELP_ALIASES.get(parts[1].lower(), parts[1].lower())
+        help_text = COMMAND_HELP.get(topic)
+        if help_text is None:
+            ctx.console.print(f"Unknown help topic: {parts[1]}")
+        else:
+            ctx.console.print(help_text)
         return None
+
+    if command in {"clear", "cls"}:
+        if from_script:
+            raise ValueError("clear/cls is not allowed inside scripts")
+        return "clear-screen"
 
     if command in {"exit", "quit"}:
         if from_script:

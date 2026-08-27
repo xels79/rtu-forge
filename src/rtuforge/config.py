@@ -15,6 +15,7 @@ class OptionSpec:
     description: str
     kind: str
     choices: tuple[str, ...] = ()
+    default: str | None = None
 
 
 OPTION_SPECS: tuple[OptionSpec, ...] = (
@@ -32,6 +33,7 @@ OPTION_SPECS: tuple[OptionSpec, ...] = (
     OptionSpec("runtime", "auto_connect", "Auto-connect for send/run in one-shot mode", "bool"),
     OptionSpec("runtime", "show_tx", "Print transmitted frames", "bool"),
     OptionSpec("runtime", "show_rx", "Print received frames", "bool"),
+    OptionSpec("runtime", "decode_rx", "Decode received Modbus RTU frames after raw RX output", "bool", default="true"),
     OptionSpec("runtime", "timestamps", "Show timestamps in TX/RX output", "bool"),
     OptionSpec("runtime", "uppercase_hex", "Use uppercase HEX output", "bool"),
     OptionSpec("history", "file", "Persistent interactive history file", "str"),
@@ -44,6 +46,11 @@ def load_config(path: Path) -> configparser.ConfigParser:
     if not path.exists():
         raise FileNotFoundError(f"Config file not found: {path}")
     parser.read(path, encoding="utf-8")
+    for spec in OPTION_SPECS:
+        if spec.default is not None and not parser.has_option(spec.section, spec.name):
+            if not parser.has_section(spec.section):
+                parser.add_section(spec.section)
+            parser[spec.section][spec.name] = spec.default
     return parser
 
 

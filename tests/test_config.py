@@ -8,6 +8,7 @@ def test_default_config_loads():
     assert config["connection"].getint("baudrate") == 9600
     assert config["connection"].get("parity") == "E"
     assert config["runtime"].getint("inter_command_delay_ms") == 100
+    assert config["runtime"].getboolean("decode_rx") is True
 
 
 def test_boolean_option_parser():

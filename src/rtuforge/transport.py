@@ -28,7 +28,7 @@ class SerialTransport:
     @property
     def endpoint(self) -> str:
         c = self.config["connection"]
-        return f"{c.get('port')} {c.get('baudrate')} {c.get('bytesize')}{c.get('parity')}{c.get('stopbits')}"
+        return f"{c.get('port')} @ {c.get('baudrate')} {c.get('bytesize')}{c.get('parity')}{c.get('stopbits')}"
 
     def connect(self) -> None:
         if self.connected:

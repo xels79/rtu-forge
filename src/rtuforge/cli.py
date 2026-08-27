@@ -62,6 +62,8 @@ def main() -> None:
             raise ValueError("'add script' is available only in interactive mode")
         if action and action.startswith("history"):
             raise ValueError("history commands are available only in interactive mode")
+        if action == "clear-screen":
+            raise ValueError("clear/cls is available only in interactive mode")
     finally:
         ctx.transport.disconnect()
 

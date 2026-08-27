@@ -7,19 +7,23 @@ from prompt_toolkit.history import FileHistory
 from rich.console import Console
 
 from .commands import CommandContext, execute_command
+from .completion import RTUForgeCompleter
 
 
 def run_shell(ctx: CommandContext) -> None:
     history_path = Path(ctx.config["history"].get("file", ".rtuforge_history"))
     if not history_path.is_absolute():
         history_path = ctx.config_path.parent / history_path
-    session = PromptSession(history=FileHistory(str(history_path)))
+    session = PromptSession(
+        history=FileHistory(str(history_path)),
+        completer=RTUForgeCompleter(ctx.scripts, ctx.config.sections()),
+        complete_while_typing=False,
+    )
     console: Console = ctx.console
 
     def toolbar() -> str:
-        if ctx.transport.connected:
-            return f" CONNECTED | {ctx.transport.endpoint} "
-        return " DISCONNECTED "
+        state = "CONNECTED" if ctx.transport.connected else "DISCONNECTED"
+        return f" {state} | {ctx.transport.endpoint} "
 
     console.print("[bold]RTU Forge[/bold] interactive shell. Type [cyan]help[/cyan].")
 
@@ -34,7 +38,9 @@ def run_shell(ctx: CommandContext) -> None:
             action = execute_command(ctx, line)
             if action == "exit":
                 break
-            if action and action.startswith("add-script:"):
+            if action == "clear-screen":
+                console.clear()
+            elif action and action.startswith("add-script:"):
                 name = action.split(":", 1)[1]
                 console.print(f"Capturing script [bold]{name}[/bold]. Finish with [cyan]end script[/cyan].")
                 lines: list[str] = []

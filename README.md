@@ -10,6 +10,9 @@ A compact Python console for sending raw Modbus RTU frames, reading replies, and
 - Raw HEX `send` command.
 - Automatic Modbus CRC handling.
 - Named scripts stored separately in `scripts.ini`.
+- Serial-port discovery, connection status, and contextual command help.
+- Interactive command, script, option, and help autocomplete.
+- Optional Modbus RX decoding after the unchanged raw response.
 - Settings stored separately in `config.ini`.
 - Runtime option editing with persistence.
 - Script delay and explicit `pause <ms>`.
@@ -34,7 +37,9 @@ With default `crc_mode=auto`, RTU Forge appends CRC when missing and preserves i
 
 ```text
 connect
- disconnect
+disconnect
+ports
+status
 send <hex...>
 add script <name>
   ...commands...
@@ -49,7 +54,8 @@ set options <name> <value>
 pause <ms>
 history
 history clear
-help
+clear | cls
+help [command]
 exit | quit
 ```
 
@@ -69,6 +75,9 @@ rtu> run script read-basic
 ```bash
 uv run rtuforge options
 uv run rtuforge options connection
+uv run rtuforge ports
+uv run rtuforge status
+uv run rtuforge help send
 uv run rtuforge set options port COM7
 uv run rtuforge send 01 03 00 65 00 01
 uv run rtuforge run script read-basic
@@ -98,6 +107,7 @@ Mutating script creation is intentionally interactive because `add script ... en
 - `crc_mode`: `auto`, `append`, or `none`.
 - `auto_connect`: reserved default for one-shot send/run behavior.
 - `show_tx`, `show_rx`: output toggles.
+- `decode_rx`: decode received Modbus RTU frames after raw RX output (default `true`).
 - `timestamps`: prefix TX/RX with local timestamps.
 - `uppercase_hex`: output formatting.
 
