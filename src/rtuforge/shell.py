@@ -8,6 +8,7 @@ from rich.console import Console
 
 from .commands import CommandContext, execute_command
 from .completion import RTUForgeCompleter
+from .runtime_text import tr
 
 
 def run_shell(ctx: CommandContext) -> None:
@@ -22,10 +23,10 @@ def run_shell(ctx: CommandContext) -> None:
     console: Console = ctx.console
 
     def toolbar() -> str:
-        state = "CONNECTED" if ctx.transport.connected else "DISCONNECTED"
+        state = tr(ctx.language, "connected_state" if ctx.transport.connected else "disconnected_state")
         return f" {state} | {ctx.transport.endpoint} "
 
-    console.print("[bold]RTU Forge[/bold] interactive shell. Type [cyan]help[/cyan].")
+    console.print(tr(ctx.language, "shell_banner"), markup=False)
 
     while True:
         try:
@@ -42,7 +43,7 @@ def run_shell(ctx: CommandContext) -> None:
                 console.clear()
             elif action and action.startswith("add-script:"):
                 name = action.split(":", 1)[1]
-                console.print(f"Capturing script [bold]{name}[/bold]. Finish with [cyan]end script[/cyan].")
+                console.print(tr(ctx.language, "capture_script", name=name), markup=False)
                 lines: list[str] = []
                 while True:
                     script_line = session.prompt("... ", bottom_toolbar=toolbar)
@@ -50,19 +51,19 @@ def run_shell(ctx: CommandContext) -> None:
                         break
                     lines.append(script_line)
                 ctx.scripts.set(name, lines)
-                console.print(f"[green]Saved[/green] script '{name}' ({len(lines)} commands).")
+                console.print(tr(ctx.language, "script_saved", name=name, count=len(lines)), markup=False)
             elif action == "history-show":
                 try:
                     entries = list(session.history.get_strings())
                     limit = ctx.config["history"].getint("max_entries", fallback=2000)
                     for item in entries[-min(limit, 50):]:
-                        console.print(item)
+                        console.print(item, markup=False)
                 except Exception as exc:
-                    console.print(f"[red]History error:[/red] {exc}")
+                    console.print(tr(ctx.language, "history_error", error=exc), markup=False)
             elif action == "history-clear":
                 history_path.write_text("", encoding="utf-8")
-                console.print("[green]History file cleared.[/green] Restart shell to clear in-memory history.")
+                console.print(tr(ctx.language, "history_cleared"), markup=False)
         except Exception as exc:
-            console.print(f"[red]Error:[/red] {exc}")
+            console.print(tr(ctx.language, "error", error=exc), markup=False)
 
     ctx.transport.disconnect()
