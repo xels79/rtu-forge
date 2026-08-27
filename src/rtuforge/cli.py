@@ -22,17 +22,36 @@ def _promote_clean_flag(argv: list[str]) -> list[str]:
     return ["--clean", *(item for item in argv if item not in {"-c", "--clean"})]
 
 
+def _console(*, stderr: bool = False) -> Console:
+    """Build an RTU Forge console without Rich's automatic token highlighting."""
+    return Console(stderr=stderr, highlight=False)
+
+
 def build_parser(language: str = "en") -> argparse.ArgumentParser:
     text = cli_text(language)
+    is_ru = language.lower() == "ru"
     clean_help = (
         "Чистый HEX-вывод только для текущего запуска; config.ini не изменяется"
-        if language.lower() == "ru"
+        if is_ru
         else "Use clean HEX output for this run only; config.ini is not changed"
     )
+    detailed_help = (
+        "Подробная справка по командам:\n"
+        "  rtuforge help\n"
+        "  rtuforge help <command>\n"
+        "В интерактивной консоли: help [command]"
+        if is_ru
+        else
+        "Detailed command help:\n"
+        "  rtuforge help\n"
+        "  rtuforge help <command>\n"
+        "In the interactive shell: help [command]"
+    )
+    epilog = f"{text['epilog'].rstrip()}\n\n{detailed_help}"
     parser = argparse.ArgumentParser(
         prog="rtuforge",
         description=text["description"],
-        epilog=text["epilog"],
+        epilog=epilog,
         formatter_class=argparse.RawDescriptionHelpFormatter,
         add_help=False,
     )
@@ -65,13 +84,13 @@ def main() -> int:
     try:
         config = load_config(config_path)
     except Exception as exc:
-        Console(stderr=True).print(tr(language, "error", error=exc), markup=False)
+        _console(stderr=True).print(tr(language, "error", error=exc), markup=False)
         return 1
 
     if args.clean:
         config["runtime"]["clean_output"] = "true"
 
-    console = Console()
+    console = _console()
     ctx = CommandContext(
         config_path=config_path,
         config=config,
@@ -98,7 +117,7 @@ def main() -> int:
             raise ValueError(tr(ctx.language, "oneshot_clear"))
         return 0
     except (ValueError, KeyError, RuntimeError, OSError) as exc:
-        Console(stderr=True).print(tr(ctx.language, "error", error=exc), markup=False)
+        _console(stderr=True).print(tr(ctx.language, "error", error=exc), markup=False)
         return 1
     finally:
         ctx.transport.disconnect()
