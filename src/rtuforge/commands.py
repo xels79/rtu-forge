@@ -269,6 +269,8 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         return "add-script:" + " ".join(parts[2:])
 
     if command == "history":
+        if from_script:
+            raise ValueError("history is not allowed inside scripts")
         return "history-clear" if len(parts) > 1 and parts[1].lower() == "clear" else "history-show"
 
     raise ValueError(f"Unknown command: {command}. Use 'help'.")
