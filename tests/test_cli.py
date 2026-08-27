@@ -6,6 +6,8 @@ def test_english_cli_help():
     assert "Modbus RTU console and script runner" in text
     assert "examples:" in text
     assert "--clean" in text
+    assert "Detailed command help:" in text
+    assert "rtuforge help <command>" in text
 
 
 def test_russian_cli_help():
@@ -14,6 +16,8 @@ def test_russian_cli_help():
     assert "примеры:" in text
     assert "Путь к INI-файлу настроек" in text
     assert "Чистый HEX-вывод" in text
+    assert "Подробная справка по командам:" in text
+    assert "rtuforge help <command>" in text
 
 
 def test_clean_flag_can_be_written_after_command():
