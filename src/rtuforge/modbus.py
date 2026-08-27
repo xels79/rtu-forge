@@ -4,40 +4,15 @@ from dataclasses import dataclass
 
 from .crc import has_valid_crc
 from .formatting import hex_line
-
-
-FUNCTION_NAMES: dict[int, str] = {
-    0x01: "Read Coils",
-    0x02: "Read Discrete Inputs",
-    0x03: "Read Holding Registers",
-    0x04: "Read Input Registers",
-    0x05: "Write Single Coil",
-    0x06: "Write Single Register",
-    0x0F: "Write Multiple Coils",
-    0x10: "Write Multiple Registers",
-}
-
-EXCEPTION_NAMES: dict[int, str] = {
-    0x01: "Illegal Function",
-    0x02: "Illegal Data Address",
-    0x03: "Illegal Data Value",
-    0x04: "Slave Device Failure",
-    0x05: "Acknowledge",
-    0x06: "Slave Device Busy",
-    0x08: "Memory Parity Error",
-    0x0A: "Gateway Path Unavailable",
-    0x0B: "Gateway Target Device Failed to Respond",
-}
+from .runtime_text import exception_name, function_name, tr
 
 
 @dataclass(frozen=True)
 class DecodedFrame:
     slave: int | None = None
     function: int | None = None
-    function_name: str | None = None
     crc_valid: bool | None = None
     exception_code: int | None = None
-    exception_name: str | None = None
     byte_count: int | None = None
     data: bytes = b""
     registers: tuple[int, ...] = ()
@@ -57,9 +32,7 @@ def decode_response(frame: bytes) -> DecodedFrame:
 
     is_exception = bool(raw_function & 0x80)
     function = raw_function & 0x7F if is_exception else raw_function
-    function_name = FUNCTION_NAMES.get(function)
     exception_code = frame[2] if is_exception and len(frame) > 2 else None
-    exception_name = EXCEPTION_NAMES.get(exception_code) if exception_code is not None else None
 
     byte_count: int | None = None
     data = b""
@@ -85,10 +58,8 @@ def decode_response(frame: bytes) -> DecodedFrame:
     return DecodedFrame(
         slave=slave,
         function=function,
-        function_name=function_name,
         crc_valid=crc_valid,
         exception_code=exception_code,
-        exception_name=exception_name,
         byte_count=byte_count,
         data=data,
         registers=registers,
@@ -98,33 +69,39 @@ def decode_response(frame: bytes) -> DecodedFrame:
     )
 
 
-def format_decoded_response(decoded: DecodedFrame, uppercase: bool = True) -> list[str]:
+def format_decoded_response(
+    decoded: DecodedFrame,
+    uppercase: bool = True,
+    language: str = "en",
+) -> list[str]:
     if decoded.too_short:
-        return ["Frame too short for Modbus decoding", "CRC: N/A"]
+        return [tr(language, "frame_short"), f"{tr(language, 'crc')}: N/A"]
 
     lines: list[str] = []
     if decoded.exception_code is not None:
-        lines.append("Modbus exception")
+        lines.append(tr(language, "modbus_exception"))
     if decoded.slave is not None:
-        lines.append(f"Slave: {decoded.slave}")
+        lines.append(f"{tr(language, 'slave')}: {decoded.slave}")
     if decoded.function is not None:
-        suffix = f" {decoded.function_name}" if decoded.function_name and decoded.exception_code is None else ""
-        lines.append(f"Function: {decoded.function:02X}{suffix}")
+        name = function_name(language, decoded.function)
+        suffix = f" {name}" if name and decoded.exception_code is None else ""
+        lines.append(f"{tr(language, 'function')}: {decoded.function:02X}{suffix}")
     if decoded.exception_code is not None:
-        suffix = f" {decoded.exception_name}" if decoded.exception_name else ""
-        lines.append(f"Exception: {decoded.exception_code:02X}{suffix}")
+        name = exception_name(language, decoded.exception_code)
+        suffix = f" {name}" if name else ""
+        lines.append(f"{tr(language, 'exception')}: {decoded.exception_code:02X}{suffix}")
     else:
         if decoded.byte_count is not None:
-            lines.append(f"Byte count: {decoded.byte_count}")
+            lines.append(f"{tr(language, 'byte_count')}: {decoded.byte_count}")
         if decoded.data:
-            lines.append(f"Data: {hex_line(decoded.data, uppercase)}")
+            lines.append(f"{tr(language, 'data')}: {hex_line(decoded.data, uppercase)}")
         if decoded.registers:
-            lines.append("Registers:")
+            lines.append(f"{tr(language, 'registers')}:")
             lines.extend(f"  [{index}] 0x{value:04X} = {value}" for index, value in enumerate(decoded.registers))
         if decoded.address is not None:
-            lines.append(f"Address: 0x{decoded.address:04X} ({decoded.address})")
+            lines.append(f"{tr(language, 'address')}: 0x{decoded.address:04X} ({decoded.address})")
         if decoded.value is not None:
-            lines.append(f"Value:   0x{decoded.value:04X} ({decoded.value})")
+            lines.append(f"{tr(language, 'value')}:   0x{decoded.value:04X} ({decoded.value})")
     crc_text = "N/A" if decoded.crc_valid is None else "OK" if decoded.crc_valid else "BAD"
-    lines.append(f"CRC: {crc_text}")
+    lines.append(f"{tr(language, 'crc')}: {crc_text}")
     return lines
