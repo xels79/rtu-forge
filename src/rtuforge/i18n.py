@@ -15,12 +15,17 @@ GENERAL_HELP: dict[str, str] = {
   ports                           List available serial ports
   status                          Show connection state and current settings
   send [-d|--decode|-r|--raw] <hex...>
-                                  Send one Modbus RTU frame and print response
+                                  Send one Modbus RTU frame
   add script <name>               Capture commands until 'end script'
-  run script <name>               Run a stored script
+  run script <name> [-d|-r]       Run a stored script
   scripts | ls | list             List stored scripts
   show script <name>              Show script contents
+  show record                     Show current recording buffer
   delete script <name>            Delete a stored script
+  record start [all|rx]           Start session recording
+  record stop <destination>       Save/copy and stop recording
+  record script <name> ...        Run and record a script in one command
+  record status | cancel          Inspect/cancel session recording
   options [section]               Show mutable options
   set options <name> <value>      Change and persist an option
   pause <ms>                      Sleep; useful inside scripts
@@ -30,32 +35,41 @@ GENERAL_HELP: dict[str, str] = {
   help [command]                  Show general or command-specific help
   exit | quit                     Leave the shell
 
-Use 'help scripts' for script syntax and allowed commands.
-Use 'help send' for CRC and response decoding options.
+One-shot global flag:
+  -c, --clean                     Plain HEX output for this invocation only
+
+Use 'help scripts', 'help send', 'help run' and 'help record' for details.
 """,
     "ru": """Команды:
-  connect                         Подключиться с текущими параметрами соединения
+  connect                         Подключиться с текущими параметрами
   disconnect                      Закрыть последовательное соединение
   ports                           Показать доступные последовательные порты
   status                          Показать состояние и текущие параметры
   send [-d|--decode|-r|--raw] <hex...>
-                                  Отправить один Modbus RTU кадр и вывести ответ
-  add script <name>               Начать запись скрипта до команды 'end script'
-  run script <name>               Запустить сохранённый скрипт
+                                  Отправить один Modbus RTU кадр
+  add script <name>               Записать скрипт до команды 'end script'
+  run script <name> [-d|-r]       Запустить сохранённый скрипт
   scripts | ls | list             Показать список скриптов
   show script <name>              Показать содержимое скрипта
-  delete script <name>            Удалить скрипт
+  show record                     Показать текущий буфер записи
+  delete script <name>            Удалить сохранённый скрипт
+  record start [all|rx]           Начать сессионную запись
+  record stop <назначение>        Сохранить/скопировать и остановить запись
+  record script <name> ...        Выполнить и записать скрипт одной командой
+  record status | cancel          Состояние/отмена сессионной записи
   options [section]               Показать изменяемые параметры
   set options <name> <value>      Изменить и сохранить параметр
   pause <ms>                      Пауза; удобно внутри скриптов
   history                         Показать историю интерактивных команд
   history clear                   Очистить сохранённую историю
   clear | cls                     Очистить экран
-  help [command]                  Общая или подробная справка по команде
+  help [command]                  Общая или подробная справка
   exit | quit                     Выйти из консоли
 
-Для синтаксиса скриптов и допустимых команд: help scripts
-Для CRC и расшифровки ответа: help send
+Глобальный флаг one-shot режима:
+  -c, --clean                     Чистый HEX-вывод только для этого запуска
+
+Подробнее: help scripts, help send, help run, help record.
 """,
 }
 
@@ -64,45 +78,32 @@ HELP: dict[str, dict[str, str]] = {
     "en": {
         "connect": """connect
 
-Open the serial connection using the current connection options.
+Open the serial connection using the current [connection] options. The command does not change config.ini.
 
-The command does not change config.ini. If already connected, the transport keeps the existing connection.
-
-Example:
+Examples:
   connect
-
-See also:
   status
-  disconnect
-  options connection
+
+Changing a connection option with 'set options ...' disconnects an active connection first.
 """,
         "disconnect": """disconnect
 
-Close the active serial connection. It is safe to call when already disconnected.
-
-Example:
-  disconnect
+Close the active serial connection. Safe to use when already disconnected.
 """,
         "ports": """ports
 
-List serial ports detected by pyserial. The command does not open any port.
+List serial ports detected by pyserial. No port is opened.
 
 Columns:
   Port         Device name such as COM4 or /dev/ttyUSB0
   Description  Driver/device description
   HWID         Hardware identifier reported by the OS
-
-Example:
-  ports
 """,
         "status": """status
 
-Show the real connection state together with the active configuration.
+Show real connection state and current settings without auto-connecting.
 
-Displayed values include port, baud rate, serial format, timeout and CRC mode. The command never auto-connects.
-
-Example:
-  status
+Includes port, baud rate, serial format, timeout, CRC mode, RX decoding, clean output and interface language.
 """,
         "send": """send [-d|--decode|-r|--raw] <hex bytes...>
 
@@ -111,25 +112,24 @@ Send one raw Modbus RTU frame and wait for a response.
 Examples:
   send 01 03 00 65 00 01
   send --decode 01 03 00 65 00 01
-  send -d 01 06 20 00 00 02
-  send --raw 01 03 00 65 00 01
+  send -r 01 06 20 00 00 02
 
-Response decoding:
-  -d, --decode   Force full Modbus response decoding for this send.
-  -r, --raw      Suppress decoding for this send and keep raw RX only.
+Decode flags:
+  -d, --decode   Force response decoding for this send.
+  -r, --raw      Suppress response decoding for this send.
 
-If neither flag is present, runtime.decode_rx from config.ini is used. These flags belong to RTU Forge and are never transmitted as Modbus bytes.
+If neither is present, inherited script mode is used; otherwise runtime.decode_rx is used. An explicit send flag has the highest decode priority.
 
-CRC handling is controlled separately by runtime.crc_mode:
-  auto    preserve a valid supplied CRC, otherwise append one
-  append  always append CRC
-  none    send bytes exactly as entered
+CRC is controlled separately by runtime.crc_mode:
+  auto    Keep a valid supplied CRC, otherwise append one.
+  append  Always append CRC.
+  none    Send bytes exactly as entered.
 
-The raw TX/RX line remains the primary representation even when decoding is enabled.
+Clean output is configured by runtime.clean_output. In one-shot mode use global -c/--clean for a temporary override.
 """,
         "add": """add script <name>
 
-Start interactive script capture. Every entered line is stored until 'end script'.
+Interactive-only script capture. Every entered line is stored until 'end script'.
 
 Example:
   add script read-basic
@@ -138,36 +138,44 @@ Example:
   send --decode 01 03 00 66 00 01
   end script
 
-The script is stored in scripts.ini. For supported commands, comments, delays and restrictions use:
-  help scripts
+The result is stored in scripts.ini. See 'help scripts' for commands allowed inside scripts.
 """,
-        "run": """run script <name>
+        "run": """run script <name> [-d|--decode|-r|--raw]
 
 Run a stored script line by line.
 
-Example:
+Examples:
   run script idd-status
+  run script idd-status -r
+  run script idd-status -d
 
-A configured runtime.inter_command_delay_ms delay is inserted between script lines. Explicit 'pause <ms>' commands add additional delays.
+Decode priority:
+  flag on individual send > flag on run script > runtime.decode_rx
 
-A script may call another script with 'run script <name>'. Avoid cyclic script calls.
+runtime.inter_command_delay_ms is applied between stored lines; explicit 'pause <ms>' adds another delay.
+
+For one-shot clean output:
+  rtuforge -c run script idd-status -r
+  rtuforge run script idd-status -c -r
+
+The global -c/--clean flag does not modify config.ini.
 """,
         "scripts": """scripts | ls | list
 
-List stored scripts. Scripts are kept in scripts.ini and are ordinary RTU Forge command sequences.
+List stored scripts. Scripts are command sequences saved in scripts.ini.
 
-Create a script interactively:
+Create:
   add script read-basic
   send 01 03 00 65 00 01
   pause 100
-  send --decode 01 03 00 66 00 01
-  # comments and empty lines are allowed
+  record start rx
+  send 01 03 00 66 00 01
+  show record
+  record stop file capture.txt
   end script
 
-Run it:
+Run / inspect / delete:
   run script read-basic
-
-Inspect or remove it:
   show script read-basic
   delete script read-basic
 
@@ -180,9 +188,15 @@ Useful commands inside scripts:
   disconnect
   status
   ports
-  run script <name>
+  run script <name> [-d|-r]
   scripts | ls | list
   show script <name>
+  show record
+  record start [all|rx]
+  record stop <buffer|clipboard|file PATH>
+  record status
+  record cancel
+  record script <name> ...
   options [section]
   set options <name> <value>
   help [command]
@@ -193,14 +207,19 @@ Not allowed inside scripts:
   clear / cls
   exit / quit
 
-Lines beginning with '#' and empty lines are ignored. The configured runtime.inter_command_delay_ms delay is applied between stored lines; 'pause <ms>' is an explicit additional delay.
+Empty lines and lines beginning with '#' are ignored. Nested scripts are supported; avoid recursive cycles.
 """,
         "show": """show script <name>
+show record
 
-Print every stored line of a script without running it.
+'show script <name>' prints a saved script without running it.
+'show record' prints the current in-memory recording buffer without stopping recording.
 
-Example:
+Examples:
   show script idd-status
+  record start rx
+  run script idd-status
+  show record
 """,
         "delete": """delete script <name>
 
@@ -211,15 +230,16 @@ Example:
 """,
         "options": """options [section]
 
-Show mutable configuration values and descriptions.
+Show mutable configuration values, their current values and descriptions.
 
 Examples:
   options
   options connection
   options runtime
+  options history
   options ui
 
-Available sections depend on config.ini. Tab completion shows section names.
+Table headings and descriptions follow ui.language. Option identifiers remain unchanged because they are used by config.ini and 'set options'.
 """,
         "set": """set options <name> <value>
 
@@ -229,19 +249,18 @@ Examples:
   set options port COM7
   set options timeout_ms 1000
   set options decode_rx false
+  set options clean_output true
   set options language ru
 
-Changing a connection option while connected forces a disconnect. Options with fixed choices support Tab completion for values.
+Boolean values accept true/false, yes/no, on/off and 1/0. Fixed-choice options support Tab completion.
 """,
         "pause": """pause <milliseconds>
 
-Wait for the specified duration. Decimal values accept either '.' or ','.
+Wait for the specified duration. Decimal values accept '.' or ','.
 
 Examples:
   pause 100
   pause 250.5
-
-This is most useful inside scripts when a device needs more time than runtime.inter_command_delay_ms.
 """,
         "history": """history
 history clear
@@ -249,83 +268,63 @@ history clear
 'history' prints recent interactive commands.
 'history clear' clears the persistent history file.
 
-Tab completion:
-  history <TAB>  -> clear
-
-History commands are interactive-only and are not allowed inside scripts.
+Interactive-only. Not allowed inside scripts.
+Tab completion: history <TAB> -> clear
 """,
         "clear": """clear | cls
 
-Clear the interactive terminal. Connection, config, scripts and command history are not changed.
-
-This command is interactive-only.
+Clear the interactive terminal. Does not change connection, config, scripts or history.
+Interactive-only and not allowed inside scripts.
 """,
         "help": """help [command]
 
-Show general help or detailed help for one command.
+Show general help or detailed help for one command/topic.
 
 Examples:
   help
   help send
   help scripts
-  help history
+  help run
+  help record
+  help show
 
-The help language is selected by ui.language in config.ini:
-  set options language en
-  set options language ru
-
-The same localized command help works in one-shot mode:
-  uv run rtuforge help scripts
+The language is selected by ui.language and applies to interactive and one-shot help.
 """,
         "exit": """exit | quit
 
-Leave the interactive shell and close the serial connection.
-
-This command is not allowed inside scripts.
+Leave the interactive shell. The serial connection is closed by the shell.
+Not allowed inside scripts.
 """,
     },
     "ru": {
         "connect": """connect
 
-Открыть последовательное соединение с текущими параметрами из config.ini.
+Открыть последовательное соединение с текущими параметрами раздела [connection]. config.ini не изменяется.
 
-Команда не меняет настройки. Если соединение уже открыто, существующее соединение сохраняется.
-
-Пример:
+Примеры:
   connect
-
-См. также:
   status
-  disconnect
-  options connection
+
+При изменении параметров соединения через 'set options ...' активное соединение сначала закрывается.
 """,
         "disconnect": """disconnect
 
-Закрыть активное последовательное соединение. Команду можно безопасно выполнять и при уже закрытом соединении.
-
-Пример:
-  disconnect
+Закрыть активное последовательное соединение. Безопасно выполнять и при уже закрытом соединении.
 """,
         "ports": """ports
 
-Показать последовательные порты, найденные pyserial. Ни один порт при этом не открывается.
+Показать порты, найденные pyserial. Команда не открывает порт.
 
 Столбцы:
-  Port         Имя устройства, например COM4 или /dev/ttyUSB0
-  Description  Описание драйвера/устройства
+  Порт         Имя устройства, например COM4 или /dev/ttyUSB0
+  Описание     Описание драйвера/устройства
   HWID         Аппаратный идентификатор от ОС
-
-Пример:
-  ports
 """,
         "status": """status
 
-Показать реальное состояние соединения и текущие параметры конфигурации.
+Показать реальное состояние соединения и текущие параметры без автоматического подключения.
 
-Выводятся порт, скорость, формат последовательного порта, timeout и режим CRC. Команда никогда не выполняет автоматическое подключение.
-
-Пример:
-  status
+Выводятся порт, скорость, формат, таймаут, режим CRC, расшифровка RX, чистый вывод и язык интерфейса.
 """,
         "send": """send [-d|--decode|-r|--raw] <hex bytes...>
 
@@ -334,25 +333,24 @@ This command is not allowed inside scripts.
 Примеры:
   send 01 03 00 65 00 01
   send --decode 01 03 00 65 00 01
-  send -d 01 06 20 00 00 02
-  send --raw 01 03 00 65 00 01
+  send -r 01 06 20 00 00 02
 
-Расшифровка ответа:
-  -d, --decode   Принудительно вывести полную доступную расшифровку Modbus ответа для этой команды.
-  -r, --raw      Не расшифровывать этот ответ, вывести только сырой RX.
+Флаги расшифровки:
+  -d, --decode   Принудительно расшифровать ответ этого send.
+  -r, --raw      Не расшифровывать ответ этого send.
 
-Если флаг не указан, используется runtime.decode_rx из config.ini. Флаги относятся только к RTU Forge и никогда не отправляются в Modbus кадре.
+Если флаг не указан, используется режим, унаследованный от run script; иначе runtime.decode_rx. Явный флаг конкретного send имеет наивысший приоритет.
 
-CRC передачи задаётся отдельно параметром runtime.crc_mode:
-  auto    сохранить уже корректный CRC, иначе добавить CRC автоматически
-  append  всегда добавить CRC
-  none    отправить байты ровно в введённом виде
+CRC задаётся отдельно через runtime.crc_mode:
+  auto    Сохранить уже корректный CRC, иначе добавить автоматически.
+  append  Всегда добавить CRC.
+  none    Отправить байты ровно в введённом виде.
 
-Сырой TX/RX остаётся основным представлением даже при включённой расшифровке.
+Чистый вывод задаётся runtime.clean_output. В one-shot режиме временно включается глобальным -c/--clean.
 """,
         "add": """add script <name>
 
-Начать интерактивную запись скрипта. Каждая введённая строка сохраняется до команды 'end script'.
+Интерактивная запись скрипта. Все введённые строки сохраняются до 'end script'.
 
 Пример:
   add script read-basic
@@ -361,36 +359,44 @@ CRC передачи задаётся отдельно параметром runt
   send --decode 01 03 00 66 00 01
   end script
 
-Скрипт сохраняется в scripts.ini. Полный список допустимых команд, комментарии и паузы описаны в:
-  help scripts
+Результат сохраняется в scripts.ini. Допустимые команды описаны в 'help scripts'.
 """,
-        "run": """run script <name>
+        "run": """run script <name> [-d|--decode|-r|--raw]
 
 Выполнить сохранённый скрипт построчно.
 
-Пример:
+Примеры:
   run script idd-status
+  run script idd-status -r
+  run script idd-status -d
 
-Между строками автоматически добавляется пауза runtime.inter_command_delay_ms. Команды 'pause <ms>' добавляют собственную дополнительную паузу.
+Приоритет расшифровки:
+  флаг отдельного send > флаг run script > runtime.decode_rx
 
-Скрипт может вызвать другой скрипт через 'run script <name>'. Не создавайте циклические вызовы скриптов.
+Между строками действует runtime.inter_command_delay_ms; команда 'pause <ms>' добавляет собственную паузу.
+
+Чистый one-shot вывод:
+  rtuforge -c run script idd-status -r
+  rtuforge run script idd-status -c -r
+
+Глобальный -c/--clean не изменяет config.ini.
 """,
         "scripts": """scripts | ls | list
 
-Показать список сохранённых скриптов. Скрипты находятся в scripts.ini и состоят из обычных команд RTU Forge.
+Показать сохранённые скрипты. Скрипты являются последовательностями команд RTU Forge в scripts.ini.
 
-Создание скрипта в интерактивном режиме:
+Создание:
   add script read-basic
   send 01 03 00 65 00 01
   pause 100
-  send --decode 01 03 00 66 00 01
-  # комментарии и пустые строки разрешены
+  record start rx
+  send 01 03 00 66 00 01
+  show record
+  record stop file capture.txt
   end script
 
-Запуск:
+Запуск / просмотр / удаление:
   run script read-basic
-
-Просмотр и удаление:
   show script read-basic
   delete script read-basic
 
@@ -403,9 +409,15 @@ CRC передачи задаётся отдельно параметром runt
   disconnect
   status
   ports
-  run script <name>
+  run script <name> [-d|-r]
   scripts | ls | list
   show script <name>
+  show record
+  record start [all|rx]
+  record stop <buffer|clipboard|file PATH>
+  record status
+  record cancel
+  record script <name> ...
   options [section]
   set options <name> <value>
   help [command]
@@ -416,14 +428,19 @@ CRC передачи задаётся отдельно параметром runt
   clear / cls
   exit / quit
 
-Пустые строки и строки, начинающиеся с '#', игнорируются. Между сохранёнными строками действует runtime.inter_command_delay_ms; команда 'pause <ms>' задаёт дополнительную явную паузу.
+Пустые строки и строки с '#' в начале игнорируются. Вложенные скрипты поддерживаются; циклических вызовов следует избегать.
 """,
         "show": """show script <name>
+show record
 
-Показать все сохранённые строки скрипта без его выполнения.
+'show script <name>' показывает сохранённый скрипт без выполнения.
+'show record' показывает текущий буфер записи и не останавливает запись.
 
-Пример:
+Примеры:
   show script idd-status
+  record start rx
+  run script idd-status
+  show record
 """,
         "delete": """delete script <name>
 
@@ -434,81 +451,73 @@ CRC передачи задаётся отдельно параметром runt
 """,
         "options": """options [section]
 
-Показать изменяемые параметры конфигурации и их описание.
+Показать изменяемые параметры, текущие значения и описания.
 
 Примеры:
   options
   options connection
   options runtime
+  options history
   options ui
 
-Доступные секции берутся из config.ini. Tab показывает имена секций.
+Заголовки и описания таблицы следуют ui.language. Имена параметров не переводятся, так как используются в config.ini и 'set options'.
 """,
         "set": """set options <name> <value>
 
-Изменить один параметр и сохранить его в config.ini.
+Изменить параметр и сохранить его в config.ini.
 
 Примеры:
   set options port COM7
   set options timeout_ms 1000
   set options decode_rx false
+  set options clean_output true
   set options language ru
 
-Изменение параметра соединения при активном подключении автоматически разрывает соединение. Для параметров с фиксированным набором значений Tab предлагает варианты.
+Логические значения: true/false, yes/no, on/off, 1/0. Для параметров с фиксированным набором значений работает Tab.
 """,
         "pause": """pause <milliseconds>
 
-Подождать указанное количество миллисекунд. В дробных значениях принимаются '.' и ','.
+Подождать указанное количество миллисекунд. Для дробных значений принимаются '.' и ','.
 
 Примеры:
   pause 100
   pause 250,5
-
-Особенно полезно в скриптах, если устройству нужна пауза больше runtime.inter_command_delay_ms.
 """,
         "history": """history
 history clear
 
 'history' показывает последние интерактивные команды.
-'history clear' очищает файл сохранённой истории.
+'history clear' очищает файл постоянной истории.
 
-Автодополнение:
-  history <TAB>  -> clear
-
-Команды истории работают только в интерактивном режиме и запрещены внутри скриптов.
+Работает только интерактивно и запрещён внутри скриптов.
+Tab: history <TAB> -> clear
 """,
         "clear": """clear | cls
 
-Очистить экран интерактивной консоли. Соединение, настройки, скрипты и история команд не изменяются.
-
-Команда доступна только в интерактивном режиме.
+Очистить интерактивный экран. Соединение, настройки, скрипты и история не изменяются.
+Команда интерактивная и запрещена внутри скриптов.
 """,
         "help": """help [command]
 
-Показать общую справку или подробную справку по одной команде.
+Показать общую или подробную справку.
 
 Примеры:
   help
   help send
   help scripts
-  help history
+  help run
+  help record
+  help show
 
-Язык справки задаётся параметром ui.language в config.ini:
-  set options language en
-  set options language ru
-
-Та же локализованная справка работает в one-shot режиме:
-  uv run rtuforge help scripts
+Язык задаётся ui.language и применяется к интерактивной и one-shot справке.
 """,
         "exit": """exit | quit
 
-Выйти из интерактивной консоли и закрыть последовательное соединение.
-
+Выйти из интерактивной консоли. Соединение закрывается оболочкой.
 Команда запрещена внутри скриптов.
 """,
     },
 }
-
 
 CLI_TEXT: dict[str, dict[str, str]] = {
     "en": {
@@ -519,11 +528,10 @@ CLI_TEXT: dict[str, dict[str, str]] = {
         "help": "Show this help message and exit",
         "epilog": """examples:
   rtuforge
-  rtuforge shell
-  rtuforge send --decode 01 03 00 65 00 01
-  rtuforge run script read-basic
-  rtuforge help scripts
-  rtuforge set options language ru
+  rtuforge -c send 01 03 00 65 00 01
+  rtuforge run script idd-status -r
+  rtuforge record script idd-status rx file capture.txt -r
+  rtuforge help record
 """,
     },
     "ru": {
@@ -534,15 +542,13 @@ CLI_TEXT: dict[str, dict[str, str]] = {
         "help": "Показать эту справку и выйти",
         "epilog": """примеры:
   rtuforge
-  rtuforge shell
-  rtuforge send --decode 01 03 00 65 00 01
-  rtuforge run script read-basic
-  rtuforge help scripts
-  rtuforge set options language en
+  rtuforge -c send 01 03 00 65 00 01
+  rtuforge run script idd-status -r
+  rtuforge record script idd-status rx file capture.txt -r
+  rtuforge help record
 """,
     },
 }
-
 
 MESSAGES: dict[str, dict[str, str]] = {
     "en": {"unknown_help_topic": "Unknown help topic: {topic}"},
