@@ -12,9 +12,11 @@ from .scripts import ScriptStore
 
 TOP_LEVEL_COMMANDS: tuple[str, ...] = (
     "connect", "disconnect", "ports", "status", "send", "add", "run",
-    "scripts", "ls", "list", "show", "delete", "options", "set", "pause",
+    "scripts", "ls", "list", "show", "delete", "record", "options", "set", "pause",
     "history", "clear", "cls", "help", "exit", "quit",
 )
+
+DECODE_FLAGS: tuple[str, ...] = ("--decode", "--raw", "-d", "-r")
 
 
 def completion_candidates(
@@ -30,7 +32,11 @@ def completion_candidates(
     choices: Iterable[str]
     if completed in (["run"], ["show"], ["delete"], ["add"]):
         choices = ("script",)
-    elif len(completed) == 2 and completed[0] in {"run", "show", "delete"} and completed[1] == "script":
+    elif completed == ["run", "script"]:
+        choices = script_names
+    elif len(completed) >= 3 and completed[:2] == ["run", "script"]:
+        choices = DECODE_FLAGS
+    elif len(completed) == 2 and completed[0] in {"show", "delete"} and completed[1] == "script":
         choices = script_names
     elif completed == ["set"]:
         choices = ("options",)
@@ -44,11 +50,17 @@ def completion_candidates(
     elif completed == ["options"]:
         choices = sections
     elif completed == ["help"]:
-        choices = help_topics()
+        choices = tuple(help_topics()) + ("record",)
     elif completed == ["history"]:
         choices = ("clear",)
     elif completed == ["send"]:
-        choices = ("--decode", "--raw", "-d", "-r")
+        choices = DECODE_FLAGS
+    elif completed == ["record"]:
+        choices = ("start", "stop", "status", "cancel")
+    elif completed == ["record", "start"]:
+        choices = ("all", "rx")
+    elif completed == ["record", "stop"]:
+        choices = ("buffer", "clipboard", "file")
     elif not completed:
         choices = TOP_LEVEL_COMMANDS
     else:
