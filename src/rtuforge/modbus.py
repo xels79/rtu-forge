@@ -50,8 +50,8 @@ def decode_response(frame: bytes) -> DecodedFrame:
     """Decode useful Modbus RTU response fields without ever rejecting raw RX."""
     slave = frame[0] if frame else None
     raw_function = frame[1] if len(frame) > 1 else None
-    crc_valid = has_valid_crc(frame) if len(frame) >= 4 else None
-    too_short = len(frame) < 4
+    crc_valid = has_valid_crc(frame) if len(frame) >= 5 else None
+    too_short = len(frame) < 5
     if raw_function is None:
         return DecodedFrame(slave=slave, crc_valid=crc_valid, too_short=too_short)
 

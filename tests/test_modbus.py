@@ -43,3 +43,11 @@ def test_decode_short_frame_never_raises():
     assert decoded.slave == 1
     assert decoded.crc_valid is None
     assert decoded.too_short is True
+
+
+def test_decode_four_byte_fragment_is_too_short():
+    decoded = decode_response(bytes.fromhex("01 03 00 12"))
+    assert decoded.slave == 1
+    assert decoded.function == 3
+    assert decoded.crc_valid is None
+    assert decoded.too_short is True
