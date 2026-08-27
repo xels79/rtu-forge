@@ -218,6 +218,7 @@ Useful commands inside scripts:
   disconnect
   status
   ports
+  scan [start [end]] [--timeout ms] [--function 01|02|03|04] [--address address]
   run script <name> [-d|-r]
   scripts | ls | list
   show script <name>
@@ -467,6 +468,7 @@ CRC задаётся отдельно через runtime.crc_mode:
   disconnect
   status
   ports
+  scan [начало [конец]] [--timeout мс] [--function 01|02|03|04] [--address адрес]
   run script <name> [-d|-r]
   scripts | ls | list
   show script <name>

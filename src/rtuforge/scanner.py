@@ -62,7 +62,11 @@ def parse_scan_arguments(parts: list[str], default_timeout_ms: int) -> ScanOptio
                 elif part == "--function":
                     function = int(value, 10)
                 else:
-                    address = int(value, 0)
+                    address = (
+                        int(value[2:], 16)
+                        if value.lower().startswith("0x")
+                        else int(value, 10)
+                    )
             except ValueError:
                 raise ScanArgumentError("scan_invalid_value", flag=part, value=value) from None
             index += 2
@@ -99,15 +103,20 @@ def validate_probe_response(
     frame: bytes, expected_slave: int, expected_function: int
 ) -> int | None | bool:
     """Return False for no device, None for normal response, or exception code."""
-    if len(frame) < 5 or not has_valid_crc(frame):
+    if not has_valid_crc(frame) or frame[0] != expected_slave:
         return False
-    if frame[0] != expected_slave:
-        return False
-    if frame[1] == expected_function:
-        return None
     if frame[1] == (expected_function | 0x80):
-        return frame[2]
-    return False
+        return frame[2] if len(frame) == 5 else False
+    if frame[1] != expected_function or len(frame) < 5:
+        return False
+
+    expected_byte_count = 1 if expected_function in {0x01, 0x02} else 2
+    byte_count = frame[2]
+    if byte_count != expected_byte_count:
+        return False
+    if len(frame) != 3 + byte_count + 2:
+        return False
+    return None
 
 
 def scan_devices(

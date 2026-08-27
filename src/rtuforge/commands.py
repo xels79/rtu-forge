@@ -216,7 +216,7 @@ def _scan_found_line(ctx: CommandContext, result: ScanResult) -> Text:
     return line
 
 
-def run_scan(ctx: CommandContext, parts: list[str]) -> None:
+def run_scan(ctx: CommandContext, parts: list[str]) -> bool:
     try:
         options = parse_scan_arguments(
             parts, ctx.config["runtime"].getint("scan_timeout_ms", fallback=100)
@@ -280,7 +280,7 @@ def run_scan(ctx: CommandContext, parts: list[str]) -> None:
         live = None
 
     if clean:
-        return
+        return interrupted
     if interrupted:
         ctx.console.print(tr(ctx.language, "scan_stopped"), markup=False)
         ctx.console.print(tr(ctx.language, "scan_found_count", count=len(found)), markup=False)
@@ -292,6 +292,7 @@ def run_scan(ctx: CommandContext, parts: list[str]) -> None:
         )
     else:
         ctx.console.print(tr(ctx.language, "scan_none"), markup=False)
+    return interrupted
 
 
 def _parse_decode_flags(parts: list[str], *, command: str) -> tuple[list[str], bool | None]:
@@ -368,16 +369,19 @@ def set_option(ctx: CommandContext, name: str, value: str) -> None:
     ctx.console.print(f"[green]{tr(ctx.language, 'option_saved', section=spec.section, name=spec.name, value=parsed)}[/green]")
 
 
-def run_script(ctx: CommandContext, name: str, *, decode_override: bool | None = None) -> None:
+def run_script(ctx: CommandContext, name: str, *, decode_override: bool | None = None) -> bool:
     try: lines = ctx.scripts.get(name)
     except KeyError: raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
     if not lines:
-        ctx.console.print(f"[yellow]{tr(ctx.language, 'script_empty', name=name)}[/yellow]"); return
+        ctx.console.print(f"[yellow]{tr(ctx.language, 'script_empty', name=name)}[/yellow]"); return False
     delay = ctx.config["runtime"].getint("inter_command_delay_ms") / 1000.0
     for index, line in enumerate(lines, start=1):
         if not _clean_output(ctx): ctx.console.print(f"[dim]{index:02d}> {line}[/dim]")
-        execute_command(ctx, line, from_script=True, inherited_decode_override=decode_override)
+        action = execute_command(ctx, line, from_script=True, inherited_decode_override=decode_override)
+        if action == "script-interrupted":
+            return True
         if index < len(lines) and delay > 0: time.sleep(delay)
+    return False
 
 
 def _copy_to_clipboard(text: str) -> None:
@@ -475,7 +479,9 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         return None
     if command == "ports": show_ports(ctx); return None
     if command == "status": show_status(ctx); return None
-    if command == "scan": run_scan(ctx, parts[1:]); return None
+    if command == "scan":
+        interrupted = run_scan(ctx, parts[1:])
+        return "script-interrupted" if interrupted and from_script else None
     if command == "send":
         payload, explicit = _parse_send_arguments(parts[1:], ctx.language); send_frame(ctx, payload, decode_override=explicit if explicit is not None else inherited_decode_override); return None
     if command == "pause":
@@ -503,7 +509,13 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         except KeyError: raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
         ctx.console.print(f"[green]{tr(ctx.language, 'script_deleted', name=name)}[/green]"); return None
     if command == "run" and len(parts) >= 2 and parts[1].lower() == "script":
-        name, explicit = _parse_run_arguments(parts[2:], ctx.language); run_script(ctx, name, decode_override=explicit if explicit is not None else inherited_decode_override); return None
+        name, explicit = _parse_run_arguments(parts[2:], ctx.language)
+        interrupted = run_script(
+            ctx,
+            name,
+            decode_override=explicit if explicit is not None else inherited_decode_override,
+        )
+        return "script-interrupted" if interrupted and from_script else None
     if command == "record": _record_command(ctx, parts[1:]); return None
     if command == "options":
         section = parts[1] if len(parts) > 1 else None

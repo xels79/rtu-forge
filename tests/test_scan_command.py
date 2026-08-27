@@ -103,6 +103,14 @@ def test_ctrl_c_stops_scan_and_reports_partial_result(tmp_path):
     assert "Traceback" not in text
 
 
+def test_ctrl_c_during_scan_stops_remaining_script_lines(tmp_path):
+    ctx = make_context(tmp_path, interrupt_at=2)
+    ctx.scripts.set("interrupt-demo", ["scan 1 3", "disconnect"])
+    execute_command(ctx, "run script interrupt-demo")
+    assert ctx.transport.connected is True
+    assert "Scan stopped." in output(ctx)
+
+
 def test_russian_scan_error_is_localized(tmp_path):
     ctx = make_context(tmp_path)
     ctx.config["ui"]["language"] = "ru"

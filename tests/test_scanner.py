@@ -37,6 +37,7 @@ def test_scan_options_parse_timeout_function_and_addresses():
     assert parse_scan_arguments(["1", "32", "--timeout", "200"], 100).timeout_ms == 200
     assert parse_scan_arguments(["--function", "04"], 100).function == 4
     assert parse_scan_arguments(["--address", "101"], 100).address == 101
+    assert parse_scan_arguments(["--address", "0065"], 100).address == 65
     assert parse_scan_arguments(["--address", "0x0065"], 100).address == 0x0065
 
 
@@ -67,6 +68,35 @@ def test_valid_normal_and_exception_responses_are_found():
     assert [result.slave for result in results] == [1, 7]
     assert results[0].exception_code is None
     assert results[1].exception_code == 2
+
+
+@pytest.mark.parametrize(
+    ("byte_count", "data", "found"),
+    [
+        (0, "", False),
+        (1, "05", False),
+        (2, "00 05", True),
+    ],
+)
+def test_fc03_requires_exact_quantity_one_response(byte_count, data, found):
+    payload = f"01 03 {byte_count:02X}" + (f" {data}" if data else "")
+    frame = append_crc(bytes.fromhex(payload))
+    assert (validate_probe_response(frame, 1, 3) is not False) is found
+
+
+@pytest.mark.parametrize("function", [1, 2])
+def test_fc01_fc02_require_one_data_byte(function):
+    correct = append_crc(bytes((1, function, 1, 1)))
+    wrong_count = append_crc(bytes((1, function, 2, 1, 0)))
+    assert validate_probe_response(correct, 1, function) is None
+    assert validate_probe_response(wrong_count, 1, function) is False
+
+
+def test_exception_response_requires_exact_structure():
+    valid = append_crc(bytes.fromhex("01 83 02"))
+    malformed = append_crc(bytes.fromhex("01 83 02 00"))
+    assert validate_probe_response(valid, 1, 3) == 2
+    assert validate_probe_response(malformed, 1, 3) is False
 
 
 @pytest.mark.parametrize(
