@@ -15,8 +15,20 @@ from .shell import run_shell
 from .transport import SerialTransport
 
 
+def _promote_clean_flag(argv: list[str]) -> list[str]:
+    """Allow -c/--clean both before and after the one-shot command."""
+    if not any(item in {"-c", "--clean"} for item in argv):
+        return argv
+    return ["--clean", *(item for item in argv if item not in {"-c", "--clean"})]
+
+
 def build_parser(language: str = "en") -> argparse.ArgumentParser:
     text = cli_text(language)
+    clean_help = (
+        "Чистый HEX-вывод только для текущего запуска; config.ini не изменяется"
+        if language.lower() == "ru"
+        else "Use clean HEX output for this run only; config.ini is not changed"
+    )
     parser = argparse.ArgumentParser(
         prog="rtuforge",
         description=text["description"],
@@ -25,6 +37,7 @@ def build_parser(language: str = "en") -> argparse.ArgumentParser:
         add_help=False,
     )
     parser.add_argument("-h", "--help", action="help", help=text["help"])
+    parser.add_argument("-c", "--clean", action="store_true", help=clean_help)
     parser.add_argument("--config", default="config.ini", help=text["config"])
     parser.add_argument("--scripts", default="scripts.ini", help=text["scripts"])
     parser.add_argument("command", nargs=argparse.REMAINDER, help=text["command"])
@@ -43,7 +56,7 @@ def _language_for_argv(argv: list[str]) -> str:
 
 
 def main() -> int:
-    argv = sys.argv[1:]
+    argv = _promote_clean_flag(sys.argv[1:])
     language = _language_for_argv(argv)
     args = build_parser(language).parse_args(argv)
     config_path = Path(args.config).resolve()
@@ -54,6 +67,9 @@ def main() -> int:
     except Exception as exc:
         Console(stderr=True).print(tr(language, "error", error=exc), markup=False)
         return 1
+
+    if args.clean:
+        config["runtime"]["clean_output"] = "true"
 
     console = Console()
     ctx = CommandContext(
