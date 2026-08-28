@@ -328,8 +328,8 @@ rtuforge --port COM7 --timeout-ms 1000 scan 1 32 --timeout 100
 - [x] Проверить tests connection overrides.
 - [x] Проверить tests persistence regression.
 - [x] Проверить Linux path tests через monkeypatch.
-- [ ] Проверить GitHub Actions именно на голове `feature/make-setup-scripts` после push нового commit.
-- [ ] Зафиксировать результат нового CI; предыдущий run #61 не используется как подтверждение.
+- [x] GitHub Actions проверен для implementation commit `7538fe8972c640efdf9f33dea08c99848e823481`.
+- [x] Workflow `tests`, run #62: `completed`, `success`; предыдущий run #61 не использован как подтверждение.
 
 ## 14. Итог ручной проверки
 
@@ -354,7 +354,7 @@ Linux default BinDir: /tmp/rtuforge-manual-acceptance-20260828/home/.local/bin
 Linux desktop entry: generated and validated by integration test; graphical GUI launch not performed
 pytest Windows: 160 passed, 4 skipped
 pytest WSL: 163 passed, 1 skipped
-CI: pending new HEAD after push
+CI: workflow tests, run #62, success (implementation commit 7538fe8)
 ```
 
 ## Definition of Done
@@ -371,4 +371,4 @@ CI: pending new HEAD after push
 - [x] `status`/toolbar/transport используют effective settings.
 - [x] README соответствует реализации.
 - [x] Полный pytest зелёный.
-- [ ] CI зелёный на новом HEAD.
+- [x] CI зелёный для implementation commit.
