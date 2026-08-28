@@ -13,7 +13,7 @@ from .scripts import ScriptStore
 TOP_LEVEL_COMMANDS: tuple[str, ...] = (
     "connect", "disconnect", "ports", "status", "paths", "scan", "send", "add", "run",
     "scripts", "ls", "list", "show", "delete", "record", "options", "set", "pause",
-    "history", "clear", "cls", "help", "exit", "quit",
+    "export", "import", "history", "clear", "cls", "help", "exit", "quit",
 )
 
 DECODE_FLAGS: tuple[str, ...] = ("--decode", "--raw", "-d", "-r")
@@ -32,14 +32,28 @@ def completion_candidates(
     completed = words if trailing_space else words[:-1]
 
     choices: Iterable[str]
-    if completed in (["run"], ["delete"], ["add"]):
+    if completed == ["run"]:
+        choices = ("script", "file")
+    elif completed in (["delete"], ["add"]):
         choices = ("script",)
+    elif completed in (["export"], ["import"]):
+        choices = ("script", "scripts")
     elif completed == ["show"]:
         choices = ("script", "record")
     elif completed == ["run", "script"]:
         choices = script_names
     elif len(completed) >= 3 and completed[:2] == ["run", "script"]:
         choices = DECODE_FLAGS
+    elif len(completed) >= 3 and completed[:2] == ["run", "file"]:
+        choices = ("--script", *DECODE_FLAGS)
+    elif completed == ["export", "script"]:
+        choices = script_names
+    elif len(completed) >= 3 and completed[:2] == ["export", "script"]:
+        choices = ("--file", "--overwrite")
+    elif completed == ["export", "scripts"]:
+        choices = ("--file", "--overwrite")
+    elif len(completed) >= 2 and completed[0] == "import":
+        choices = ("--overwrite",)
     elif len(completed) == 2 and completed[0] in {"show", "delete"} and completed[1] == "script":
         choices = script_names
     elif completed == ["set"]:
@@ -54,7 +68,7 @@ def completion_candidates(
     elif completed == ["options"]:
         choices = sections
     elif completed == ["help"]:
-        choices = tuple(help_topics()) + ("record",)
+        choices = tuple(help_topics()) + ("record", "export", "import")
     elif completed == ["history"]:
         choices = ("clear",)
     elif completed == ["send"]:

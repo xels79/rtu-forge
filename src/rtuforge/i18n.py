@@ -20,6 +20,9 @@ GENERAL_HELP: dict[str, str] = {
                                   Send one Modbus RTU frame
   add script <name>               Capture commands until 'end script'
   run script <name> [-d|-r]       Run a stored script
+  run file <file> [options]        Run a portable script file without importing
+  export script|scripts ...        Export portable script files
+  import script|scripts ...        Import portable script files
   scripts | ls | list             List stored scripts
   show script <name>              Show script contents
   show record                     Show current recording buffer
@@ -40,7 +43,7 @@ GENERAL_HELP: dict[str, str] = {
 One-shot global flag:
   -c, --clean                     Plain HEX output for this invocation only
 
-Use 'help scan', 'help scripts', 'help send', 'help run' and 'help record' for details.
+Use 'help run', 'help export' and 'help import' for portable file details.
 """,
     "ru": """Команды:
   connect                         Подключиться с текущими параметрами
@@ -53,6 +56,9 @@ Use 'help scan', 'help scripts', 'help send', 'help run' and 'help record' for d
                                   Отправить один Modbus RTU кадр
   add script <name>               Записать скрипт до команды 'end script'
   run script <name> [-d|-r]       Запустить сохранённый скрипт
+  run file <файл> [опции]          Запустить переносимый файл без импорта
+  export script|scripts ...        Экспортировать переносимые скрипты
+  import script|scripts ...        Импортировать переносимые скрипты
   scripts | ls | list             Показать список скриптов
   show script <name>              Показать содержимое скрипта
   show record                     Показать текущий буфер записи
@@ -73,7 +79,7 @@ Use 'help scan', 'help scripts', 'help send', 'help run' and 'help record' for d
 Глобальный флаг one-shot режима:
   -c, --clean                     Чистый HEX-вывод только для этого запуска
 
-Подробнее: help scan, help scripts, help send, help run, help record.
+О переносимых файлах: help run, help export, help import.
 """,
 }
 
@@ -253,6 +259,9 @@ Useful commands inside scripts:
 
 Not allowed inside scripts:
   add script ...
+  import script / import scripts
+  export script / export scripts
+  run file ...
   history / history clear
   clear / cls
   exit / quit
@@ -520,6 +529,9 @@ CRC задаётся отдельно через runtime.crc_mode:
 
 Запрещены внутри скриптов:
   add script ...
+  import script / import scripts
+  export script / export scripts
+  run file ...
   history / history clear
   clear / cls
   exit / quit

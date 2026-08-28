@@ -242,9 +242,14 @@ add script <name>
 end script
 
 run script <name> [-d|--decode|-r|--raw]
+run file <file> [--script <name>] [-d|--decode|-r|--raw]
 scripts | ls | list
 show script <name>
 delete script <name>
+export script <name> --file <path> [--overwrite]
+export scripts --file <path> [--overwrite]
+import script <file> [--overwrite]
+import scripts <file> [--overwrite]
 
 show record
 record start [all|rx]
@@ -641,6 +646,9 @@ Commands not allowed inside scripts:
 
 ```text
 add script ...
+import script ... | import scripts ...
+export script ... | export scripts ...
+run file ...
 history
 history clear
 clear | cls
@@ -652,6 +660,48 @@ Empty lines and lines beginning with `#` are ignored.
 `runtime.inter_command_delay_ms` is applied between stored script lines. `pause <ms>` adds an explicit additional delay.
 
 Nested `run script` calls are supported. Recursive/cyclic script calls should be avoided.
+
+## Portable script files
+
+RTU Forge can export, import, and directly run human-readable UTF-8 `.rtus` files. The extension is recommended but optional; the `scripts-v1` marker identifies the format.
+
+Single-script example:
+
+```ini
+[rtuforge]
+format = scripts-v1
+
+[scripts]
+status =
+    send 01 03 00 65 00 01
+```
+
+A bundle uses the same format with more entries:
+
+```ini
+[rtuforge]
+format = scripts-v1
+
+[scripts]
+status =
+    send 01 03 00 65 00 01
+
+errors =
+    send 01 03 00 1B 00 01
+```
+
+```text
+export script idd-status --file idd-status.rtus
+export scripts --file backup.rtus
+import script idd-status.rtus
+import scripts backup.rtus
+run file idd-status.rtus
+run file backup.rtus --script idd-status
+```
+
+Import merges scripts into `scripts.ini`; it does not remove unrelated stored scripts. `run file` executes directly and does not import. Relative paths are based on the process CWD, and paths with spaces should be quoted. Existing destination files and stored scripts are not overwritten without `--overwrite`.
+
+Portable-file commands are not allowed inside scripts. In one-shot mode, `-c/--clean` remains a global flag and may be placed before or after the whole command; it is not a `run file` flag in the interactive shell.
 
 ## Options
 
@@ -781,6 +831,8 @@ help send
 help add
 help run
 help scripts
+help export
+help import
 help show
 help delete
 help record

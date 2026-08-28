@@ -30,7 +30,7 @@ def test_option_value_completion_uses_choices():
 
 
 def test_help_completion_comes_from_registry():
-    expected = set(help_topics()) | {"record"}
+    expected = set(help_topics()) | {"record", "export", "import"}
     assert set(completion_candidates("help ")) == expected
 
 
@@ -53,6 +53,17 @@ def test_scan_completion():
 def test_run_script_flag_completion():
     choices = completion_candidates("run script idd-status ", ["idd-status"])
     assert set(choices) == {"--decode", "--raw", "-d", "-r"}
+
+
+def test_portable_script_completion():
+    names = ["Motor status"]
+    assert completion_candidates("run ") == ["file", "script"]
+    assert completion_candidates("export ") == ["script", "scripts"]
+    assert completion_candidates("import ") == ["script", "scripts"]
+    assert completion_candidates("export script ", names) == names
+    assert set(completion_candidates("run file demo.rtus ")) == {
+        "--script", "--decode", "--raw", "-d", "-r"
+    }
 
 
 def test_record_completion():

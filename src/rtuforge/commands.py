@@ -19,6 +19,7 @@ from .i18n import command_help, interactive_help, message
 from .modbus import decode_response, format_decoded_response
 from .runtime_text import tr
 from .scanner import ScanArgumentError, ScanResult, parse_scan_arguments, scan_devices
+from .script_file import load_script_file, resolve_script_path, save_script_file
 from .scripts import ScriptStore
 from .transport import Exchange, SerialTransport
 
@@ -345,6 +346,14 @@ def _parse_send_arguments(parts: list[str], language: str = "en") -> tuple[str, 
     return " ".join(payload_parts), decode_override
 
 
+def _split_command_line(line: str) -> list[str]:
+    lexer = shlex.shlex(line, posix=True)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    lexer.escape = ""
+    return list(lexer)
+
+
 def _parse_run_arguments(parts: list[str], language: str = "en") -> tuple[str, bool | None]:
     if not parts:
         raise ValueError(tr(language, "run_usage"))
@@ -392,11 +401,15 @@ def set_option(ctx: CommandContext, name: str, value: str) -> None:
     ctx.console.print(f"[green]{tr(ctx.language, 'option_saved', section=spec.section, name=spec.name, value=parsed)}[/green]")
 
 
-def run_script(ctx: CommandContext, name: str, *, decode_override: bool | None = None) -> bool:
-    try: lines = ctx.scripts.get(name)
-    except KeyError: raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
+def run_script_lines(
+    ctx: CommandContext,
+    lines: list[str],
+    *,
+    source: str,
+    decode_override: bool | None = None,
+) -> bool:
     if not lines:
-        ctx.console.print(f"[yellow]{tr(ctx.language, 'script_empty', name=name)}[/yellow]"); return False
+        ctx.console.print(f"[yellow]{tr(ctx.language, 'script_empty', name=source)}[/yellow]"); return False
     delay = ctx.config["runtime"].getint("inter_command_delay_ms") / 1000.0
     for index, line in enumerate(lines, start=1):
         if not _clean_output(ctx): ctx.console.print(f"[dim]{index:02d}> {line}[/dim]")
@@ -405,6 +418,125 @@ def run_script(ctx: CommandContext, name: str, *, decode_override: bool | None =
             return True
         if index < len(lines) and delay > 0: time.sleep(delay)
     return False
+
+
+def run_script(ctx: CommandContext, name: str, *, decode_override: bool | None = None) -> bool:
+    try: lines = ctx.scripts.get(name)
+    except KeyError: raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
+    return run_script_lines(ctx, lines, source=name, decode_override=decode_override)
+
+
+def _file_error(ctx: CommandContext, en: str, ru: str) -> ValueError:
+    return ValueError(ru if ctx.language.lower() == "ru" else en)
+
+
+def _parse_overwrite(parts: list[str], usage: str) -> tuple[list[str], bool]:
+    overwrite = False
+    plain: list[str] = []
+    for part in parts:
+        if part.lower() == "--overwrite":
+            overwrite = True
+        elif part.startswith("-"):
+            raise ValueError(f"Unknown flag: {part}")
+        else:
+            plain.append(part)
+    if not plain:
+        raise ValueError(usage)
+    return plain, overwrite
+
+
+def _export_command(ctx: CommandContext, parts: list[str]) -> None:
+    if not parts or parts[0].lower() not in {"script", "scripts"}:
+        raise ValueError("Usage: export script <name> --file <path> [--overwrite] | export scripts --file <path> [--overwrite]")
+    kind = parts[0].lower()
+    overwrite = False
+    args = parts[1:]
+    for flag in args:
+        if flag.lower() == "--overwrite": overwrite = True
+        elif flag.startswith("-") and flag.lower() != "--file": raise ValueError(f"Unknown flag: {flag}")
+    try: marker = next(index for index, value in enumerate(args) if value.lower() == "--file")
+    except StopIteration: raise ValueError("Missing --file <path>.") from None
+    before = [value for value in args[:marker] if value.lower() != "--overwrite"]
+    after = [value for value in args[marker + 1:] if value.lower() != "--overwrite"]
+    if len(after) != 1: raise ValueError("Missing or invalid --file <path>.")
+    if kind == "script":
+        name = " ".join(before)
+        if not name: raise ValueError("Missing script name.")
+        try: scripts = {name: ctx.scripts.get(name)}
+        except KeyError: raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
+    else:
+        if before: raise ValueError("Usage: export scripts --file <path> [--overwrite]")
+        names = ctx.scripts.list()
+        if not names:
+            ctx.console.print("Скриптов для экспорта нет." if ctx.language.lower() == "ru" else "No scripts to export.", markup=False)
+            return
+        scripts = {name: ctx.scripts.get(name) for name in names}
+    try: path = save_script_file(after[0], scripts, overwrite=overwrite)
+    except FileExistsError as exc:
+        raise _file_error(ctx, f"File already exists: {exc.args[0]}\nUse --overwrite to replace it.", f"Файл уже существует: {exc.args[0]}\nИспользуйте --overwrite для замены.") from None
+    if kind == "script":
+        text = f"Скрипт '{name}' экспортирован в {path}." if ctx.language.lower() == "ru" else f"Exported script '{name}' to {path}."
+    else:
+        text = f"Экспортировано скриптов: {len(scripts)}.\n{path}" if ctx.language.lower() == "ru" else f"Exported {len(scripts)} scripts to {path}."
+    ctx.console.print(text, markup=False)
+
+
+def _import_command(ctx: CommandContext, parts: list[str]) -> None:
+    if not parts or parts[0].lower() not in {"script", "scripts"}:
+        raise ValueError("Usage: import script|scripts <file> [--overwrite]")
+    kind = parts[0].lower()
+    plain, overwrite = _parse_overwrite(parts[1:], "Missing script file argument.")
+    if len(plain) != 1: raise ValueError("Usage: import script|scripts <file> [--overwrite]")
+    scripts = load_script_file(plain[0])
+    if not scripts: raise ValueError("Script file contains no scripts.")
+    if kind == "script" and len(scripts) != 1:
+        raise ValueError("File contains multiple scripts. Use 'import scripts'.")
+    try: ctx.scripts.set_many(scripts, overwrite=overwrite)
+    except FileExistsError as exc:
+        raise _file_error(ctx, f"Scripts already exist: {exc.args[0]}\nUse --overwrite to replace them.", f"Скрипты уже существуют: {exc.args[0]}\nИспользуйте --overwrite для замены.") from None
+    if kind == "script":
+        name = next(iter(scripts))
+        text = f"Скрипт '{name}' импортирован." if ctx.language.lower() == "ru" else f"Imported script '{name}'."
+    else:
+        text = f"Импортировано скриптов: {len(scripts)}." if ctx.language.lower() == "ru" else f"Imported {len(scripts)} scripts."
+    ctx.console.print(text, markup=False)
+
+
+def _run_file(ctx: CommandContext, parts: list[str], inherited: bool | None) -> bool:
+    if not parts: raise ValueError("Usage: run file <file> [--script <name>] [-d|--decode|-r|--raw]")
+    path = parts[0]
+    decode: bool | None = None
+    selector: str | None = None
+    index = 1
+    while index < len(parts):
+        part = parts[index]
+        low = part.lower()
+        if low in {"-d", "--decode"}:
+            if decode is False: raise ValueError("run file: --decode and --raw cannot be used together")
+            decode = True; index += 1
+        elif low in {"-r", "--raw"}:
+            if decode is True: raise ValueError("run file: --decode and --raw cannot be used together")
+            decode = False; index += 1
+        elif low == "--script":
+            index += 1; name_parts: list[str] = []
+            while index < len(parts) and not parts[index].startswith("-"):
+                name_parts.append(parts[index]); index += 1
+            if not name_parts: raise ValueError("Missing value for --script.")
+            selector = " ".join(name_parts)
+        elif part.startswith("-"): raise ValueError(f"Unknown run file flag: {part}")
+        else: raise ValueError("Usage: run file <file> [--script <name>] [-d|--decode|-r|--raw]")
+    scripts = load_script_file(path)
+    if not scripts: raise ValueError("Script file contains no scripts.")
+    if selector is None:
+        if len(scripts) > 1:
+            raise ValueError("File contains multiple scripts.\nUse --script <name>.\nAvailable scripts: " + ", ".join(scripts))
+        selector = next(iter(scripts))
+    if selector not in scripts:
+        raise ValueError(f"Script '{selector}' not found in file. Available scripts: {', '.join(scripts)}")
+    resolved = resolve_script_path(path)
+    text = f"Запуск скрипта '{selector}' из {resolved}." if ctx.language.lower() == "ru" else f"Running script '{selector}' from {resolved}."
+    ctx.console.print(text, markup=False)
+    return run_script_lines(ctx, scripts[selector], source=selector, decode_override=decode if decode is not None else inherited)
 
 
 def _copy_to_clipboard(text: str) -> None:
@@ -490,7 +622,12 @@ def _record_command(ctx: CommandContext, parts: list[str]) -> None:
 def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False, inherited_decode_override: bool | None = None) -> str | None:
     stripped = line.strip()
     if not stripped or stripped.startswith("#"): return None
-    parts = shlex.split(stripped); command = parts[0].lower()
+    parts = _split_command_line(stripped); command = parts[0].lower()
+
+    if from_script and command in {"import", "export"}:
+        raise ValueError("import/export is not allowed inside scripts")
+    if from_script and command == "run" and len(parts) > 1 and parts[1].lower() == "file":
+        raise ValueError("run file is not allowed inside scripts")
 
     if command == "connect":
         ctx.transport.connect()
@@ -532,6 +669,11 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         try: ctx.scripts.delete(name)
         except KeyError: raise ValueError(tr(ctx.language, "script_not_found", name=name)) from None
         ctx.console.print(f"[green]{tr(ctx.language, 'script_deleted', name=name)}[/green]"); return None
+    if command == "export": _export_command(ctx, parts[1:]); return None
+    if command == "import": _import_command(ctx, parts[1:]); return None
+    if command == "run" and len(parts) >= 2 and parts[1].lower() == "file":
+        interrupted = _run_file(ctx, parts[2:], inherited_decode_override)
+        return "script-interrupted" if interrupted and from_script else None
     if command == "run" and len(parts) >= 2 and parts[1].lower() == "script":
         name, explicit = _parse_run_arguments(parts[2:], ctx.language)
         interrupted = run_script(
@@ -549,7 +691,7 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
     if command == "help":
         if len(parts) == 1: ctx.console.print(interactive_help(ctx.language), markup=False); return None
         topic = HELP_ALIASES.get(parts[1].lower(), parts[1].lower())
-        if topic in {"record", "run"}:
+        if topic in {"record", "run", "export", "import"}:
             from .runtime_text import TEXT
             ctx.console.print(TEXT["ru" if ctx.language.lower() == "ru" else "en"].get(f"help_{topic}", topic), markup=False); return None
         text = command_help(ctx.language, topic)

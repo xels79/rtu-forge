@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import sys
 
 from rich.console import Console
@@ -171,7 +172,7 @@ def main() -> int:
         run_shell(ctx)
         return 0
 
-    line = " ".join(command)
+    line = shlex.join(command)
     try:
         action = execute_command(ctx, line)
         if action and action.startswith("add-script:"):

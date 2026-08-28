@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from rtuforge.cli import _language_for_argv, _promote_clean_flag, build_parser, main
 from rtuforge.connection import parse_connection_overrides
+from rtuforge.scripts import ScriptStore
 
 
 def test_english_cli_help():
@@ -155,3 +156,38 @@ def test_home_controls_help_language_and_explicit_config_wins(tmp_path):
             "--help",
         ]
     ) == "en"
+
+
+def test_portable_script_cli_export_import_roundtrip_with_space_path(tmp_path, monkeypatch):
+    source_home = tmp_path / "source"
+    target_home = tmp_path / "target"
+    source_home.mkdir()
+    target_home.mkdir()
+    for home in (source_home, target_home):
+        (home / "config.ini").write_bytes(Path("config.ini").read_bytes())
+    ScriptStore(source_home / "scripts.ini").set("Motor status", ["pause 0"])
+    bundle = tmp_path / "portable files" / "backup.rtus"
+
+    with patch("rtuforge.transport.SerialTransport.connect") as connect:
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["rtuforge", "--home", str(source_home), "export", "scripts", "--file", str(bundle)],
+        )
+        assert main() == 0
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["rtuforge", "--home", str(target_home), "import", "scripts", str(bundle)],
+        )
+        assert main() == 0
+        imported = (target_home / "scripts.ini").read_bytes()
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            ["rtuforge", "--home", str(target_home), "run", "file", str(bundle)],
+        )
+        assert main() == 0
+        assert (target_home / "scripts.ini").read_bytes() == imported
+    connect.assert_not_called()
+    assert ScriptStore(target_home / "scripts.ini").get("Motor status") == ["pause 0"]
