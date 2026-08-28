@@ -96,6 +96,7 @@ def parse_scan_arguments(parts: list[str], default_timeout_ms: int) -> ScanOptio
 
 
 def build_probe(slave: int, function: int = 0x03, address: int = 0) -> bytes:
+    """Build a quantity-one Modbus read request without a CRC."""
     return bytes((slave, function, address >> 8, address & 0xFF, 0x00, 0x01))
 
 
@@ -133,7 +134,7 @@ def scan_devices(
         exchange = transport.exchange(
             build_probe(slave, options.function, options.address),
             timeout_ms=options.timeout_ms,
-            crc_mode_override="auto",
+            crc_mode_override="append",
         )
         if on_exchange is not None:
             on_exchange(exchange)

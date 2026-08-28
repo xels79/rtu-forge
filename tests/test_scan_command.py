@@ -87,10 +87,21 @@ def test_scan_overrides_do_not_modify_config(tmp_path):
     ctx = make_context(tmp_path)
     ctx.config["runtime"]["crc_mode"] = "none"
     original_connection_timeout = ctx.config["connection"]["timeout_ms"]
+    original_scan_timeout = ctx.config["runtime"]["scan_timeout_ms"]
     execute_command(ctx, "scan 2 --timeout 25")
-    assert ctx.transport.calls[0][1:] == (25, "auto")
+    assert ctx.transport.calls[0][1:] == (25, "append")
     assert ctx.config["connection"]["timeout_ms"] == original_connection_timeout
+    assert ctx.config["runtime"]["scan_timeout_ms"] == original_scan_timeout
     assert ctx.config["runtime"]["crc_mode"] == "none"
+    assert not ctx.config_path.exists()
+
+
+def test_scan_uses_runtime_default_timeout_per_probe(tmp_path):
+    ctx = make_context(tmp_path)
+    ctx.config["connection"]["timeout_ms"] = "1000"
+    ctx.config["runtime"]["scan_timeout_ms"] = "100"
+    execute_command(ctx, "scan 7")
+    assert ctx.transport.calls[0][1:] == (100, "append")
 
 
 def test_ctrl_c_stops_scan_and_reports_partial_result(tmp_path):
@@ -109,6 +120,26 @@ def test_ctrl_c_during_scan_stops_remaining_script_lines(tmp_path):
     execute_command(ctx, "run script interrupt-demo")
     assert ctx.transport.connected is True
     assert "Scan stopped." in output(ctx)
+
+
+def test_ctrl_c_during_scan_propagates_through_nested_scripts(tmp_path):
+    ctx = make_context(tmp_path, interrupt_at=2)
+    ctx.scripts.set("inner", ["scan 1 3", "disconnect"])
+    ctx.scripts.set("outer", ["run script inner", "disconnect"])
+    execute_command(ctx, "run script outer")
+    assert ctx.transport.connected is True
+    assert "Scan stopped." in output(ctx)
+
+
+def test_redirected_scan_output_has_no_live_progress_or_ansi(tmp_path):
+    response = append_crc(bytes.fromhex("01 03 02 00 05"))
+    ctx = make_context(tmp_path, force_terminal=False, responses={1: response})
+    execute_command(ctx, "scan 1 2")
+    text = output(ctx)
+    assert "Scan COM4" not in text
+    assert "\x1b[" not in text
+    assert "ID 001  found" in text
+    assert "Devices found: 1" in text
 
 
 def test_russian_scan_error_is_localized(tmp_path):

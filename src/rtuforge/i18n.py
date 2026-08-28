@@ -118,10 +118,12 @@ Defaults:
   quantity    1
   timeout     runtime.scan_timeout_ms (default 100 ms per device)
 
-Only read-only functions 01, 02, 03 and 04 are allowed. A device is found only when its response has a valid CRC, matching slave ID, and the requested function. A valid Modbus exception response also proves that the device was found.
+Only read-only functions 01, 02, 03 and 04 are allowed. Normal responses require a valid CRC, matching slave ID and function, the exact byte count (1 for FC01/02; 2 for FC03/04), and exact frame length.
+
+A valid standard-length Modbus exception response also proves that the device was found.
 
 Options:
-  --timeout <ms>       Temporary per-device timeout; does not change config.ini.
+  --timeout <ms>       Temporary per-device timeout; does not change connection.timeout_ms, runtime.scan_timeout_ms, or config.ini.
   --function <01..04>  Read function used by the probe.
   --address <address>  Decimal or 0x-prefixed hexadecimal address.
 
@@ -133,7 +135,7 @@ Examples:
   scan 1 32 --function 03 --address 0x0065
   rtuforge scan -c
 
-Normal TTY output uses one stable progress line. Ctrl+C stops the scan and returns to the shell. Clean mode prints only found slave IDs, one per line. Scan always sends one valid CRC without changing runtime.crc_mode.
+Normal TTY output uses one stable progress line; redirected output has no Live progress. Clean mode prints only found slave IDs, one per line. Ctrl+C stops a standalone scan and returns to the shell; in a stored script it also stops the remaining commands, including through nested scripts. The scanner builds requests without CRC, then the transport always adds one through a temporary append override without changing runtime.crc_mode.
 """,
         "send": """send [-d|--decode|-r|--raw] <hex bytes...>
 
@@ -368,10 +370,12 @@ Not allowed inside scripts.
   quantity     1
   таймаут      runtime.scan_timeout_ms (по умолчанию 100 мс на устройство)
 
-Используются только безопасные функции чтения 01, 02, 03 и 04. Устройство считается найденным, только если ответ имеет корректный CRC, совпадающий slave ID и ожидаемую функцию. Корректный Modbus exception response также означает, что устройство найдено.
+Используются только безопасные функции чтения 01, 02, 03 и 04. Обычный ответ должен иметь корректный CRC, совпадающие slave ID и функцию, точный byte count (1 для FC01/02; 2 для FC03/04) и точную длину кадра.
+
+Корректный Modbus exception response стандартной длины также означает, что устройство найдено.
 
 Параметры:
-  --timeout <мс>       Временный таймаут одного запроса; config.ini не изменяется.
+  --timeout <мс>       Временный таймаут одного запроса; connection.timeout_ms, runtime.scan_timeout_ms и config.ini не изменяются.
   --function <01..04>  Функция чтения для probe-запроса.
   --address <адрес>    Десятичный адрес или HEX с префиксом 0x.
 
@@ -383,7 +387,7 @@ Not allowed inside scripts.
   scan 1 32 --function 03 --address 0x0065
   rtuforge scan -c
 
-В обычном terminal прогресс занимает одну стабильную строку. Ctrl+C останавливает поиск и возвращает приглашение shell. В clean mode печатаются только найденные slave ID, по одному в строке. Scan всегда отправляет один корректный CRC и не изменяет runtime.crc_mode.
+В обычном terminal прогресс занимает одну стабильную строку; в перенаправленном выводе Live progress отсутствует. В clean mode печатаются только найденные slave ID, по одному в строке. Ctrl+C останавливает отдельный scan и возвращает приглашение shell; внутри stored script он также прекращает оставшиеся команды, включая вложенные scripts. Scanner строит запросы без CRC, затем transport всегда добавляет один CRC через временный append override, не изменяя runtime.crc_mode.
 """,
         "send": """send [-d|--decode|-r|--raw] <hex bytes...>
 

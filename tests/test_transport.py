@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from rtuforge.config import load_config
-from rtuforge.crc import append_crc
+from rtuforge.crc import append_crc, has_valid_crc
 from rtuforge.scanner import build_probe
 from rtuforge.transport import SerialTransport
 
@@ -52,3 +52,20 @@ def test_exchange_overrides_crc_and_timeout_without_changing_config():
     assert exchange.rx == response
     assert config["runtime"]["crc_mode"] == "none"
     assert config["connection"]["timeout_ms"] == original_timeout
+
+
+def test_exchange_append_override_handles_scan_probe_crc_collision():
+    config = load_config(Path("config.ini"))
+    config["runtime"]["crc_mode"] = "auto"
+    config["runtime"]["response_silence_ms"] = "0"
+    fake_serial = FakeSerial(b"")
+    transport = SerialTransport(config)
+    transport.serial = fake_serial
+    probe = build_probe(1, 0x03, 0xBF62)
+    assert has_valid_crc(probe)
+
+    exchange = transport.exchange(probe, timeout_ms=1, crc_mode_override="append")
+
+    assert exchange.tx == append_crc(probe)
+    assert len(exchange.tx) == 8
+    assert fake_serial.written == append_crc(probe)

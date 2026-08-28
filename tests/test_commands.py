@@ -126,6 +126,28 @@ def test_russian_scan_help(command_context):
     assert "Допустимый диапазон slave ID: 1..247" in text
     assert "exception response" in text
     assert "--timeout" in text
+    assert "byte count" in text
+    assert "connection.timeout_ms" in text
+    assert "append override" in text
+    assert "stored script" in text
+
+
+def test_english_scan_help_documents_scan_contract(command_context):
+    execute_command(command_context, "help scan")
+    text = output(command_context)
+    assert "read-only functions 01, 02, 03 and 04" in text
+    assert "exact byte count" in text
+    assert "exception response" in text
+    assert "connection.timeout_ms" in text
+    assert "append override" in text
+    assert "stored script" in text
+
+
+@pytest.mark.parametrize("language", ["en", "ru"])
+def test_scripts_help_lists_scan_as_allowed(command_context, language):
+    command_context.config["ui"]["language"] = language
+    execute_command(command_context, "help scripts")
+    assert "scan [" in output(command_context)
 
 
 def test_russian_record_help_is_detailed(command_context):

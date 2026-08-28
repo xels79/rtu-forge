@@ -35,18 +35,24 @@ def test_default_and_explicit_scan_ranges():
 
 def test_scan_options_parse_timeout_function_and_addresses():
     assert parse_scan_arguments(["1", "32", "--timeout", "200"], 100).timeout_ms == 200
-    assert parse_scan_arguments(["--function", "04"], 100).function == 4
     assert parse_scan_arguments(["--address", "101"], 100).address == 101
     assert parse_scan_arguments(["--address", "0065"], 100).address == 65
     assert parse_scan_arguments(["--address", "0x0065"], 100).address == 0x0065
+
+
+@pytest.mark.parametrize(("text", "function"), [("01", 1), ("02", 2), ("03", 3), ("04", 4)])
+def test_scan_options_parse_each_read_function(text, function):
+    assert parse_scan_arguments(["1", "32", "--function", text], 100).function == function
 
 
 @pytest.mark.parametrize(
     "parts",
     [
         ["0"], ["248"], ["20", "10"], ["1", "2", "3"],
-        ["--timeout", "0"], ["--function", "05"], ["--address", "65536"],
-        ["--unknown", "1"], ["--timeout"],
+        ["--timeout", "0"], ["--timeout", "-1"], ["--timeout", "nope"],
+        ["--function", "05"], ["--function", "nope"],
+        ["--address", "-1"], ["--address", "65536"], ["--address", "nope"],
+        ["--unknown", "1"], ["--timeout"], ["invalid"],
     ],
 )
 def test_invalid_scan_arguments(parts):
@@ -92,6 +98,14 @@ def test_fc01_fc02_require_one_data_byte(function):
     assert validate_probe_response(wrong_count, 1, function) is False
 
 
+@pytest.mark.parametrize("function", [3, 4])
+def test_fc03_fc04_require_two_data_bytes(function):
+    correct = append_crc(bytes((1, function, 2, 0, 5)))
+    wrong_count = append_crc(bytes((1, function, 1, 5)))
+    assert validate_probe_response(correct, 1, function) is None
+    assert validate_probe_response(wrong_count, 1, function) is False
+
+
 def test_exception_response_requires_exact_structure():
     valid = append_crc(bytes.fromhex("01 83 02"))
     malformed = append_crc(bytes.fromhex("01 83 02 00"))
@@ -107,6 +121,7 @@ def test_exception_response_requires_exact_structure():
         bytes.fromhex("01 03 02 00 05 00 00"),
         append_crc(bytes.fromhex("02 03 02 00 05")),
         append_crc(bytes.fromhex("01 04 02 00 05")),
+        append_crc(bytes.fromhex("01 03 02 00 05 00")),
     ],
 )
 def test_invalid_or_unrelated_response_is_not_found(frame):
@@ -118,9 +133,20 @@ def test_scan_uses_temporary_timeout_and_crc_override_for_every_probe():
     scan_devices(transport, ScanOptions(3, 5, 175, 4, 101))
     assert len(transport.calls) == 3
     assert all(timeout == 175 for _, timeout, _ in transport.calls)
-    assert all(mode == "auto" for _, _, mode in transport.calls)
+    assert all(mode == "append" for _, _, mode in transport.calls)
     assert all(frame[1:] == bytes.fromhex("04 00 65 00 01") for frame, _, _ in transport.calls)
     assert all(has_valid_crc(append_crc(frame)) for frame, _, _ in transport.calls)
+
+
+def test_scan_appends_crc_even_when_probe_collides_with_valid_crc():
+    probe = build_probe(1, 0x03, 0xBF62)
+    assert probe == bytes.fromhex("01 03 BF 62 00 01")
+    assert has_valid_crc(probe)
+
+    transport = FakeTransport()
+    scan_devices(transport, ScanOptions(1, 1, 100, 0x03, 0xBF62))
+
+    assert transport.calls == [(probe, 100, "append")]
 
 
 def test_default_scan_probes_all_247_ids():
