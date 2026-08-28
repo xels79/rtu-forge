@@ -250,16 +250,16 @@ scan 1 32
 scan 1 247 --timeout 200
 scan 1 32 --function 04 --address 0
 scan 1 32 --function 03 --address 0x0065
-scan -c
+rtuforge scan -c
 ```
 
 The default range is `1..247`. Functions `01`, `02`, `03`, and `04` are supported; write functions are never used. `--address` accepts decimal and `0x`-prefixed hexadecimal values.
 
-A device is reported only when the response has a valid Modbus RTU CRC, the expected slave ID, and either the requested function or its exception form. A valid Modbus exception response counts as a found device; bad CRC, unrelated frames, short data, and serial noise do not.
+A normal response is reported only when its Modbus RTU CRC, slave ID, function, byte count, and exact frame length are all valid. For quantity `1`, FC01/FC02 require one data byte and FC03/FC04 require two data bytes. A standard-length response with the expected exception function and a valid CRC counts as a found device; malformed exceptions, bad CRC, unrelated frames, short data, extra data, and serial noise do not.
 
-The default per-device timeout is `runtime.scan_timeout_ms` (100 ms). `--timeout` overrides it for one scan without changing `connection.timeout_ms` or `config.ini`. Scan always sends exactly one valid CRC and does not change or depend on `runtime.crc_mode`.
+The default per-device timeout is `runtime.scan_timeout_ms` (100 ms). `--timeout` overrides it for one scan without changing `connection.timeout_ms`, `runtime.scan_timeout_ms`, or `config.ini`. The scanner builds each six-byte request without a CRC, and the transport always adds one CRC through a temporary `append` override. Scan does not change or depend on `runtime.crc_mode`.
 
-In an interactive terminal, Rich keeps progress on one stable fixed-width line and prints discovered devices above it. Redirected output omits progress. `scan -c` prints only found slave IDs, one per line, without ANSI formatting. Ctrl+C stops an active scan cleanly and returns to the shell.
+In an interactive terminal, Rich keeps progress on one stable fixed-width line and prints discovered devices above it. Redirected output omits Live progress and ANSI cursor control. One-shot `rtuforge scan -c` prints only found slave IDs, one per line, without progress, summaries, TX/RX lines, or ANSI formatting. Ctrl+C stops a standalone scan cleanly and returns to the shell; inside a stored script it also prevents the remaining commands in that script from running, including through nested scripts.
 
 ## Sending frames
 
