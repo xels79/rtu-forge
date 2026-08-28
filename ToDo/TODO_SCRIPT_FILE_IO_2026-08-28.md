@@ -15,6 +15,7 @@
 - [x] EN/RU help
 - [x] README
 - [x] automated tests
+- [x] [DEFAULT] inheritance explicitly rejected and regression-tested
 - [x] manual roundtrip
 - [x] CI
 
@@ -27,5 +28,5 @@
 - [x] relative paths use CWD
 - [x] paths with spaces covered by automated tests
 - [x] manual Windows export/import roundtrip performed
-- [x] full pytest green (`195 passed, 7 skipped`)
-- [x] exact-head CI green
+- [x] full pytest green (`199 passed, 7 skipped`)
+- [ ] exact-head CI green

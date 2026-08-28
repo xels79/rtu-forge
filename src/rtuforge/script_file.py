@@ -29,6 +29,9 @@ def load_script_file(path: str | Path) -> dict[str, list[str]]:
     except configparser.Error as exc:
         raise ValueError(f"Invalid script file: {exc}") from exc
 
+    if parser.defaults():
+        raise ValueError("Script file must not contain [DEFAULT] entries.")
+
     if not parser.has_section("rtuforge"):
         raise ValueError("Script file is missing [rtuforge].")
     if not parser.has_option("rtuforge", "format"):

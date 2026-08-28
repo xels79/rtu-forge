@@ -23,6 +23,44 @@ def test_utf8_bom_is_accepted(tmp_path: Path):
     assert load_script_file(path) == {"Тест": ["pause 1"]}
 
 
+def test_default_script_is_rejected(tmp_path: Path):
+    path = tmp_path / "default-script.rtus"
+    path.write_text(
+        """[DEFAULT]
+injected =
+    pause 1
+
+[rtuforge]
+format = scripts-v1
+
+[scripts]
+safe =
+    pause 2
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"must not contain \[DEFAULT\] entries"):
+        load_script_file(path)
+
+
+def test_default_format_is_rejected(tmp_path: Path):
+    path = tmp_path / "default-format.rtus"
+    path.write_text(
+        """[DEFAULT]
+format = scripts-v1
+
+[rtuforge]
+
+[scripts]
+demo =
+    pause 1
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"must not contain \[DEFAULT\] entries"):
+        load_script_file(path)
+
+
 @pytest.mark.parametrize(
     "text,match",
     [

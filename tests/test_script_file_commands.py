@@ -99,6 +99,49 @@ def test_import_script_rejects_bundle_and_malformed_is_byte_identical(ctx: Comma
     assert ctx.scripts.path.read_bytes() == before
 
 
+def test_import_rejects_default_inheritance_atomically(ctx: CommandContext, tmp_path: Path):
+    ctx.scripts.set("sentinel", ["pause 9"])
+    before = ctx.scripts.path.read_bytes()
+    path = tmp_path / "default-import.rtus"
+    path.write_text(
+        """[DEFAULT]
+injected =
+    pause 1
+
+[rtuforge]
+format = scripts-v1
+
+[scripts]
+safe =
+    pause 2
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"must not contain \[DEFAULT\] entries"):
+        execute_command(ctx, f'import scripts "{path}"')
+    assert ctx.scripts.path.read_bytes() == before
+    assert ctx.scripts.get("sentinel") == ["pause 9"]
+
+
+def test_run_file_rejects_default_injection_without_connecting(ctx: CommandContext, tmp_path: Path):
+    path = tmp_path / "default-run.rtus"
+    path.write_text(
+        """[DEFAULT]
+injected =
+    connect
+
+[rtuforge]
+format = scripts-v1
+
+[scripts]
+""",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=r"must not contain \[DEFAULT\] entries"):
+        execute_command(ctx, f'run file "{path}"')
+    ctx.transport.connect.assert_not_called()
+
+
 def test_run_file_single_and_selected_bundle_do_not_import(ctx: CommandContext, tmp_path: Path):
     ctx.scripts.set("stored", ["pause 0"])
     before = ctx.scripts.path.read_bytes()
