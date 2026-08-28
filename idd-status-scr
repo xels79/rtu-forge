@@ -1,0 +1,11 @@
+# RTU Forge script file
+
+[rtuforge]
+format = scripts-v1
+
+[scripts]
+idd-status = 
+	    send 01 03 00 65 00 01
+	    send 01 03 00 66 00 01
+	    send 01 03 00 1B 00 02
+
