@@ -535,7 +535,8 @@ def _run_file(ctx: CommandContext, parts: list[str], inherited: bool | None) -> 
         raise ValueError(f"Script '{selector}' not found in file. Available scripts: {', '.join(scripts)}")
     resolved = resolve_script_path(path)
     text = f"Запуск скрипта '{selector}' из {resolved}." if ctx.language.lower() == "ru" else f"Running script '{selector}' from {resolved}."
-    ctx.console.print(text, markup=False)
+    if not _clean_output(ctx):
+        ctx.console.print(text, markup=False)
     return run_script_lines(ctx, scripts[selector], source=selector, decode_override=decode if decode is not None else inherited)
 
 

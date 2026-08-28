@@ -115,6 +115,17 @@ def test_run_file_single_and_selected_bundle_do_not_import(ctx: CommandContext, 
     execute_command(ctx, f'run file "{bundle}" --script "Motor status"')
     assert ctx.scripts.path.read_bytes() == before
 
+    with pytest.raises(ValueError, match="not found in file"):
+        execute_command(ctx, f'run file "{bundle}" --script missing')
+
+
+def test_run_file_clean_output_suppresses_status_and_numbering(ctx: CommandContext, tmp_path: Path):
+    path = tmp_path / "clean.rtus"
+    save_script_file(path, {"demo": ["pause 0"]})
+    ctx.config["runtime"]["clean_output"] = "true"
+    execute_command(ctx, f'run file "{path}"')
+    assert output(ctx) == ""
+
 
 def test_run_file_decode_inheritance_and_send_override(ctx: CommandContext, tmp_path: Path):
     path = tmp_path / "decode.rtus"

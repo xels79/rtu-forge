@@ -27,5 +27,5 @@
 - [x] relative paths use CWD
 - [x] paths with spaces covered by automated tests
 - [x] manual Windows export/import roundtrip performed
-- [x] full pytest green (`194 passed, 7 skipped`)
+- [x] full pytest green (`195 passed, 7 skipped`)
 - [ ] exact-head CI green
