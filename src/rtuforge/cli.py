@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 from rich.console import Console
 
@@ -10,7 +9,7 @@ from .commands import CommandContext, execute_command
 from .connection import parse_connection_overrides
 from .config import load_config
 from .i18n import cli_text
-from .paths import default_config_path, default_history_path, default_scripts_path
+from .paths import default_history_path, resolve_runtime_paths
 from .runtime_text import tr
 from .scripts import ScriptStore
 from .shell import run_shell
@@ -61,8 +60,9 @@ def build_parser(language: str = "en") -> argparse.ArgumentParser:
     )
     parser.add_argument("-h", "--help", action="help", help=text["help"])
     parser.add_argument("-c", "--clean", action="store_true", help=clean_help)
-    parser.add_argument("--config", default=str(default_config_path()), help=text["config"])
-    parser.add_argument("--scripts", default=str(default_scripts_path()), help=text["scripts"])
+    parser.add_argument("--home", help=text["home"])
+    parser.add_argument("--config", help=text["config"])
+    parser.add_argument("--scripts", help=text["scripts"])
     connection_group = parser.add_argument_group(
         "Временные параметры соединения" if is_ru else "Temporary connection overrides",
         (
@@ -83,12 +83,24 @@ def build_parser(language: str = "en") -> argparse.ArgumentParser:
 
 def _language_for_argv(argv: list[str]) -> str:
     probe = argparse.ArgumentParser(add_help=False)
-    probe.add_argument("--config", default=str(default_config_path()))
+    probe.add_argument("--home")
+    probe.add_argument("--config")
+    probe.add_argument("--scripts")
     probe_args, _ = probe.parse_known_args(argv)
-    config_path = Path(probe_args.config).resolve()
+    try:
+        config_path = resolve_runtime_paths(
+            home=probe_args.home,
+            config=probe_args.config,
+            scripts=probe_args.scripts,
+        ).config
+    except ValueError:
+        return "en"
     if not config_path.exists():
         return "en"
-    config = load_config(config_path)
+    try:
+        config = load_config(config_path)
+    except Exception:
+        return "en"
     return config.get("ui", "language", fallback="en")
 
 
@@ -96,15 +108,24 @@ def main() -> int:
     argv = _promote_clean_flag(sys.argv[1:])
     language = _language_for_argv(argv)
     args = build_parser(language).parse_args(argv)
-    config_path = Path(args.config).resolve()
-    scripts_path = Path(args.scripts).resolve()
+    try:
+        paths = resolve_runtime_paths(
+            home=args.home,
+            config=args.config,
+            scripts=args.scripts,
+        )
+    except ValueError as exc:
+        _console(stderr=True).print(tr(language, "error", error=exc), markup=False)
+        return 1
+    config_path = paths.config
+    scripts_path = paths.scripts
 
     if args.command == ["paths"] and not config_path.exists():
         console = _console()
-        console.print(f"Home:    {config_path.parent}", markup=False)
+        console.print(f"Home:    {paths.home}", markup=False)
         console.print(f"Config:  {config_path}", markup=False)
         console.print(f"Scripts: {scripts_path}", markup=False)
-        console.print(f"History: {default_history_path(config_path.parent)}", markup=False)
+        console.print(f"History: {default_history_path(paths.home)}", markup=False)
         return 0
 
     try:
@@ -140,6 +161,7 @@ def main() -> int:
         scripts=ScriptStore(scripts_path),
         transport=SerialTransport(config, overrides),
         console=console,
+        home_path=paths.home,
         one_shot=True,
     )
 

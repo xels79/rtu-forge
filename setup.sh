@@ -138,16 +138,32 @@ import sys
 
 desktop, launcher, working_dir = map(Path, sys.argv[1:])
 
-def desktop_quote(value: str) -> str:
-    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("`", "\\`").replace("$", "\\$") + '"'
+def desktop_exec_quote(value: str) -> str:
+    escaped = (
+        value.replace("%", "%%")
+        .replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("`", "\\`")
+        .replace("$", "\\$")
+    )
+    return f'"{escaped}"'
+
+
+def desktop_string(value: str) -> str:
+    return (
+        value.replace("\\", "\\\\")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
 
 desktop.write_text(
     "[Desktop Entry]\n"
     "Type=Application\n"
     "Name=RTU Forge\n"
     "Comment=Modbus RTU console\n"
-    f"Exec={desktop_quote(str(launcher))}\n"
-    f"Path={desktop_quote(str(working_dir))}\n"
+    f"Exec={desktop_exec_quote(str(launcher))}\n"
+    f"Path={desktop_string(str(working_dir))}\n"
     "Terminal=true\n"
     "Categories=Development;Utility;\n",
     encoding="utf-8",
@@ -155,44 +171,62 @@ desktop.write_text(
 )
 PY
     chmod 644 -- "$DESKTOP_FILE"
+    if command -v desktop-file-validate >/dev/null 2>&1; then
+        desktop-file-validate "$DESKTOP_FILE"
+    fi
     DESKTOP_ENTRY=$DESKTOP_FILE
 fi
 
 PATH_STATUS="already available"
-case ":$PATH:" in
-    *":$BIN_DIR:"*) ;;
-    *)
-        PATH_STATUS="not updated"
-        EXPORT_COMMAND="export PATH=$(printf '%q' "$BIN_DIR"):\$PATH"
-        if [ "$UPDATE_PATH" -eq 0 ]; then
+EXPORT_COMMAND="export PATH=$(printf '%q' "$BIN_DIR"):\$PATH"
+if [ "$UPDATE_PATH" -eq 0 ]; then
+    case ":$PATH:" in
+        *":$BIN_DIR:"*) ;;
+        *)
+            PATH_STATUS="not updated"
             printf 'BinDir is not in PATH. Add it with:\n  %s\n' "$EXPORT_COMMAND"
-        else
-            SHELL_NAME=$(basename -- "${SHELL:-}")
-            case "$SHELL_NAME" in
-                bash) RC_FILE=$HOME/.bashrc ;;
-                zsh) RC_FILE=$HOME/.zshrc ;;
-                *)
-                    RC_FILE=
-                    printf 'Unknown shell. Add BinDir manually with:\n  %s\n' "$EXPORT_COMMAND"
-                    ;;
-            esac
-            if [ -n "$RC_FILE" ]; then
-                touch -- "$RC_FILE"
-                if ! grep -Fq '# >>> RTU Forge >>>' "$RC_FILE"; then
-                    {
-                        printf '\n# >>> RTU Forge >>>\n'
-                        printf '%s\n' "$EXPORT_COMMAND"
-                        printf '# <<< RTU Forge <<<\n'
-                    } >> "$RC_FILE"
-                    PATH_STATUS="added to $RC_FILE"
-                    printf 'Open a new terminal or reload your shell.\n'
-                else
-                    PATH_STATUS="managed block already present in $RC_FILE"
-                fi
-            fi
-        fi
-        ;;
-esac
+            ;;
+    esac
+else
+    SHELL_NAME=$(basename -- "${SHELL:-}")
+    case "$SHELL_NAME" in
+        bash) RC_FILE=$HOME/.bashrc ;;
+        zsh) RC_FILE=$HOME/.zshrc ;;
+        *)
+            RC_FILE=
+            PATH_STATUS="not updated"
+            printf 'Unknown shell. Add BinDir manually with:\n  %s\n' "$EXPORT_COMMAND"
+            ;;
+    esac
+    if [ -n "$RC_FILE" ]; then
+        touch -- "$RC_FILE"
+        "$VENV_DIR/bin/python" - "$RC_FILE" "$BIN_DIR" <<'PY'
+from pathlib import Path
+import re
+import shlex
+import sys
+
+rc_file = Path(sys.argv[1])
+bin_dir = sys.argv[2]
+opening = "# >>> RTU Forge >>>"
+closing = "# <<< RTU Forge <<<"
+block = f"{opening}\nexport PATH={shlex.quote(bin_dir)}:$PATH\n{closing}\n"
+text = rc_file.read_text(encoding="utf-8")
+pattern = re.compile(
+    rf"(?ms)^{re.escape(opening)}\n.*?^{re.escape(closing)}(?:\n|$)"
+)
+without_blocks = pattern.sub("", text)
+if without_blocks and not without_blocks.endswith("\n"):
+    without_blocks += "\n"
+if without_blocks and not without_blocks.endswith("\n\n"):
+    without_blocks += "\n"
+updated = f"{without_blocks}{block}"
+rc_file.write_text(updated, encoding="utf-8", newline="\n")
+PY
+        PATH_STATUS="managed block updated in $RC_FILE"
+        printf 'Open a new terminal or reload your shell.\n'
+    fi
+fi
 
 USER_GROUPS=$(id -nG)
 printf 'User groups: %s\n' "$USER_GROUPS"

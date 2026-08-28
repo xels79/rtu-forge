@@ -4,12 +4,58 @@ import re
 import shutil
 import subprocess
 import os
+import shlex
 from pathlib import Path
 
 import pytest
 
 
 SETUP = Path("setup.sh")
+
+
+def linux_tools() -> tuple[str, str]:
+    if os.name != "posix":
+        pytest.skip("Linux/POSIX integration test")
+    if os.geteuid() == 0:
+        pytest.skip("setup.sh intentionally refuses root")
+    bash = shutil.which("bash")
+    uv = shutil.which("uv")
+    if bash is None or uv is None:
+        pytest.skip("bash and uv are required for the Linux integration test")
+    return bash, uv
+
+
+def setup_environment(tmp_path: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.setdefault("UV_CACHE_DIR", str(Path.home() / ".cache" / "uv"))
+    environment.update(
+        {
+            "HOME": str(tmp_path / "home"),
+            "XDG_CONFIG_HOME": str(tmp_path / "xdg-config"),
+            "XDG_DATA_HOME": str(tmp_path / "xdg-data"),
+            "SHELL": "/bin/bash",
+        }
+    )
+    Path(environment["HOME"]).mkdir(parents=True)
+    return environment
+
+
+def run_setup(
+    bash: str,
+    tmp_path: Path,
+    environment: dict[str, str],
+    *arguments: str,
+) -> subprocess.CompletedProcess[str]:
+    completed = subprocess.run(
+        [bash, str(SETUP.resolve()), "--repo-root", str(Path.cwd().resolve()), *arguments],
+        cwd=tmp_path,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    return completed
 
 
 def test_setup_has_required_safety_and_options():
@@ -46,3 +92,114 @@ def test_setup_shell_syntax_when_bash_is_available():
         [bash, "-n", str(SETUP.resolve())], capture_output=True, text=True, check=False
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def test_real_setup_migration_launcher_paths_and_rerun_preserve_data(tmp_path):
+    bash, _ = linux_tools()
+    environment = setup_environment(tmp_path)
+    data = tmp_path / "data"
+    work = tmp_path / "work"
+    install = tmp_path / "install"
+    bin_dir = tmp_path / "bin"
+    invocation_cwd = tmp_path / "invocation"
+    invocation_cwd.mkdir()
+    arguments = (
+        "--data-dir", str(data),
+        "--working-dir", str(work),
+        "--install-dir", str(install),
+        "--bin-dir", str(bin_dir),
+        "--no-path-update",
+    )
+
+    run_setup(bash, invocation_cwd, environment, *arguments)
+    launcher = bin_dir / "rtuforge"
+    assert launcher.is_file()
+    assert (install / "venv" / "bin" / "python").is_file()
+    for name in ("config.ini", "scripts.ini"):
+        assert (data / name).read_bytes() == (Path.cwd() / name).read_bytes()
+
+    help_result = subprocess.run(
+        [str(launcher), "--help"], env=environment, capture_output=True, text=True, check=False
+    )
+    assert help_result.returncode == 0, help_result.stderr
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    paths_result = subprocess.run(
+        [str(launcher), "paths"],
+        cwd=elsewhere,
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert paths_result.returncode == 0, paths_result.stderr
+    compact = paths_result.stdout.replace("\n", "")
+    assert str(data.resolve()) in compact
+    assert str((data / "config.ini").resolve()) in compact
+    assert str((data / "scripts.ini").resolve()) in compact
+    assert not (elsewhere / "config.ini").exists()
+    assert not (elsewhere / "scripts.ini").exists()
+
+    history = data / ".rtuforge_history"
+    history.write_text("history sentinel\n", encoding="utf-8")
+    with (data / "config.ini").open("a", encoding="utf-8") as stream:
+        stream.write("\n# config sentinel\n")
+    with (data / "scripts.ini").open("a", encoding="utf-8") as stream:
+        stream.write("\n# scripts sentinel\n")
+    before = {path.name: path.read_bytes() for path in (data / "config.ini", data / "scripts.ini", history)}
+    run_setup(bash, invocation_cwd, environment, *arguments)
+    assert {path.name: path.read_bytes() for path in (data / "config.ini", data / "scripts.ini", history)} == before
+    assert list(invocation_cwd.iterdir()) == []
+
+
+def test_setup_updates_managed_path_block_and_preserves_rc_content(tmp_path):
+    bash, _ = linux_tools()
+    environment = setup_environment(tmp_path)
+    bashrc = Path(environment["HOME"]) / ".bashrc"
+    bashrc.write_text("# keep this user line\nexport USER_SETTING=yes\n", encoding="utf-8")
+    common = (
+        "--data-dir", str(tmp_path / "data"),
+        "--working-dir", str(tmp_path / "work"),
+        "--install-dir", str(tmp_path / "install"),
+        "--no-migrate",
+    )
+    bin_a = tmp_path / "bin-a"
+    bin_b = tmp_path / "bin b"
+    run_setup(bash, tmp_path, environment, *common, "--bin-dir", str(bin_a))
+    run_setup(bash, tmp_path, environment, *common, "--bin-dir", str(bin_b))
+    text = bashrc.read_text(encoding="utf-8")
+    assert text.count("# >>> RTU Forge >>>") == 1
+    assert text.count("# <<< RTU Forge <<<") == 1
+    assert text.count("export PATH=") == 1
+    assert shlex.quote(str(bin_b.resolve())) in text
+    assert str(bin_a.resolve()) not in text
+    assert "# keep this user line" in text
+    assert "export USER_SETTING=yes" in text
+
+
+def test_setup_desktop_entry_uses_distinct_exec_and_path_escaping(tmp_path):
+    bash, _ = linux_tools()
+    environment = setup_environment(tmp_path)
+    work = tmp_path / "work with spaces"
+    bin_dir = tmp_path / "bin with spaces"
+    run_setup(
+        bash,
+        tmp_path,
+        environment,
+        "--data-dir", str(tmp_path / "data"),
+        "--working-dir", str(work),
+        "--install-dir", str(tmp_path / "install"),
+        "--bin-dir", str(bin_dir),
+        "--no-migrate",
+        "--no-path-update",
+        "--desktop",
+    )
+    desktop = Path(environment["HOME"]) / ".local/share/applications/rtu-forge.desktop"
+    values = dict(
+        line.split("=", 1)
+        for line in desktop.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+    assert shlex.split(values["Exec"].replace("%%", "%")) == [str((bin_dir / "rtuforge").resolve())]
+    assert values["Path"] == str(work.resolve())
+    assert values["Terminal"] == "true"

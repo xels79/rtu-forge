@@ -17,14 +17,44 @@ RTU Forge is a compact Python console for raw Modbus RTU work, reusable scripts,
 
 ## Windows setup
 
-```bash
-uv sync --extra dev
-uv run rtuforge
+Install for the current Windows user from PowerShell in the Git checkout:
+
+```powershell
+.\setup.ps1
 ```
 
-One-shot example:
+The installer does not require Administrator rights. It performs an editable `uv tool` installation, asks `uv tool dir --bin` for the actual executable directory, updates the user shell PATH through `uv tool update-shell`, and sets the user-level `RTUFORGE_HOME` to the absolute DataDir. Open a new terminal after installation to use the updated PATH.
 
-```bash
+Defaults:
+
+- `RepoRoot`: directory containing `setup.ps1`;
+- `DataDir`: `%APPDATA%\RTUForge`;
+- `WorkingDir`: DataDir;
+- executable: the actual `rtuforge.exe` reported by the uv tool bin directory.
+
+Explicit relative `-RepoRoot`, `-DataDir`, and `-WorkingDir` values are resolved against the PowerShell invocation directory, even when the destination does not exist yet:
+
+```powershell
+.\setup.ps1 -DataDir .\rtu-data -WorkingDir .\rs485
+.\setup.ps1 -NoShortcut
+.\setup.ps1 -NoMigrate
+```
+
+Unless `-NoShortcut` is used, the installer creates a per-user `RTU Forge.lnk` whose target is the installed `rtuforge.exe` and whose working directory is WorkingDir. Unless `-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are copied from RepoRoot only when the source exists and the destination does not. Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1` to update the editable installation after dependency or packaging changes.
+
+Verify the active locations from any directory:
+
+```powershell
+rtuforge paths
+```
+
+## Development launch
+
+For development without the user installer:
+
+```powershell
+uv sync --extra dev
+uv run rtuforge
 uv run rtuforge send 01 03 00 65 00 01
 ```
 
@@ -69,20 +99,44 @@ All installer paths are normalized to absolute paths before files are created. M
 
 The generated `<BinDir>/rtuforge` launcher exports the absolute DataDir as `RTUFORGE_HOME`, uses `exec`, forwards all arguments, and preserves the caller's current directory. `--desktop` is optional and uses WorkingDir only for graphical launch.
 
-## Path and user-data model
+## Runtime path and user-data model
 
-| Term | Purpose | Linux default |
-|---|---|---|
-| RepoRoot | Git/source directory used by the editable install | directory containing `setup.sh` |
-| DataDir / RTUFORGE_HOME | `config.ini`, `scripts.ini`, history | `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge` |
-| WorkingDir | Starting directory for the desktop launcher only | DataDir |
-| InstallDir | Dedicated Python virtual environment | `${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge` |
-| Executable / BinDir | User shell launcher | `$HOME/.local/bin/rtuforge` |
+| Term | Purpose | Windows default | Linux default |
+|---|---|---|---|
+| RepoRoot | Git/source directory used by the editable install | directory containing `setup.ps1` | directory containing `setup.sh` |
+| DataDir / RTUFORGE_HOME | `config.ini`, `scripts.ini`, history | `%APPDATA%\RTUForge` | `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge` |
+| WorkingDir | Starting directory for shortcut/desktop launch | DataDir | DataDir |
+| InstallDir | Installation environment | managed by `uv tool` | `${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge` |
+| Executable / BinDir | User shell executable/launcher | value from `uv tool dir --bin` | `$HOME/.local/bin/rtuforge` |
 
 These roles are independent: DataDir, WorkingDir, and RepoRoot may coincide, but none is derived from another after setup. Inspect active application paths with:
 
 ```bash
 rtuforge paths
+```
+
+Runtime config/scripts priority is:
+
+```text
+explicit --config / --scripts
+> --home
+> RTUFORGE_HOME
+> platform default
+```
+
+`--home` changes DataDir only for the current process and does not modify the environment or config. Relative `--home`, `--config`, and `--scripts` values are resolved against the invocation CWD and immediately made absolute. `RTUFORGE_HOME` must already be absolute. Without explicit paths or `RTUFORGE_HOME`, Windows uses `%APPDATA%\RTUForge` and Linux uses `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge`.
+
+CWD is not an implicit DataDir and never determines default config or scripts locations. It affects only explicitly relative CLI paths. A relative history filename inside `config.ini` is resolved against the directory containing that config file.
+
+Examples:
+
+```powershell
+rtuforge --home C:\temp\rtu paths
+rtuforge --config C:\profiles\drive-a.ini --scripts C:\profiles\scripts.ini paths
+```
+
+```bash
+rtuforge --home /tmp/rtu paths
 ```
 
 ## Working directory

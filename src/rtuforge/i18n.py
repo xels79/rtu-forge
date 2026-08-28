@@ -618,6 +618,7 @@ Tab: history <TAB> -> clear
 CLI_TEXT: dict[str, dict[str, str]] = {
     "en": {
         "description": "RTU Forge - Modbus RTU console and script runner",
+        "home": "Data directory for this process",
         "config": "Path to settings INI",
         "scripts": "Path to scripts INI",
         "command": "One-shot command; omit for interactive shell",
@@ -634,6 +635,7 @@ CLI_TEXT: dict[str, dict[str, str]] = {
     },
     "ru": {
         "description": "RTU Forge - консоль Modbus RTU и запуск скриптов",
+        "home": "Каталог данных для текущего процесса",
         "config": "Путь к INI-файлу настроек",
         "scripts": "Путь к INI-файлу скриптов",
         "command": "One-shot команда; без команды запускается интерактивный режим",

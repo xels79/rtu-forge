@@ -1,7 +1,8 @@
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
-from rtuforge.cli import _promote_clean_flag, build_parser, main
+from rtuforge.cli import _language_for_argv, _promote_clean_flag, build_parser, main
 from rtuforge.connection import parse_connection_overrides
 
 
@@ -95,3 +96,62 @@ def test_paths_works_before_config_exists(tmp_path, monkeypatch, capsys):
     output = capsys.readouterr().out.replace("\n", "")
     assert str(home.resolve()) in output
     assert str((home / "config.ini").resolve()) in output
+    assert not home.exists()
+
+
+def test_paths_with_config_uses_custom_relative_history_without_connect(
+    tmp_path, monkeypatch, capsys
+):
+    home = tmp_path / "data"
+    home.mkdir()
+    config_path = home / "config.ini"
+    config_path.write_bytes(Path("config.ini").read_bytes())
+    scripts_path = home / "scripts.ini"
+    scripts_path.write_bytes(Path("scripts.ini").read_bytes())
+    text = config_path.read_text(encoding="utf-8")
+    config_path.write_text(
+        text.replace("file = .rtuforge_history", "file = history/custom.log"),
+        encoding="utf-8",
+    )
+    before = {path.name: path.read_bytes() for path in (config_path, scripts_path)}
+    monkeypatch.setattr(sys, "argv", ["rtuforge", "--home", str(home), "paths"])
+    with patch("rtuforge.transport.SerialTransport.connect") as connect:
+        assert main() == 0
+    connect.assert_not_called()
+    output = capsys.readouterr().out.replace("\n", "")
+    assert str((home / "history" / "custom.log").resolve()) in output
+    assert {path.name: path.read_bytes() for path in (config_path, scripts_path)} == before
+
+
+def test_paths_with_connection_override_does_not_connect(tmp_path, monkeypatch):
+    home = tmp_path / "missing"
+    monkeypatch.setattr(
+        sys, "argv", ["rtuforge", "--home", str(home), "--port", "COM99", "paths"]
+    )
+    with patch("rtuforge.transport.SerialTransport.connect") as connect:
+        assert main() == 0
+    connect.assert_not_called()
+    assert not home.exists()
+
+
+def test_home_controls_help_language_and_explicit_config_wins(tmp_path):
+    russian_home = tmp_path / "ru"
+    english_home = tmp_path / "en"
+    russian_home.mkdir()
+    english_home.mkdir()
+    ru_text = Path("config.ini").read_text(encoding="utf-8").replace(
+        "language = en", "language = ru"
+    )
+    en_text = Path("config.ini").read_text(encoding="utf-8").replace(
+        "language = ru", "language = en"
+    )
+    (russian_home / "config.ini").write_text(ru_text, encoding="utf-8")
+    (english_home / "config.ini").write_text(en_text, encoding="utf-8")
+    assert _language_for_argv(["--home", str(russian_home), "--help"]) == "ru"
+    assert _language_for_argv(
+        [
+            "--home", str(russian_home),
+            "--config", str(english_home / "config.ini"),
+            "--help",
+        ]
+    ) == "en"

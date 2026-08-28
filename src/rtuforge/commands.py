@@ -70,6 +70,7 @@ class CommandContext:
     scripts: ScriptStore
     transport: SerialTransport
     console: Console
+    home_path: Path | None = None
     one_shot: bool = False
     recording: RecordingState = field(default_factory=RecordingState)
 
@@ -189,7 +190,8 @@ def show_paths(ctx: CommandContext) -> None:
     history = Path(ctx.config["history"].get("file", ".rtuforge_history"))
     if not history.is_absolute():
         history = (ctx.config_path.parent / history).resolve()
-    ctx.console.print(f"{tr(ctx.language, 'home')}:    {ctx.config_path.parent}", markup=False)
+    home = (ctx.home_path or ctx.config_path.parent).resolve()
+    ctx.console.print(f"{tr(ctx.language, 'home')}:    {home}", markup=False)
     ctx.console.print(f"{tr(ctx.language, 'config_path')}:  {ctx.config_path}", markup=False)
     ctx.console.print(f"{tr(ctx.language, 'scripts_path')}: {ctx.scripts.path.resolve()}", markup=False)
     ctx.console.print(f"{tr(ctx.language, 'history_path')}: {history}", markup=False)
@@ -500,6 +502,7 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
         return None
     if command == "ports": show_ports(ctx); return None
     if command == "status": show_status(ctx); return None
+    if command == "paths": show_paths(ctx); return None
     if command == "scan":
         interrupted = run_scan(ctx, parts[1:])
         return "script-interrupted" if interrupted and from_script else None

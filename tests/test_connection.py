@@ -112,3 +112,67 @@ def test_persistent_set_does_not_capture_cli_overrides(tmp_path):
     assert load_config(path)["connection"]["port"] == "COM8"
     assert transport.settings.port == "COM7"
     assert SerialTransport(load_config(path)).settings.port == "COM8"
+
+
+class FakeSerial:
+    def __init__(self):
+        self.is_open = True
+        self.in_waiting = 0
+        self.writes: list[bytes] = []
+
+    def reset_input_buffer(self):
+        return None
+
+    def write(self, payload):
+        self.writes.append(payload)
+
+    def flush(self):
+        return None
+
+    def close(self):
+        self.is_open = False
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["connect", "send 01 03 00 00 00 01", "scan 1 --timeout 1"],
+)
+def test_connect_send_and_scan_open_the_same_effective_cli_port(tmp_path, command):
+    path, config = config_copy(tmp_path)
+    config["runtime"]["auto_connect"] = "true"
+    transport = SerialTransport(
+        config,
+        ConnectionOverrides(port="COM7", baudrate=19200, timeout_ms=1),
+    )
+    ctx = CommandContext(
+        path,
+        config,
+        ScriptStore(tmp_path / "scripts.ini"),
+        transport,
+        Console(record=True),
+        one_shot=True,
+    )
+    fake_serial = FakeSerial()
+    with patch("serial.Serial", return_value=fake_serial) as serial_class:
+        execute_command(ctx, command)
+    assert serial_class.call_args.kwargs["port"] == "COM7"
+    assert serial_class.call_args.kwargs["baudrate"] == 19200
+
+
+def test_connection_timeout_override_does_not_replace_scan_probe_timeout(tmp_path):
+    path, config = config_copy(tmp_path)
+    config["runtime"]["auto_connect"] = "true"
+    transport = SerialTransport(config, ConnectionOverrides(timeout_ms=1000))
+    ctx = CommandContext(
+        path,
+        config,
+        ScriptStore(tmp_path / "scripts.ini"),
+        transport,
+        Console(record=True),
+        one_shot=True,
+    )
+    fake_serial = FakeSerial()
+    with patch("serial.Serial", return_value=fake_serial):
+        execute_command(ctx, "scan 1 --timeout 1")
+    assert transport.settings.timeout_ms == 1000
+    assert config["runtime"]["scan_timeout_ms"] == "100"
