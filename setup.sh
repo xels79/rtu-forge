@@ -31,8 +31,14 @@ ORIGINAL_CWD=$(pwd -P)
 SCRIPT_DIR=$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 REPO_ROOT_RAW=$SCRIPT_DIR
-DATA_DIR_RAW=${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge
-INSTALL_DIR_RAW=${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge
+case "${XDG_CONFIG_HOME:-}" in
+    /*) DATA_DIR_RAW=$XDG_CONFIG_HOME/rtu-forge ;;
+    *) DATA_DIR_RAW=$HOME/.config/rtu-forge ;;
+esac
+case "${XDG_DATA_HOME:-}" in
+    /*) INSTALL_DIR_RAW=$XDG_DATA_HOME/rtu-forge ;;
+    *) INSTALL_DIR_RAW=$HOME/.local/share/rtu-forge ;;
+esac
 BIN_DIR_RAW=$HOME/.local/bin
 WORKING_DIR_RAW=
 MIGRATE=1
@@ -251,6 +257,5 @@ printf 'Bin dir:       %s\n' "$BIN_DIR"
 printf 'Executable:    %s\n' "$LAUNCHER"
 printf 'Config:        %s\n' "$DATA_DIR/config.ini"
 printf 'Scripts:       %s\n' "$DATA_DIR/scripts.ini"
-printf 'History:       %s\n' "$DATA_DIR/.rtuforge_history"
 printf 'Desktop entry: %s\n' "$DESKTOP_ENTRY"
 printf 'PATH status:   %s\n' "$PATH_STATUS"

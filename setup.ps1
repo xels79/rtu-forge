@@ -89,6 +89,7 @@ if (-not $NoShortcut) {
     $WshShell = New-Object -ComObject WScript.Shell
     $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
     $Shortcut.TargetPath = $RtuForgeExe
+    $Shortcut.Arguments = '--home "' + $DataDir + '"'
     $Shortcut.WorkingDirectory = $WorkingDir
     $Shortcut.Description = "RTU Forge Modbus RTU console"
     $Shortcut.Save()

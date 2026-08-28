@@ -152,6 +152,107 @@ def test_real_setup_migration_launcher_paths_and_rerun_preserve_data(tmp_path):
     assert list(invocation_cwd.iterdir()) == []
 
 
+def test_no_migrate_preserves_existing_config_and_status_works(tmp_path):
+    bash, _ = linux_tools()
+    environment = setup_environment(tmp_path)
+    data = tmp_path / "data"
+    data.mkdir()
+    for name in ("config.ini", "scripts.ini"):
+        target = data / name
+        target.write_bytes((Path.cwd() / name).read_bytes() + b"\n# no-migrate sentinel\n")
+    before = {path.name: path.read_bytes() for path in data.iterdir()}
+    bin_dir = tmp_path / "bin"
+
+    run_setup(
+        bash,
+        tmp_path,
+        environment,
+        "--data-dir", str(data),
+        "--working-dir", str(tmp_path / "work"),
+        "--install-dir", str(tmp_path / "install"),
+        "--bin-dir", str(bin_dir),
+        "--no-migrate",
+        "--no-path-update",
+    )
+
+    assert {path.name: path.read_bytes() for path in data.iterdir()} == before
+    status = subprocess.run(
+        [str(bin_dir / "rtuforge"), "status"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert status.returncode == 0, status.stdout + status.stderr
+
+
+def test_no_migrate_fresh_data_allows_help_and_paths_but_status_reports_config(tmp_path):
+    bash, _ = linux_tools()
+    environment = setup_environment(tmp_path)
+    data = tmp_path / "empty-data"
+    bin_dir = tmp_path / "bin"
+
+    run_setup(
+        bash,
+        tmp_path,
+        environment,
+        "--data-dir", str(data),
+        "--working-dir", str(tmp_path / "work"),
+        "--install-dir", str(tmp_path / "install"),
+        "--bin-dir", str(bin_dir),
+        "--no-migrate",
+        "--no-path-update",
+    )
+
+    launcher = bin_dir / "rtuforge"
+    assert not (data / "config.ini").exists()
+    assert not (data / "scripts.ini").exists()
+    for arguments in (["--help"], ["paths"]):
+        result = subprocess.run(
+            [str(launcher), *arguments],
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    status = subprocess.run(
+        [str(launcher), "status"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert status.returncode != 0
+    assert "Config file not found" in status.stdout + status.stderr
+    assert "Traceback" not in status.stdout + status.stderr
+
+
+def test_setup_ignores_relative_xdg_roots_for_default_directories(tmp_path):
+    bash, _ = linux_tools()
+    environment = setup_environment(tmp_path)
+    environment["XDG_CONFIG_HOME"] = "relative-config"
+    environment["XDG_DATA_HOME"] = "relative-data"
+    invocation_cwd = tmp_path / "invocation"
+    invocation_cwd.mkdir()
+
+    run_setup(
+        bash,
+        invocation_cwd,
+        environment,
+        "--working-dir", str(tmp_path / "work"),
+        "--bin-dir", str(tmp_path / "bin"),
+        "--no-migrate",
+        "--no-path-update",
+    )
+
+    home = Path(environment["HOME"])
+    assert (home / ".config" / "rtu-forge").is_dir()
+    assert (home / ".local" / "share" / "rtu-forge" / "venv" / "bin" / "python").is_file()
+    assert not (invocation_cwd / "relative-config").exists()
+    assert not (invocation_cwd / "relative-data").exists()
+
+
 def test_setup_updates_managed_path_block_and_preserves_rc_content(tmp_path):
     bash, _ = linux_tools()
     environment = setup_environment(tmp_path)

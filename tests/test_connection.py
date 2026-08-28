@@ -159,6 +159,39 @@ def test_connect_send_and_scan_open_the_same_effective_cli_port(tmp_path, comman
     assert serial_class.call_args.kwargs["baudrate"] == 19200
 
 
+@pytest.mark.parametrize(
+    "command",
+    ["run script read-one", "record script read-one all file capture.txt"],
+)
+def test_script_commands_use_effective_cli_port_without_persisting_it(tmp_path, command):
+    path, config = config_copy(tmp_path)
+    config["connection"]["port"] = "COM4"
+    config["runtime"]["auto_connect"] = "true"
+    scripts = ScriptStore(tmp_path / "scripts.ini")
+    scripts.set("read-one", ["send 01 03 00 00 00 01"])
+    transport = SerialTransport(
+        config,
+        ConnectionOverrides(port="COM7", baudrate=19200, timeout_ms=1),
+    )
+    ctx = CommandContext(
+        path,
+        config,
+        scripts,
+        transport,
+        Console(record=True),
+        one_shot=True,
+    )
+    fake_serial = FakeSerial()
+
+    with patch("serial.Serial", return_value=fake_serial) as serial_class:
+        execute_command(ctx, command)
+
+    assert serial_class.call_args.kwargs["port"] == "COM7"
+    assert serial_class.call_args.kwargs["baudrate"] == 19200
+    assert config["connection"]["port"] == "COM4"
+    assert load_config(path)["connection"]["port"].upper() == "COM4"
+
+
 def test_connection_timeout_override_does_not_replace_scan_probe_timeout(tmp_path):
     path, config = config_copy(tmp_path)
     config["runtime"]["auto_connect"] = "true"

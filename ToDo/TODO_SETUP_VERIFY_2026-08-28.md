@@ -330,6 +330,20 @@ rtuforge --port COM7 --timeout-ms 1000 scan 1 32 --timeout 100
 - [x] Проверить Linux path tests через monkeypatch.
 - [x] GitHub Actions проверен для implementation commit `7538fe8972c640efdf9f33dea08c99848e823481`.
 - [x] Workflow `tests`, run #62: `completed`, `success`; предыдущий run #61 не использован как подтверждение.
+- [x] До финальной коррекции подтверждён HEAD `834363f6397c18ac1f3e8ddd6f66857c8907bcd8`: workflow `tests`, run #63, `completed`, `success`.
+- [ ] Для нового HEAD после финальной коррекции требуется отдельный green workflow; run #63 его не подтверждает.
+
+## 13.1 Финальная коррекция setup verification
+
+- [x] README development launch использует явный checkout-local `--home .` на Windows и Linux.
+- [x] README фиксирует точную семантику `--no-migrate` / `-NoMigrate` для существующего и пустого DataDir.
+- [x] Linux integration покрывает existing и fresh-empty DataDir с `--no-migrate`.
+- [x] Relative `XDG_CONFIG_HOME` и `XDG_DATA_HOME` игнорируются в пользу HOME fallbacks в runtime и installer.
+- [x] `run script` и `record script` открывают effective COM7, не изменяя persistent COM4.
+- [x] Windows custom DataDir shortcut реально проверен; shortcut явно передаёт absolute DataDir через `--home`.
+- [x] Hardcoded Linux summary `History` удалён; вывод `rtuforge paths` остаётся authoritative.
+- [x] Targeted pytest: Windows `43 passed, 7 skipped`; Linux setup/path/connection integration `35 passed`.
+- [x] Full pytest: Windows `163 passed, 7 skipped`; Ubuntu WSL `169 passed, 1 skipped`.
 
 ## 14. Итог ручной проверки
 
@@ -354,7 +368,10 @@ Linux default BinDir: /tmp/rtuforge-manual-acceptance-20260828/home/.local/bin
 Linux desktop entry: generated and validated by integration test; graphical GUI launch not performed
 pytest Windows: 160 passed, 4 skipped
 pytest WSL: 163 passed, 1 skipped
-CI: workflow tests, run #62, success (implementation commit 7538fe8)
+Final-correction pytest Windows: 163 passed, 7 skipped
+Final-correction pytest WSL: 169 passed, 1 skipped
+CI before final correction: workflow tests, run #63, success (HEAD 834363f)
+CI for final-correction HEAD: pending; run #63 is not sufficient
 ```
 
 ## Definition of Done

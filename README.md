@@ -37,10 +37,11 @@ Explicit relative `-RepoRoot`, `-DataDir`, and `-WorkingDir` values are resolved
 ```powershell
 .\setup.ps1 -DataDir .\rtu-data -WorkingDir .\rs485
 .\setup.ps1 -NoShortcut
-.\setup.ps1 -NoMigrate
 ```
 
-Unless `-NoShortcut` is used, the installer creates a per-user `RTU Forge.lnk` whose target is the installed `rtuforge.exe` and whose working directory is WorkingDir. Unless `-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are copied from RepoRoot only when the source exists and the destination does not. Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1` to update the editable installation after dependency or packaging changes.
+Unless `-NoShortcut` is used, the installer creates a per-user `RTU Forge.lnk` whose target is the installed `rtuforge.exe`, whose arguments contain the absolute DataDir as `--home`, and whose working directory is WorkingDir. Unless `-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are copied from RepoRoot only when the source exists and the destination does not. Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1` to update the editable installation after dependency or packaging changes.
+
+`-NoMigrate` means only that these three files are not copied from RepoRoot. With a pre-existing config in DataDir, the installation is fully operational. With a new empty DataDir, setup and its `--help`/`paths` self-check succeed, but config-dependent commands report a missing config until you provide `config.ini`.
 
 Verify the active locations from any directory:
 
@@ -54,9 +55,17 @@ For development without the user installer:
 
 ```powershell
 uv sync --extra dev
-uv run rtuforge
-uv run rtuforge send 01 03 00 65 00 01
+uv run rtuforge --home .
+uv run rtuforge --home . send 01 03 00 65 00 01
 ```
+
+Linux development launch uses the same explicit checkout-local home:
+
+```bash
+uv run rtuforge --home .
+```
+
+`--home .` is only for development launches from the checkout. A normally installed program uses installer-provided `RTUFORGE_HOME` or the platform DataDir.
 
 One-shot auto-connect is silent: it does not print `Connected COM...` before command output.
 
@@ -74,8 +83,6 @@ Do not use `sudo`. The installer refuses root, never writes to `/usr`, `/opt`, o
 Examples:
 
 ```bash
-./setup.sh --no-migrate
-
 ./setup.sh \
     --data-dir ~/rtu-data \
     --working-dir ~/rs485
@@ -96,6 +103,8 @@ Options:
 - `-h`, `--help`: show installer help.
 
 All installer paths are normalized to absolute paths before files are created. Migration is copy-only: a source is copied only when it exists and its destination does not. Existing user data is never overwritten, moved, or deleted.
+
+`--no-migrate` means only that config, scripts, and history are not copied from RepoRoot. It is suitable when DataDir already contains the intended user files. For a new empty DataDir, installer self-checks `--help` and `paths` still succeed, while config-dependent commands report a missing `config.ini` until one is supplied.
 
 The generated `<BinDir>/rtuforge` launcher exports the absolute DataDir as `RTUFORGE_HOME`, uses `exec`, forwards all arguments, and preserves the caller's current directory. `--desktop` is optional and uses WorkingDir only for graphical launch.
 
@@ -125,6 +134,8 @@ explicit --config / --scripts
 ```
 
 `--home` changes DataDir only for the current process and does not modify the environment or config. Relative `--home`, `--config`, and `--scripts` values are resolved against the invocation CWD and immediately made absolute. `RTUFORGE_HOME` must already be absolute. Without explicit paths or `RTUFORGE_HOME`, Windows uses `%APPDATA%\RTUForge` and Linux uses `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge`.
+
+Under Linux, relative `XDG_CONFIG_HOME` and `XDG_DATA_HOME` values are invalid XDG roots and are ignored. Their fallbacks remain `$HOME/.config` and `$HOME/.local/share`, so implicit DataDir and InstallDir never depend on CWD.
 
 CWD is not an implicit DataDir and never determines default config or scripts locations. It affects only explicitly relative CLI paths. A relative history filename inside `config.ini` is resolved against the directory containing that config file.
 

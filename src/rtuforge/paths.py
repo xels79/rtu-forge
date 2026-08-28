@@ -29,11 +29,22 @@ def _absolute(value: str | Path, cwd: Path) -> Path:
     return path.resolve()
 
 
+def _absolute_environment_root(
+    environment: Mapping[str, str], name: str, fallback: Path
+) -> Path:
+    configured = environment.get(name)
+    if configured:
+        path = Path(configured).expanduser()
+        if path.is_absolute():
+            return path.resolve()
+    return fallback.resolve()
+
+
 def linux_user_paths(environment: Mapping[str, str] | None = None) -> LinuxUserPaths:
     env = os.environ if environment is None else environment
     home = Path(env["HOME"]).expanduser().resolve()
-    config_root = Path(env.get("XDG_CONFIG_HOME", home / ".config")).expanduser().resolve()
-    data_root = Path(env.get("XDG_DATA_HOME", home / ".local" / "share")).expanduser().resolve()
+    config_root = _absolute_environment_root(env, "XDG_CONFIG_HOME", home / ".config")
+    data_root = _absolute_environment_root(env, "XDG_DATA_HOME", home / ".local" / "share")
     data_dir = (config_root / "rtu-forge").resolve()
     return LinuxUserPaths(
         data_dir=data_dir,
@@ -58,7 +69,7 @@ def platform_default_home(
         return (profile / "AppData" / "Roaming" / "RTUForge").resolve()
 
     home = Path(env.get("HOME", Path.home())).expanduser()
-    config_root = Path(env.get("XDG_CONFIG_HOME", home / ".config")).expanduser()
+    config_root = _absolute_environment_root(env, "XDG_CONFIG_HOME", home / ".config")
     return (config_root / "rtu-forge").resolve()
 
 

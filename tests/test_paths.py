@@ -79,6 +79,32 @@ def test_platform_default_is_stable_across_cwd(tmp_path):
     assert first.home == platform_default_home(environment, platform="linux")
 
 
+def test_relative_xdg_roots_are_ignored_and_stable_across_cwd(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    first_cwd = tmp_path / "one"
+    second_cwd = tmp_path / "two"
+    first_cwd.mkdir()
+    second_cwd.mkdir()
+    environment = {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": "relative-config",
+        "XDG_DATA_HOME": "relative-data",
+    }
+
+    monkeypatch.chdir(first_cwd)
+    first_user = linux_user_paths(environment)
+    first_runtime = resolve_runtime_paths(environment=environment, platform="linux")
+    monkeypatch.chdir(second_cwd)
+    second_user = linux_user_paths(environment)
+    second_runtime = resolve_runtime_paths(environment=environment, platform="linux")
+
+    assert first_user == second_user
+    assert first_runtime == second_runtime
+    assert first_user.data_dir == (home / ".config" / "rtu-forge").resolve()
+    assert first_user.install_dir == (home / ".local" / "share" / "rtu-forge").resolve()
+    assert first_runtime.home == first_user.data_dir
+
+
 def test_windows_platform_default_uses_appdata(tmp_path):
     home = platform_default_home({"APPDATA": str(tmp_path / "Roaming")}, platform="win32")
     assert home == (tmp_path / "Roaming" / "RTUForge").resolve()
