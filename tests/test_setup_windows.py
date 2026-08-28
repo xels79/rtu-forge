@@ -42,8 +42,8 @@ def test_setup_ps1_migration_is_copy_only_and_guarded_against_overwrite():
 def test_setup_ps1_shortcut_and_self_check_are_explicit():
     text = SETUP.read_text(encoding="utf-8")
     assert "$Shortcut.TargetPath = $RtuForgeExe" in text
-    assert "$Shortcut.Arguments" in text
-    assert "--home" in text
+    assert """$Shortcut.Arguments = '--home "' + $DataDir + '"'""" in text
+    assert r'--home \"' not in text
     assert "$Shortcut.WorkingDirectory = $WorkingDir" in text
     assert "& $RtuForgeExe --help" in text
     assert "& $RtuForgeExe paths" in text

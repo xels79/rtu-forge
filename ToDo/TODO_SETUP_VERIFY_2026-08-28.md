@@ -331,7 +331,8 @@ rtuforge --port COM7 --timeout-ms 1000 scan 1 32 --timeout 100
 - [x] GitHub Actions проверен для implementation commit `7538fe8972c640efdf9f33dea08c99848e823481`.
 - [x] Workflow `tests`, run #62: `completed`, `success`; предыдущий run #61 не использован как подтверждение.
 - [x] До финальной коррекции подтверждён HEAD `834363f6397c18ac1f3e8ddd6f66857c8907bcd8`: workflow `tests`, run #63, `completed`, `success`.
-- [ ] Для нового HEAD после финальной коррекции требуется отдельный green workflow; run #63 его не подтверждает.
+- [x] HEAD `16350a61e351e8f75d8666d4ccdfc1125115c3dd`: workflow `tests`, run #64, `completed`, `success`; run #63 не использован как подтверждение этого HEAD.
+- [ ] Для нового HEAD после Windows shortcut regression test требуется отдельный green workflow; run #64 станет историческим.
 
 ## 13.1 Финальная коррекция setup verification
 
@@ -341,6 +342,11 @@ rtuforge --port COM7 --timeout-ms 1000 scan 1 32 --timeout 100
 - [x] Relative `XDG_CONFIG_HOME` и `XDG_DATA_HOME` игнорируются в пользу HOME fallbacks в runtime и installer.
 - [x] `run script` и `record script` открывают effective COM7, не изменяя persistent COM4.
 - [x] Windows custom DataDir shortcut реально проверен; shortcut явно передаёт absolute DataDir через `--home`.
+- [x] Windows shortcut DataDir with spaces: PASS.
+- [x] Windows shortcut WorkingDir with spaces: PASS.
+- [x] Shortcut Arguments: `--home "<absolute DataDir>"`; literal `\"` в `.lnk` отсутствует.
+- [x] Реальный `.lnk paths` с путями, содержащими пробелы: exit code 0; Home/config/scripts и process CWD подтверждены.
+- [x] Обычный PATH launch после shortcut test использует user-level `RTUFORGE_HOME`; config/scripts не изменены.
 - [x] Hardcoded Linux summary `History` удалён; вывод `rtuforge paths` остаётся authoritative.
 - [x] Targeted pytest: Windows `43 passed, 7 skipped`; Linux setup/path/connection integration `35 passed`.
 - [x] Full pytest: Windows `163 passed, 7 skipped`; Ubuntu WSL `169 passed, 1 skipped`.
@@ -371,7 +377,8 @@ pytest WSL: 163 passed, 1 skipped
 Final-correction pytest Windows: 163 passed, 7 skipped
 Final-correction pytest WSL: 169 passed, 1 skipped
 CI before final correction: workflow tests, run #63, success (HEAD 834363f)
-CI for final-correction HEAD: pending; run #63 is not sufficient
+CI final correction: workflow tests, run #64, success (HEAD 16350a6)
+CI after Windows shortcut regression test: pending; run #64 is historical for the new HEAD
 ```
 
 ## Definition of Done
