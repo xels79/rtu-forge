@@ -29,4 +29,4 @@
 - [x] paths with spaces covered by automated tests
 - [x] manual Windows export/import roundtrip performed
 - [x] full pytest green (`199 passed, 7 skipped`)
-- [ ] exact-head CI green
+- [x] exact-head CI green
