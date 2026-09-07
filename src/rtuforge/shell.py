@@ -67,6 +67,9 @@ def run_shell(ctx: CommandContext) -> None:
             elif action == "history-clear":
                 history_path.write_text("", encoding="utf-8")
                 console.print(tr(ctx.language, "history_cleared"), markup=False)
+        except KeyboardInterrupt:
+            ctx.transport.disconnect()
+            console.print()
         except Exception as exc:
             console.print(tr(ctx.language, "error", error=exc), markup=False)
 

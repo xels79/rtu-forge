@@ -21,6 +21,7 @@ from .runtime_text import tr
 from .scanner import ScanArgumentError, ScanResult, parse_scan_arguments, scan_devices
 from .script_file import load_script_file, resolve_script_path, save_script_file
 from .scripts import ScriptStore
+from .script_engine import Instruction, LastResponse, ScriptError, compile_script, run_program
 from .transport import Exchange, SerialTransport
 
 HELP_ALIASES = {"ls": "scripts", "list": "scripts", "cls": "clear", "quit": "exit"}
@@ -74,6 +75,7 @@ class CommandContext:
     home_path: Path | None = None
     one_shot: bool = False
     recording: RecordingState = field(default_factory=RecordingState)
+    last_response: LastResponse | None = None
 
     @property
     def language(self) -> str:
@@ -211,6 +213,7 @@ def ensure_connected(ctx: CommandContext) -> None:
 def send_frame(ctx: CommandContext, payload: str, *, decode_override: bool | None = None) -> None:
     ensure_connected(ctx)
     exchange = ctx.transport.exchange(parse_hex_bytes(payload))
+    ctx.last_response = LastResponse.from_rx(exchange.rx)
     _print_exchange(ctx, exchange.tx, exchange.rx, exchange.elapsed_ms, decode_override=decode_override)
 
 
@@ -411,13 +414,24 @@ def run_script_lines(
     if not lines:
         ctx.console.print(f"[yellow]{tr(ctx.language, 'script_empty', name=source)}[/yellow]"); return False
     delay = ctx.config["runtime"].getint("inter_command_delay_ms") / 1000.0
-    for index, line in enumerate(lines, start=1):
-        if not _clean_output(ctx): ctx.console.print(f"[dim]{index:02d}> {line}[/dim]")
-        action = execute_command(ctx, line, from_script=True, inherited_decode_override=decode_override)
-        if action == "script-interrupted":
-            return True
-        if index < len(lines) and delay > 0: time.sleep(delay)
-    return False
+    def execute(item: Instruction) -> bool:
+        if not _clean_output(ctx):
+            ctx.console.print(f"{item.line:02d}> {item.text}", style="dim", markup=False)
+        action = execute_command(ctx, item.text, from_script=True, inherited_decode_override=decode_override)
+        return action == "script-interrupted"
+
+    def between_commands() -> None:
+        if delay > 0:
+            time.sleep(delay)
+
+    try:
+        program = compile_script(lines)
+        return run_program(program, execute, lambda: ctx.last_response, between_commands)
+    except ScriptError as exc:
+        raise ValueError(exc.localized(ctx.language, source)) from None
+    except KeyboardInterrupt:
+        ctx.transport.disconnect()
+        raise
 
 
 def run_script(ctx: CommandContext, name: str, *, decode_override: bool | None = None) -> bool:
@@ -593,7 +607,7 @@ def _record_script(ctx: CommandContext, parts: list[str]) -> None:
     try:
         run_script(ctx, name, decode_override=decode_override)
         _finish_recording(ctx, destination)
-    except Exception:
+    except (Exception, KeyboardInterrupt):
         ctx.recording.clear()
         raise
     finally:

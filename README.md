@@ -657,9 +657,73 @@ exit | quit
 
 Empty lines and lines beginning with `#` are ignored.
 
-`runtime.inter_command_delay_ms` is applied between stored script lines. `pause <ms>` adds an explicit additional delay.
+`runtime.inter_command_delay_ms` is applied between executed ordinary commands. `pause <ms>` adds an explicit additional delay. Labels, jumps, conditions, comments and empty lines add no automatic delays.
 
 Nested `run script` calls are supported. Recursive/cyclic script calls should be avoided.
+
+### Script control flow
+
+```text
+label <name>
+goto <name>
+if <expression>
+else
+end if
+```
+
+Labels match `[A-Za-z_][A-Za-z0-9_.-]*`, are case-sensitive and local to each script invocation. `goto` jumps forward or backward to the command after a label. Nested `if` blocks and optional `else` branches are supported. The entire script's labels, block structure and expressions are checked before its commands execute. Errors identify the script and its script-body line (not the physical INI file line). Existing INI loaders omit empty lines and INI comments.
+
+Simple if/else:
+
+```text
+send 05 03 00 0C 00 01
+if last.timeout
+    pause 250
+else
+    send 05 03 00 0F 00 01
+end if
+```
+
+Expressions support decimal and `0x` hexadecimal integers, `true`/`false`, comparisons `== != < <= > >=`, `and or not`, bitwise `& | ^ << >>`, and parentheses. Boolean operators short-circuit; use parentheses around bit masks. Shift counts are restricted to 0..4096. Expressions use a whitelisted AST evaluator without Python `eval`; function calls, strings and arbitrary Python attributes are rejected.
+
+| Value | Meaning |
+|---|---|
+| `last.timeout` | True when the last `send` received no bytes |
+| `last.rx_len` | Complete RX length in bytes |
+| `last.address` | Response slave address |
+| `last.function` | Raw response function byte, including the exception bit |
+| `last.exception` | Modbus exception code, or 0 for a normal response |
+| `last.reg[N]` | Zero-based register from the existing FC03/FC04 decoder |
+| `last.byte[N]` | Zero-based byte of the complete raw RX frame, including CRC |
+
+`last` is shared by nested scripts and updated by every completed `send`, even with `-r` or hidden RX output. Access before the first `send`, an absent address/function or an unavailable register/byte index raises a localized runtime error; missing registers never become zero. Register decoding follows the existing parser, including its best-effort handling of malformed frames; it does not imply CRC validation.
+
+Poll until bit 1 clears before continuing to the next command:
+
+```text
+send 05 06 00 0F 00 1E
+label wait_b
+pause 100
+send 05 03 00 0C 00 01
+if last.timeout
+    pause 250
+    goto wait_b
+end if
+if (last.reg[0] & 0x0002) != 0
+    goto wait_b
+end if
+send 05 03 00 0F 00 01
+```
+
+`last.reg[0]` is the first register of the most recent response. Loops have no iteration limit and do not grow the Python call stack. Ctrl+C stops execution and closes the transport; one-shot execution returns 130.
+
+The acceptance example is in `examples/ponic-test.ini`:
+
+```bash
+uv run rtuforge --scripts examples/ponic-test.ini run script ponic-test -r -c
+```
+
+Control flow works in the main `scripts.ini`, external `--scripts` files and portable `run file` scripts. Control instructions print no extra output. Explicit `help` still prints in clean mode. Use `help script`, `help if`, `help label` or `help goto` for EN/RU help; `help scripts` includes the same language reference. UI language changes help and diagnostics, never script keywords.
 
 ## Portable script files
 

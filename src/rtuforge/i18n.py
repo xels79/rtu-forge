@@ -207,7 +207,8 @@ Examples:
 Decode priority:
   flag on individual send > flag on run script > runtime.decode_rx
 
-runtime.inter_command_delay_ms is applied between stored lines; explicit 'pause <ms>' adds another delay.
+runtime.inter_command_delay_ms applies between ordinary commands; control flow adds no delay.
+Explicit 'pause <ms>' adds another delay.
 
 For one-shot clean output:
   rtuforge -c run script idd-status -r
@@ -477,7 +478,8 @@ CRC задаётся отдельно через runtime.crc_mode:
 Приоритет расшифровки:
   флаг отдельного send > флаг run script > runtime.decode_rx
 
-Между строками действует runtime.inter_command_delay_ms; команда 'pause <ms>' добавляет собственную паузу.
+Между обычными командами действует runtime.inter_command_delay_ms; управляющие инструкции задержек не добавляют.
+Команда 'pause <ms>' добавляет собственную паузу.
 
 Чистый one-shot вывод:
   rtuforge -c run script idd-status -r
@@ -689,3 +691,90 @@ def cli_text(language: str | None) -> dict[str, str]:
 def message(language: str | None, key: str, **values: str) -> str:
     template = MESSAGES[normalize_language(language)].get(key, MESSAGES["en"][key])
     return template.format(**values)
+
+
+SCRIPT_SYNTAX = """  label <name>
+  goto <name>
+  if <expression>
+  else
+  end if
+"""
+SCRIPT_EXAMPLES = """
+  label wait
+  pause 100
+  goto wait
+
+  if last.reg[0] == 0
+      goto done
+  else
+      pause 100
+  end if
+  label done
+
+  send 05 06 00 0F 00 1E
+  label wait_b
+  pause 100
+  send 05 03 00 0C 00 01
+  if (last.reg[0] & 0x0002) != 0
+      goto wait_b
+  end if
+  send 05 03 00 0F 00 01
+"""
+SCRIPT_REFERENCE = """
+  send <hex...>
+  pause <ms>
+
+  last.timeout  last.rx_len  last.address  last.function
+  last.exception  last.reg[N]  last.byte[N]
+
+  == != < <= > >=
+  and or not
+  & | ^ << >>
+  ( ... )
+  0 100 0x0002 0xFF true false
+"""
+SCRIPT_DESCRIPTION = {
+    "en": """Script control flow (keywords are identical in all UI languages).
+Commands run sequentially. Labels are local to each script; goto can jump
+forward or backward. Unknown/duplicate labels and malformed if blocks are
+errors before execution. Label names: [A-Za-z_][A-Za-z0-9_.-]* (case-sensitive).
+Nested if blocks are supported; else is optional.
+last.reg[0] is the first register decoded from the last send response.
+last.byte[N] indexes the complete raw RX frame, starting at zero.
+last.timeout is true for empty RX; last.rx_len is its byte length.
+last.address is the slave ID; last.function is the raw function byte
+(including the exception bit); last.exception is the exception code, or 0.
+Unavailable fields/indices and last before the first send raise an error.
+Nested scripts share the latest send response. Boolean and/or short-circuit.
+Decimal/hex integers and true/false are supported; calls and strings are not.
+Shift counts must be 0..4096. Control instructions add no automatic delay.
+Ctrl+C stops loops and closes the transport.
+Examples (the first loop intentionally runs until Ctrl+C):
+""",
+    "ru": """Управление выполнением скриптов (ключевые слова одинаковы для всех языков).
+Команды выполняются последовательно. Метки локальны для каждого скрипта;
+goto разрешает переходы вперёд и назад. Неизвестные/повторные метки и ошибки
+структуры if обнаруживаются до выполнения. Имена меток:
+[A-Za-z_][A-Za-z0-9_.-]* (регистр значим).
+Поддерживаются вложенные if; else необязателен.
+last.reg[0] — первый регистр, декодированный из последнего ответа send.
+last.byte[N] — байт полного RX-кадра, индексация с нуля.
+last.timeout равен true при пустом RX; last.rx_len — длина RX в байтах.
+last.address — адрес ведомого; last.function — исходный байт функции
+(включая бит исключения); last.exception — код исключения или 0.
+Недоступные поля/индексы и last до первого send вызывают ошибку.
+Вложенные скрипты используют общий последний ответ send.
+and/or вычисляются сокращённо. Поддерживаются десятичные/HEX числа и
+true/false; вызовы функций и строки запрещены. Число битов сдвига: 0..4096.
+Управляющие инструкции не добавляют автоматических задержек.
+Ctrl+C останавливает цикл и закрывает соединение.
+Примеры (первый цикл намеренно работает до Ctrl+C):
+""",
+}
+for _language in SUPPORTED_LANGUAGES:
+    GENERAL_HELP[_language] += "\n" + SCRIPT_SYNTAX + "  help script | help label | help goto | help if\n"
+    _script_help = SCRIPT_SYNTAX + SCRIPT_REFERENCE + SCRIPT_DESCRIPTION[_language] + SCRIPT_EXAMPLES
+    for _topic in ("script", "label", "goto", "if"):
+        HELP[_language][_topic] = _script_help
+    HELP[_language]["scripts"] += "\n" + _script_help
+    CLI_TEXT[_language]["epilog"] += "  rtuforge --scripts pump.ini run script pump-test\n  rtuforge help script\n"

@@ -182,6 +182,8 @@ def main() -> int:
         if action == "clear-screen":
             raise ValueError(tr(ctx.language, "oneshot_clear"))
         return 0
+    except KeyboardInterrupt:
+        return 130
     except (ValueError, KeyError, RuntimeError, OSError) as exc:
         _console(stderr=True).print(tr(ctx.language, "error", error=exc), markup=False)
         return 1

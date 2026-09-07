@@ -147,3 +147,33 @@ def function_name(language: str | None, code: int) -> str | None:
 
 def exception_name(language: str | None, code: int) -> str | None:
     return EXCEPTION_NAMES[_lang(language)].get(code)
+
+TEXT['en'].update({
+    'script_error': "Script '{source}': line {line}: {reason}",
+    'script_invalid_label': "invalid label '{name}'; use [A-Za-z_][A-Za-z0-9_.-]*",
+    'script_duplicate_label': "duplicate label '{name}'",
+    'script_unknown_label': "unknown label '{name}'; add the label or correct goto",
+    'script_unmatched_else': 'else without if or with extra arguments',
+    'script_duplicate_else': 'duplicate else in one if',
+    'script_unmatched_end_if': 'end if without if or with extra arguments',
+    'script_missing_end_if': 'missing end if',
+    'script_invalid_expression': 'invalid if expression; see help if',
+    'script_no_response': 'last is unavailable before the first send; execute send first',
+    'script_unavailable': '{field} is unavailable for the previous response; check last.timeout and response contents',
+    'script_shift_range': 'shift count must be between 0 and 4096',
+})
+
+TEXT['ru'].update({
+    'script_error': "Скрипт '{source}': строка {line}: {reason}",
+    'script_invalid_label': "некорректная метка '{name}'; используйте [A-Za-z_][A-Za-z0-9_.-]*",
+    'script_duplicate_label': "повторная метка '{name}'",
+    'script_unknown_label': "неизвестная метка '{name}'; добавьте метку или исправьте goto",
+    'script_unmatched_else': 'else без if или с лишними аргументами',
+    'script_duplicate_else': 'повторный else внутри одного if',
+    'script_unmatched_end_if': 'end if без if или с лишними аргументами',
+    'script_missing_end_if': 'отсутствует end if',
+    'script_invalid_expression': 'некорректное выражение if; см. help if',
+    'script_no_response': 'last недоступен до первого send; сначала выполните send',
+    'script_unavailable': '{field} недоступен для предыдущего ответа; проверьте last.timeout и содержимое ответа',
+    'script_shift_range': 'число битов сдвига должно быть от 0 до 4096',
+})
