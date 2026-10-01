@@ -18,7 +18,7 @@ from .formatting import hex_line, prefix
 from .paths import resolve_runtime_paths
 from .stand_completion import StandForgeCompleter
 from .stand_config import StandSettings, load_stand_settings, save_stand_settings, with_overrides
-from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, build_output_request, build_tank_request, validate_write_response
+from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, build_output_request, build_tank_request, build_write_multiple_coils, validate_write_response
 from .transport import SerialTransport
 
 
@@ -46,6 +46,7 @@ TEXT = {
         "no_ports": "No serial ports found.",
         "tank_ok": "Tank {tank}: {level} (relays {first}/{second})",
         "output_ok": "{name}: {percent:g}% -> {raw} {unit} (channel {channel})",
+        "reset_ok": "Stand reset: all tanks empty, all analog outputs 0%",
         "saved": "Stand settings saved: {path}",
         "error": "Error: {error}",
     },
@@ -56,6 +57,7 @@ TEXT = {
         "no_ports": "Последовательные порты не найдены.",
         "tank_ok": "Бак {tank}: {level} (реле {first}/{second})",
         "output_ok": "{name}: {percent:g}% -> {raw} {unit} (канал {channel})",
+        "reset_ok": "Стенд сброшен: все баки empty, все аналоговые выходы 0%",
         "saved": "Настройки стенда сохранены: {path}",
         "error": "Ошибка: {error}",
     },
@@ -167,6 +169,37 @@ def _output(ctx: StandContext, parts: list[str]) -> None:
         )
 
 
+def _reset(ctx: StandContext, parts: list[str]) -> None:
+    if parts and [item.lower() for item in parts] != ["all"]:
+        raise ValueError("Usage: reset [all]")
+
+    requests: list[tuple[str, bytes]] = [
+        (
+            "relays",
+            build_write_multiple_coils(
+                ctx.settings.relay_address, 0, [False] * 8
+            ),
+        )
+    ]
+    for name in OUTPUT_CHANNEL_NAMES:
+        request, _, _, _ = build_output_request(
+            ctx.settings.output_address, name, 0, ctx.settings.range_spec
+        )
+        requests.append((name, request))
+
+    errors: list[str] = []
+    for name, request in requests:
+        try:
+            _exchange(ctx, request)
+        except (RuntimeError, OSError) as exc:
+            errors.append(f"{name}: {exc}")
+
+    if errors:
+        raise RuntimeError("Reset incomplete: " + "; ".join(errors))
+    if not _clean(ctx):
+        ctx.console.print(_t(ctx, "reset_ok"), markup=False)
+
+
 def _show_ports(ctx: StandContext) -> None:
     ports = list(serial.tools.list_ports.comports())
     if not ports:
@@ -228,12 +261,15 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
         )
     elif topic == "set":
         text = "set relay-id <1..247>\nset output-id <1..247>\nset output-range <0-20ma|4-20ma|0-10v>"
+    elif topic == "reset":
+        text = "reset [all]\n  all tanks -> empty; all four analog outputs -> 0%"
     else:
         text = (
             "Stand Forge commands:\n"
             "  tank <1..4> <empty|middle|full>\n"
             "  output <temperature|humidity|pressure-low|pressure-high> <0..100>\n"
             "  set <relay-id|output-id|output-range> <value>\n"
+            "  reset [all]\n"
             "  connect | disconnect | ports | status | paths\n"
             "  clear | help [topic] | exit\n\n"
             "Examples:\n"
@@ -241,6 +277,7 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
             "  tank 4 full\n"
             "  output temperature 50\n"
             "  output pressure high 75\n"
+            "  reset\n"
             "  set output-range 4-20ma"
         )
     ctx.console.print(text, markup=False)
@@ -256,6 +293,8 @@ def execute_command(ctx: StandContext, line: str) -> str | None:
         _tank(ctx, args)
     elif command == "output":
         _output(ctx, args)
+    elif command == "reset":
+        _reset(ctx, args)
     elif command == "connect":
         if args:
             raise ValueError("Usage: connect")
