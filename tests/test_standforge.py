@@ -63,6 +63,8 @@ def test_completion():
     assert completion_candidates("tank 1 ") == ["empty", "full", "middle"]
     assert "pressure-high" in completion_candidates("output pressure-")
     assert completion_candidates("set output-range 4") == ["4-20ma"]
+    assert "reset" in completion_candidates("res")
+    assert completion_candidates("reset ") == ["all"]
 
 
 class FakeTransport:
@@ -109,6 +111,24 @@ def test_output_commands(tmp_path):
     assert transport.requests[-1] == (bytes.fromhex("02 06 00 03 3A 98"), "append")
     execute_command(ctx, "output pressure low 25")
     assert transport.requests[-1] == (bytes.fromhex("02 06 00 02 13 88"), "append")
+
+
+def test_reset_command_resets_all_relays_and_outputs(tmp_path):
+    ctx, transport = make_ctx(tmp_path)
+    execute_command(ctx, "reset")
+    assert transport.requests == [
+        (bytes.fromhex("01 0F 00 00 00 08 01 00"), "append"),
+        (bytes.fromhex("02 06 00 00 00 00"), "append"),
+        (bytes.fromhex("02 06 00 01 00 00"), "append"),
+        (bytes.fromhex("02 06 00 02 00 00"), "append"),
+        (bytes.fromhex("02 06 00 03 00 00"), "append"),
+    ]
+
+
+def test_reset_all_alias(tmp_path):
+    ctx, transport = make_ctx(tmp_path)
+    execute_command(ctx, "reset all")
+    assert len(transport.requests) == 5
 
 
 def test_set_output_range_persists(tmp_path):
