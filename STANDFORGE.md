@@ -59,6 +59,20 @@ Supported ranges:
 - `4-20ma` -> 4000..20000 uA
 - `0-10v` -> 0..10000 mV
 
+
+## Reset
+
+Reset the complete bench to its initial state:
+
+```text
+standforge reset
+standforge reset all
+```
+
+This sets all four tanks to `empty` by switching all eight relays off, then sets the first four analog outputs to `0%`. For a `4-20ma` range, `0%` means 4000 uA rather than 0 uA.
+
+The command attempts every reset operation even if one device fails, then reports any incomplete items.
+
 ## Configuration
 
 Stand Forge reuses RTU Forge's `config.ini` and `RTUFORGE_HOME` for serial settings.
@@ -115,6 +129,7 @@ Useful commands:
 ```text
 tank <1..4> <empty|middle|full>
 output <temperature|humidity|pressure-low|pressure-high> <0..100>
+reset [all]
 set <relay-id|output-id|output-range> <value>
 connect
 disconnect
