@@ -11,6 +11,7 @@ from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES
 TOP_LEVEL_COMMANDS = (
     "tank",
     "output",
+    "reset",
     "connect",
     "disconnect",
     "ports",
@@ -44,8 +45,10 @@ def completion_candidates(text: str) -> list[str]:
         choices = ("relay-id", "output-id", "output-range")
     elif completed == ["set", "output-range"]:
         choices = OUTPUT_RANGES
+    elif completed == ["reset"]:
+        choices = ("all",)
     elif completed == ["help"]:
-        choices = ("tank", "output", "set", "status", "connect", "ports")
+        choices = ("tank", "output", "reset", "set", "status", "connect", "ports")
     else:
         choices = ()
     return sorted(
