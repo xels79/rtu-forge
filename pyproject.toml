@@ -17,6 +17,7 @@ dev = [
 
 [project.scripts]
 rtuforge = "rtuforge.cli:main"
+standforge = "rtuforge.stand_cli:main"
 
 [build-system]
 requires = ["hatchling"]
