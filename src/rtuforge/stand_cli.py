@@ -18,7 +18,7 @@ from .formatting import hex_line, prefix
 from .paths import resolve_runtime_paths
 from .stand_completion import StandForgeCompleter
 from .stand_config import StandSettings, load_stand_settings, save_stand_settings, with_overrides
-from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, build_output_request, build_tank_request, build_write_multiple_coils, validate_write_response
+from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, RELAY_CHANNEL_COUNT, build_all_relays_off_request, build_output_request, build_tank_request, build_write_multiple_coils, validate_write_response
 from .transport import SerialTransport
 
 
@@ -45,8 +45,9 @@ TEXT = {
         "disconnected": "Disconnected",
         "no_ports": "No serial ports found.",
         "tank_ok": "Tank {tank}: {level} (relays {first}/{second})",
+        "relay_ok": "Relay {channel}: {state}",
         "output_ok": "{name}: {percent:g}% -> {raw} {unit} (channel {channel})",
-        "reset_ok": "Stand reset: all tanks empty, all analog outputs 0%",
+        "reset_ok": "Stand reset: all relays off, all tanks empty, all analog outputs 0%",
         "saved": "Stand settings saved: {path}",
         "error": "Error: {error}",
     },
@@ -56,8 +57,9 @@ TEXT = {
         "disconnected": "Отключено",
         "no_ports": "Последовательные порты не найдены.",
         "tank_ok": "Бак {tank}: {level} (реле {first}/{second})",
+        "relay_ok": "Реле {channel}: {state}",
         "output_ok": "{name}: {percent:g}% -> {raw} {unit} (канал {channel})",
-        "reset_ok": "Стенд сброшен: все баки empty, все аналоговые выходы 0%",
+        "reset_ok": "Стенд сброшен: все реле выключены, все баки empty, все аналоговые выходы 0%",
         "saved": "Настройки стенда сохранены: {path}",
         "error": "Ошибка: {error}",
     },
@@ -152,6 +154,25 @@ def _tank(ctx: StandContext, parts: list[str]) -> None:
         ctx.console.print(_t(ctx, "tank_ok", tank=tank, level=level, first=first, second=first + 1), markup=False)
 
 
+def _relay(ctx: StandContext, parts: list[str], *, enabled: bool) -> None:
+    command = "on" if enabled else "off"
+    usage = f"Usage: {command} <1..{RELAY_CHANNEL_COUNT}> [<1..{RELAY_CHANNEL_COUNT}> ...]"
+    if not parts:
+        raise ValueError(usage)
+    try:
+        channels = [int(part) for part in parts]
+    except ValueError:
+        raise ValueError(f"Relay channels must be integers in range 1..{RELAY_CHANNEL_COUNT}. {usage}") from None
+    if any(not 1 <= channel <= RELAY_CHANNEL_COUNT for channel in channels):
+        raise ValueError(f"Relay channels must be in range 1..{RELAY_CHANNEL_COUNT}. {usage}")
+    for channel in dict.fromkeys(channels):
+        request = build_write_multiple_coils(ctx.settings.relay_address, channel - 1, [enabled])
+        _exchange(ctx, request)
+        if not _clean(ctx):
+            state = ("включено" if enabled else "выключено") if _lang(ctx) == "ru" else command
+            ctx.console.print(_t(ctx, "relay_ok", channel=channel, state=state), markup=False)
+
+
 def _output(ctx: StandContext, parts: list[str]) -> None:
     if len(parts) == 3 and parts[0].lower() == "pressure" and parts[1].lower() in {"low", "high"}:
         parts = [f"pressure-{parts[1].lower()}", parts[2]]
@@ -174,12 +195,7 @@ def _reset(ctx: StandContext, parts: list[str]) -> None:
         raise ValueError("Usage: reset [all]")
 
     requests: list[tuple[str, bytes]] = [
-        (
-            "relays",
-            build_write_multiple_coils(
-                ctx.settings.relay_address, 0, [False] * 8
-            ),
-        )
+        ("relays", build_all_relays_off_request(ctx.settings.relay_address))
     ]
     for name in OUTPUT_CHANNEL_NAMES:
         request, _, _, _ = build_output_request(
@@ -253,6 +269,17 @@ def _set(ctx: StandContext, parts: list[str]) -> None:
 def _help(ctx: StandContext, topic: str | None = None) -> None:
     if topic == "tank":
         text = "tank <1..4> <empty|middle|full>\n  empty=both off, middle=lower on, full=both on"
+    elif topic in {"on", "off", "of"}:
+        description = (
+            f"  Ручное включение/выключение указанных каналов реле 1..{RELAY_CHANNEL_COUNT}; of = off"
+            if _lang(ctx) == "ru"
+            else f"  Switch the selected relay channels 1..{RELAY_CHANNEL_COUNT} on/off; of = off"
+        )
+        text = (
+            f"on <1..{RELAY_CHANNEL_COUNT}> [<1..{RELAY_CHANNEL_COUNT}> ...]\n"
+            f"off <1..{RELAY_CHANNEL_COUNT}> [<1..{RELAY_CHANNEL_COUNT}> ...]\n"
+            f"of <1..{RELAY_CHANNEL_COUNT}> [<1..{RELAY_CHANNEL_COUNT}> ...]\n"
+        ) + description
     elif topic == "output":
         text = (
             "output <name> <0..100>\n"
@@ -262,11 +289,13 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
     elif topic == "set":
         text = "set relay-id <1..247>\nset output-id <1..247>\nset output-range <0-20ma|4-20ma|0-10v>"
     elif topic == "reset":
-        text = "reset [all]\n  all tanks -> empty; all four analog outputs -> 0%"
+        text = "reset [all]\n  all relays -> off (Waveshare FC05, 0x00FF); all tanks -> empty; all four analog outputs -> 0%"
     else:
         text = (
             "Stand Forge commands:\n"
             "  tank <1..4> <empty|middle|full>\n"
+            f"  on <1..{RELAY_CHANNEL_COUNT}> [<1..{RELAY_CHANNEL_COUNT}> ...]\n"
+            f"  off <1..{RELAY_CHANNEL_COUNT}> [<1..{RELAY_CHANNEL_COUNT}> ...] (alias: of)\n"
             "  output <temperature|humidity|pressure-low|pressure-high> <0..100>\n"
             "  set <relay-id|output-id|output-range> <value>\n"
             "  reset [all]\n"
@@ -275,6 +304,8 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
             "Examples:\n"
             "  tank 1 middle\n"
             "  tank 4 full\n"
+            "  on 1 16 32\n"
+            "  off 32\n"
             "  output temperature 50\n"
             "  output pressure high 75\n"
             "  reset\n"
@@ -291,6 +322,8 @@ def execute_command(ctx: StandContext, line: str) -> str | None:
     command, args = parts[0].lower(), parts[1:]
     if command == "tank":
         _tank(ctx, args)
+    elif command in {"on", "off", "of"}:
+        _relay(ctx, args, enabled=command == "on")
     elif command == "output":
         _output(ctx, args)
     elif command == "reset":

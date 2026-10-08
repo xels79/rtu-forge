@@ -5,11 +5,14 @@ from collections.abc import Iterable, Iterator
 from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
 
-from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES
+from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, RELAY_CHANNEL_COUNT
 
 
 TOP_LEVEL_COMMANDS = (
     "tank",
+    "on",
+    "off",
+    "of",
     "output",
     "reset",
     "connect",
@@ -39,6 +42,8 @@ def completion_candidates(text: str) -> list[str]:
         choices = ("1", "2", "3", "4")
     elif len(completed) == 2 and completed[0] == "tank":
         choices = ("empty", "middle", "full")
+    elif completed[0] in {"on", "off", "of"}:
+        choices = (str(channel) for channel in range(1, RELAY_CHANNEL_COUNT + 1) if str(channel) not in completed[1:])
     elif completed == ["output"]:
         choices = OUTPUT_CHANNEL_NAMES
     elif completed == ["set"]:
@@ -48,7 +53,7 @@ def completion_candidates(text: str) -> list[str]:
     elif completed == ["reset"]:
         choices = ("all",)
     elif completed == ["help"]:
-        choices = ("tank", "output", "reset", "set", "status", "connect", "ports")
+        choices = ("tank", "on", "off", "of", "output", "reset", "set", "status", "connect", "ports")
     else:
         choices = ()
     return sorted(

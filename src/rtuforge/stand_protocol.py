@@ -5,6 +5,9 @@ from dataclasses import dataclass
 from .crc import has_valid_crc
 
 
+RELAY_CHANNEL_COUNT = 32
+
+
 TANK_LEVEL_BITS: dict[str, tuple[bool, bool]] = {
     "empty": (False, False),
     "middle": (True, False),
@@ -89,6 +92,11 @@ def build_write_multiple_coils(
             len(packed),
         )
     ) + packed
+
+
+def build_all_relays_off_request(slave: int) -> bytes:
+    """Build Waveshare's FC05 command to switch every relay off (without CRC)."""
+    return bytes((_slave(slave), 0x05, 0x00, 0xFF, 0x00, 0x00))
 
 
 def build_tank_request(slave: int, tank: int, level: str) -> bytes:
@@ -182,9 +190,9 @@ def validate_write_response(request: bytes, response: bytes) -> None:
         raise RuntimeError(
             f"Unexpected Modbus function in response: {response[1]:02X}"
         )
-    if function == 0x06:
+    if function in {0x05, 0x06}:
         if len(response) != 8 or response[:6] != request[:6]:
-            raise RuntimeError("Unexpected FC06 write response")
+            raise RuntimeError(f"Unexpected FC{function:02X} write response")
         return
     if function == 0x0F:
         if len(response) != 8 or response[:6] != request[:6]:

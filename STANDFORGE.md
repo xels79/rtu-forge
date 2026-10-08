@@ -4,7 +4,7 @@ Stand Forge is a small test-bench console built on RTU Forge's existing serial t
 
 It controls two Waveshare Modbus RTU devices:
 
-- 8-channel relay board: four tanks, two relays per tank.
+- Relay board: manual control of channels 1..32; four tanks mapped to the first eight channels, two relays per tank.
 - 8-channel analog output board: first four channels mapped to temperature, humidity, low pressure and high pressure.
 
 ## Tank commands
@@ -32,6 +32,27 @@ standforge tank 4 full
 ```
 
 The two relays are written in one Modbus FC0F request.
+
+## Manual relay commands
+
+Switch selected relay channels (1..32) on or off:
+
+```text
+standforge on 1
+standforge off 1
+standforge of 1
+standforge on 1 3 8
+standforge off 2 4
+standforge on 1 16 32
+standforge off 32
+```
+
+`of` is an alias for `off`. The same commands work at the `stand>` prompt.
+Channels 1..32 map to coil addresses 0..31 at the configured relay device ID.
+Each selected channel is written separately using Modbus FC0F with quantity 1;
+other channels are left unchanged. All channel numbers are validated before
+connecting or sending, and repeated channels are written only once. If a write
+fails, the command stops and reports the error; earlier successful writes remain applied.
 
 ## Analog output commands
 
@@ -69,7 +90,15 @@ standforge reset
 standforge reset all
 ```
 
-This sets all four tanks to `empty` by switching all eight relays off, then sets the first four analog outputs to `0%`. For a `4-20ma` range, `0%` means 4000 uA rather than 0 uA.
+This switches all relays on the configured relay device off in one command,
+including channels 9..32, and sets all four tanks to `empty`. It then sets the
+first four analog outputs to `0%`. For a `4-20ma` range, `0%` means 4000 uA rather than 0 uA.
+
+The relay reset uses Waveshare's FC05 command at coil address `0x00FF` with
+value `0x0000`, as documented in the
+[Waveshare relay protocol](https://www.waveshare.com/wiki/Modbus_RTU_Relay_16CH).
+For relay ID 1, the complete request is `01 05 00 FF 00 00 FD FA`; other IDs use
+their own calculated CRC. The response must echo the request with a valid CRC.
 
 The command attempts every reset operation even if one device fails, then reports any incomplete items.
 
@@ -128,6 +157,8 @@ Useful commands:
 
 ```text
 tank <1..4> <empty|middle|full>
+on <1..32> [<1..32> ...]
+off <1..32> [<1..32> ...]  (alias: of)
 output <temperature|humidity|pressure-low|pressure-high> <0..100>
 reset [all]
 set <relay-id|output-id|output-range> <value>
