@@ -390,6 +390,118 @@ def test_microamps_scaling():
     assert decode_pressure(12000, 3, LOW) == (12, 3)
 
 
+@pytest.mark.parametrize("state,running", [(0, False), (1, True), (2, True)])
+def test_plus_feedback_uses_documented_enum_and_full_error_code(state, running):
+    bus, cfg, hw, _, _ = rig(run_register=28, fault_register=27,
+                            run_mask=1, fault_mask=1)
+    bus.registers[7].update({27: 2, 28: state, 2: 0})
+    assert hw.drive_feedback(7) == (0, running, True)
+    assert all(request[1] == 3 for request in bus.events)
+    assert [int.from_bytes(request[2:4], "big") for request in bus.events] == [2, 27]
+
+
+@pytest.mark.parametrize("state", [3, 4, 65535])
+def test_plus_feedback_rejects_undocumented_state_even_with_zero_frequency(state):
+    bus, cfg, hw, _, _ = rig(run_register=28, fault_register=27)
+    bus.registers[7].update({27: 0, 28: state, 2: 0})
+    with pytest.raises(RuntimeError, match="недопустимое PA28"):
+        hw.drive_feedback(7)
+
+
+def test_plus_controller_uses_fwd_relay_and_waits_for_actual_state_before_closing():
+    bus, cfg, hw, time, ctl = rig(run_register=28, fault_register=27)
+    bus.registers[7].update({27: 0, 28: 0})
+    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    for _ in range(6):
+        ctl.tick()
+    assert bus.coils[31] and ctl.state == State.WAIT_HIGH_PRESSURE
+    bus.registers[7].update({2: 270, 28: 1})
+    bus.raw[1] = 13600
+    ctl.tick()
+    assert ctl.state == State.RUNNING
+    ctl.stop()
+    ctl.tick()
+    assert not bus.coils[31] and bus.coils[8]
+    bus.registers[7][2] = 0
+    ctl.tick()
+    assert ctl.state == State.STOPPING and bus.coils[8]
+    bus.registers[7][28] = 0
+    ctl.tick()
+    assert ctl.state == State.IDLE and not bus.coils[8]
+    assert not any(request[1] == 6 and int.from_bytes(request[2:4], "big") == 0x2000 for request in bus.events)
+
+
+def test_plus_current_fault_blocks_start_even_when_history_is_zero():
+    bus, cfg, hw, time, ctl = rig(run_register=28, fault_register=27)
+    bus.registers[7].update({27: 9, 28: 0, 10: 0})
+    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.tick()
+    assert ctl.state == State.STOPPING
+    ctl.tick()
+    assert ctl.state == State.FAULT
+    assert not any(bus.coils)
+
+
+def test_plus_undocumented_state_keeps_tier_open_after_stop_timeout():
+    bus, cfg, hw, time, ctl = rig(run_register=28, fault_register=27)
+    bus.registers[7].update({27: 0, 28: 0})
+    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    for _ in range(6):
+        ctl.tick()
+    bus.registers[7].update({2: 270, 28: 1})
+    ctl.stop()
+    ctl.tick()
+    bus.registers[7].update({2: 0, 28: 4})
+    time[0] += 16
+    ctl.tick()
+    assert ctl.state == State.FAULT and bus.coils[8]
+
+
+@pytest.mark.parametrize("drive", [7, 8])
+def test_plus_feedback_command_is_readonly_and_does_not_require_commissioning(tmp_path, drive):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    cfg = IrrigationSettings()
+    ctx.irrigation_settings = cfg
+    bus.registers[drive].update({27: 0, 28: 0, 10: 9})
+    execute_command(ctx, f"idd {drive} feedback")
+    output = ctx.console.export_text()
+    assert "PA28 (0x001C)=0 — STOP" in output
+    assert "текущая ошибка=0" in output
+    assert all(request[0] == drive and request[1] == 3 for request in bus.events)
+    assert ctx.irrigation_settings == cfg and not ctx.stand_config_path.exists()
+    assert ctx.irrigation is None and not any(bus.coils)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "exception", "crc"])
+def test_plus_feedback_does_not_fallback_to_frequency_or_history_on_error(failure):
+    bus, cfg, hw, _, _ = rig(run_register=28, fault_register=27)
+    bus.registers[7].update({27: 0, 28: 0})
+    def fail(request):
+        if int.from_bytes(request[2:4], "big") != 27:
+            return None
+        if failure == "exception":
+            return append_crc(bytes((7, 0x83, 2)))
+        return b"" if failure == "timeout" else bytes.fromhex("07 03 04 00 00 00 00 00 00")
+    bus.failure = fail
+    with pytest.raises(RuntimeError):
+        hw.drive_feedback(7)
+    assert all(request[1] == 3 for request in bus.events)
+
+
+def test_plus_configure_rejects_run_with_zero_frequency_and_open_fwd():
+    bus, cfg, hw, _, _ = rig(run_register=28, fault_register=27)
+    bus.registers[7].update({27: 0, 28: 1, 2: 0})
+    with pytest.raises(RuntimeError, match="STOP"):
+        hw.configure(7)
+    assert all(request[1] == 3 for request in bus.events)
+
+
+def test_plus_feedback_tab_completion():
+    from rtuforge.stand_completion import completion_candidates
+    assert completion_candidates("idd 7 f") == ["feedback", "frequency"]
+
+
 def test_high_pressure_zero_requires_live_zero_current_not_zero_register():
     assert decode_pressure(4000, 3, HIGH) == (4, 0)
     assert decode_pressure(13600, 3, HIGH) == pytest.approx((13.6, 60))

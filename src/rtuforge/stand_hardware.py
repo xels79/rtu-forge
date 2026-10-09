@@ -11,6 +11,8 @@ from .stand_protocol import (build_read_request, build_write_multiple_coils,
                              build_write_single_register, parse_percent,
                              validate_read_response, validate_write_response)
 from .stand_sensors import HIGH, LOW, Sensor, decode_pressure
+from .stand_vfd import (DriveFeedback, PLUS_FAULT_REGISTER, PLUS_STATE_REGISTER,
+                        decode_plus_feedback)
 
 
 @dataclass(frozen=True)
@@ -83,13 +85,22 @@ class StandHardware:
     def drive_feedback(self, drive: int) -> tuple[float, bool, bool]:
         cfg = self.settings
         if not cfg.vfd_verified or cfg.run_register < 0 or cfg.fault_register < 0:
-            raise RuntimeError("RUN/STOP и текущая авария IDD не подтверждены: настройте run_register/fault_register и vfd_verified; PA10 — история ошибок")
+            raise RuntimeError("Профиль обратной связи IDD не выбран/не проверен: задайте run_register/fault_register и vfd_verified. Для IDD222M21E (mini PLUS) см. idd <7|8> feedback: PA28=0x001C, PA27=0x001B; PA10 — история ошибок")
+        if cfg.run_register == PLUS_STATE_REGISTER and cfg.fault_register == PLUS_FAULT_REGISTER:
+            feedback = self.plus_feedback(drive)
+            return feedback.output_hz, feedback.running, feedback.fault
         hz = self.registers(drive, 3, 2, 1)[0] / 10
         if hz > 400:
             raise RuntimeError(f"IDD {drive}: выходная частота вне документированного диапазона 0..400 Гц; проверьте масштабирование")
         run = self.registers(drive, 3, cfg.run_register, 1)[0]
         fault = self.registers(drive, 3, cfg.fault_register, 1)[0]
         return hz, bool(run & cfg.run_mask), bool(fault & cfg.fault_mask)
+
+    def plus_feedback(self, drive: int) -> DriveFeedback:
+        """Read the published PLUS map without commissioning or actuator writes."""
+        frequency = self.registers(drive, 3, 2, 1)[0]
+        error, state = self.registers(drive, 3, PLUS_FAULT_REGISTER, 2)
+        return decode_plus_feedback(frequency, state, error)
 
     def precheck(self, drive: int) -> None:
         self.precheck_relays()

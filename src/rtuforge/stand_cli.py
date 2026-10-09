@@ -177,7 +177,7 @@ def _registers(ctx: StandContext, slave: int, fn: int, addr: int, count: int) ->
 
 
 def _idd(ctx: StandContext, args: list[str]) -> None:
-    usage = "idd <7|8> <status|setup|frequency ПРОЦЕНТ|monitor|configure --confirm>"
+    usage = "idd <7|8> <status|setup|frequency ПРОЦЕНТ|monitor|feedback|configure --confirm>"
     if args and args[0].lower() == "all":
         if len(args) != 2 or args[1].lower() not in {"status", "setup", "monitor"}:
             raise ValueError("idd all <status|setup|monitor> — только чтение; запись выполняется для одного IDD")
@@ -224,6 +224,11 @@ def _idd(ctx: StandContext, args: list[str]) -> None:
             return
         hz, running, fault = hw.drive_feedback(slave)
         ctx.console.print(f"Выход={hz:g} Гц; {'RUN' if running else 'STOP'}; текущая авария={fault}", markup=False)
+    elif action == "feedback" and len(args) == 2:
+        feedback = hw.plus_feedback(slave)
+        state = {0: "STOP", 1: "RUN вперёд", 2: "RUN назад"}[feedback.state]
+        ctx.console.print(f"IDD {slave}, карта mini PLUS: PA02={feedback.output_hz:g} Гц; PA28 (0x001C)={feedback.state} — {state}; PA27 (0x001B), текущая ошибка={feedback.error_code}.", markup=False)
+        ctx.console.print("Только чтение обратной связи. Пуск/останов остаётся через реле FWD; параметры и флаги stand.ini не менялись.", markup=False)
     elif action == "configure" and args[2:] == ["--confirm"]:
         hw.configure(slave)
         ctx.console.print("Записаны и проверены Pb01=5, Pb02=1, Pd15=6, Pd16=7; Pb05/Pb06 не менялись.", markup=False)
@@ -511,7 +516,7 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
     else:
         text = (
             "Stand Forge commands:\n"
-            "  idd <7|8> status|setup|frequency <процент>|monitor|configure --confirm\n"
+            "  idd <7|8> status|setup|frequency <процент>|monitor|feedback|configure --confirm\n"
             "  ai [types] — датчики RTU 6\n"
             "  start <rack> <tier> broth <percent> | stop | emergency-stop\n"
             "  pressure | test-pressure low|high [count] | test-pressure stop\n"
