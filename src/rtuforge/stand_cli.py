@@ -32,6 +32,7 @@ from .irrigation_config import IrrigationSettings, load_irrigation_settings, set
 from .irrigation_service import IrrigationService
 from .stand_hardware import StandHardware
 from .stand_help import GENERAL_RU, HELP_RU
+from .irrigation_preflight import check_start, parse_start_args
 
 
 @dataclass
@@ -262,11 +263,7 @@ def _test_pressure(ctx: StandContext, args: list[str]) -> None:
 
 
 def _start(ctx: StandContext, args: list[str]) -> None:
-    if len(args) != 4:
-        raise ValueError("start <1..2> <1..3> broth <процент>")
-    rack, tier, liquid, percent = int(args[0]), int(args[1]), args[2].lower(), parse_percent(args[3])
-    if rack not in (1, 2) or tier not in (1, 2, 3) or liquid != "broth" or percent <= 0:
-        raise ValueError("start <1..2> <1..3> broth <процент больше 0 и до 100>")
+    rack, tier, liquid, percent = parse_start_args(args)
     ctx.irrigation_settings.require_commissioned()
     if ctx.irrigation is None:
         ctx.irrigation = IrrigationService(_hardware(ctx, quiet=True), ctx.irrigation_settings,
@@ -278,6 +275,19 @@ def _start(ctx: StandContext, args: list[str]) -> None:
             pass
         if ctx.irrigation.controller.state == State.FAULT:
             raise RuntimeError(ctx.irrigation.controller.fault_reason)
+
+
+def _check_start(ctx: StandContext, args: list[str]) -> None:
+    rack, tier, liquid, percent = parse_start_args(args)
+    report = check_start(_hardware(ctx, quiet=True), ctx.irrigation_settings,
+                         rack, tier, liquid, percent)
+    ctx.console.print(f"Проверка без пуска: IDD {report.drive}; выбор НВД — реле {report.selector}; ярус — реле {report.valve}.", markup=False)
+    for check in report.checks:
+        ctx.console.print(f"{'OK' if check.passed else 'БЛОК'} — {check.name}: {check.detail}", markup=False)
+    ctx.console.print("Реле, частота и stand.ini не изменялись. Проверки повторятся при настоящем start.", markup=False)
+    if not report.ready:
+        raise RuntimeError("Автопуск не готов: устраните причины БЛОК выше; исправность AI не подтверждает обратную связь IDD и аппаратные защиты")
+    ctx.console.print("Проверка пуска пройдена. Для запуска выполните start с теми же аргументами.", markup=False)
 
 
 def _stop(ctx: StandContext, *, emergency: bool = False) -> None:
@@ -576,6 +586,12 @@ def execute_command(ctx: StandContext, line: str) -> str | None:
     if busy and (mutating or command == "test-pressure" and args != ["log"]):
         raise RuntimeError(f"{command}: конфликт с циклом полива/FAULT; выполните stop и дождитесь IDLE или reset fault")
     if command == "start":
+        if args and args[0].lower() == "check":
+            if busy:
+                raise RuntimeError("start check: сначала остановите текущий цикл и дождитесь IDLE / reset fault")
+            with ctx.bus_lock:
+                _check_start(ctx, args[1:])
+            return None
         _start(ctx, args)
         return None
     # This same lock protects worker samples, manual operations and port lifecycle.

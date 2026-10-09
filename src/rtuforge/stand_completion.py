@@ -53,7 +53,13 @@ def completion_candidates(text: str) -> list[str]:
     elif len(completed) == 3 and completed[0] == "idd" and completed[2] == "configure":
         choices = ("--confirm",)
     elif completed == ["start"]:
+        choices = ("1", "2", "check")
+    elif completed == ["start", "check"]:
         choices = ("1", "2")
+    elif len(completed) == 3 and completed[:2] == ["start", "check"]:
+        choices = ("1", "2", "3")
+    elif len(completed) == 4 and completed[:2] == ["start", "check"]:
+        choices = ("broth",)
     elif len(completed) == 2 and completed[0] == "start":
         choices = ("1", "2", "3")
     elif len(completed) == 3 and completed[0] == "start":

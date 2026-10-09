@@ -70,13 +70,17 @@ class IrrigationSettings:
 
     def require_commissioned(self) -> None:
         self.validate()
-        missing = [f.name for f in fields(self) if (f.name == "enabled" or f.name.endswith("_verified"))
-                   and not getattr(self, f.name)]
-        if self.run_register < 0 or self.fault_register < 0:
-            missing.append("run_register/fault_register")
+        missing = self.commissioning_blockers()
         if missing:
             raise RuntimeError("Автопуск заблокирован: подтвердите на оборудовании и задайте в stand.ini: "
-                               + ", ".join(missing) + ". См. help start и IRRIGATION.md")
+                               + ", ".join(missing) + ". См. start check, help start и IRRIGATION.md")
+
+    def commissioning_blockers(self) -> list[str]:
+        """List missing confirmations without changing settings or connecting hardware."""
+        missing = [f.name for f in fields(self) if (f.name == "enabled" or f.name.endswith("_verified"))
+                   and not getattr(self, f.name)]
+        missing.extend(name for name in ("run_register", "fault_register") if getattr(self, name) < 0)
+        return missing
 
     def mapping(self, rack: int) -> tuple[int, int]:
         pump = self.rack1_pump if rack == 1 else self.rack2_pump
@@ -92,13 +96,19 @@ OPTION_SPECS: tuple[OptionSpec, ...] = tuple(
 )
 
 
+def _parse_option(spec: OptionSpec, value: str) -> str:
+    if spec.name in {"run_register", "fault_register", "run_mask", "fault_mask"} and value.strip().lower().startswith("0x"):
+        value = str(int(value, 16))
+    return parse_value(spec, value)
+
+
 def load_irrigation_settings(path: Path) -> IrrigationSettings:
     parser = configparser.ConfigParser()
     if path.exists():
         parser.read(path, encoding="utf-8")
     values = {}
     for spec in OPTION_SPECS:
-        value = parse_value(spec, parser.get(spec.section, spec.name, fallback=spec.default))
+        value = _parse_option(spec, parser.get(spec.section, spec.name, fallback=spec.default))
         values[spec.name] = value == "true" if spec.kind == "bool" else int(value) if spec.kind == "int" else float(value)
     settings = IrrigationSettings(**values)
     settings.validate()
@@ -109,7 +119,7 @@ def set_irrigation_option(path: Path, settings: IrrigationSettings, name: str, v
     spec = next((s for s in OPTION_SPECS if s.name == name), None)
     if spec is None:
         raise ValueError("Неизвестная настройка полива. См. help pressure")
-    parsed = parse_value(spec, value)
+    parsed = _parse_option(spec, value)
     typed = parsed == "true" if spec.kind == "bool" else int(parsed) if spec.kind == "int" else float(parsed)
     updated = replace(settings, **{name: typed})
     updated.validate()

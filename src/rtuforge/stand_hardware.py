@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from math import ceil
 
 from .irrigation import DRIVE_START, Sample, StopRequested
 from .irrigation_config import IrrigationSettings
@@ -20,6 +21,14 @@ class PressureReading:
     current_ma: float | None
     bar: float | None
     error: str = ""
+
+
+@dataclass(frozen=True)
+class FrequencyPlan:
+    percent: float
+    minimum_raw: int
+    maximum_raw: int
+    setpoint_raw: int
 
 
 class StandHardware:
@@ -83,13 +92,17 @@ class StandHardware:
         return hz, bool(run & cfg.run_mask), bool(fault & cfg.fault_mask)
 
     def precheck(self, drive: int) -> None:
+        self.precheck_relays()
+        self.check_setup(drive)
+
+    def precheck_relays(self) -> None:
+        """Verify inactive hydraulic relays without changing any coils."""
         coils = self.coils()
         # Do not start onto an already active hydraulic circuit or another rack.
         owned = [1, *range(9, 15), 19, 20, 23, 31, 32]
         active = [ch for ch in owned if coils[ch - 1]]
         if active:
             raise RuntimeError(f"Пуск запрещён: уже включены реле {active}; проверьте гидравлику и выполните stop")
-        self.check_setup(drive)
 
     def confirm_off(self, channels: tuple[int, ...]) -> None:
         coils = self.coils()
@@ -103,7 +116,8 @@ class StandHardware:
         if sources != [5, 1] or fwd != [6, 7]:
             raise RuntimeError(f"IDD {drive}: требуются Pb01=5, Pb02=1, Pd15=6, Pd16=7; получены {sources}, {fwd}. См. idd {drive} configure --confirm")
 
-    def set_frequency(self, drive: int, percent: float) -> None:
+    def frequency_plan(self, drive: int, percent: float) -> FrequencyPlan:
+        """Read configuration and validate a setpoint without writing or starting."""
         percent = parse_percent(percent)
         if percent <= 0:
             raise ValueError("Задание frequency должно быть больше 0%")
@@ -114,7 +128,13 @@ class StandHardware:
         requested = maximum * percent / 100
         value = int(requested + .5)
         if requested < minimum or value == 0:
-            raise RuntimeError(f"Задание {requested / 10:g} Гц ниже минимума Pb06={minimum / 10:g} Гц. Проверьте процент и настройки IDD; Pb05/Pb06 автоматически не меняются")
+            # Round advice upward so copying it cannot produce another below-minimum request.
+            minimum_percent = ceil(minimum * 100_000_000 / maximum) / 1_000_000
+            raise RuntimeError(f"Задание {requested / 10:g} Гц ниже минимума Pb06={minimum / 10:g} Гц. Минимальный процент от Pb05: {minimum_percent:.6f}%. Проверьте процент и настройки IDD; Pb05/Pb06 автоматически не меняются")
+        return FrequencyPlan(percent, minimum, maximum, value)
+
+    def set_frequency(self, drive: int, percent: float) -> None:
+        value = self.frequency_plan(drive, percent).setpoint_raw
         self.write_register(drive, 0x2001, value)
         if self.settings.setpoint_readback:
             # 0x2001 is write-only in the published manual; only enable for verified firmware.

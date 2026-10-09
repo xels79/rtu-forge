@@ -584,3 +584,148 @@ def test_cli_ctrl_c_stops_worker_before_disconnect(tmp_path, monkeypatch):
     assert stand_cli.main() == 130
     assert not transport.connected and not any(bus.coils)
     assert not observed[0].thread.is_alive()
+
+
+def test_preflight_is_readonly_and_shares_frequency_calculation():
+    from rtuforge.irrigation_preflight import check_start
+    bus, cfg, hw, _, _ = rig()
+    report = check_start(hw, cfg, 1, 1, "broth", 60)
+    assert report.ready
+    assert (report.drive, report.selector, report.valve) == (7, 19, 9)
+    assert all(request[1] in (1, 3, 4) for request in bus.events)
+    assert not any(bus.coils) and bus.registers[7][1] == 0
+    plan = hw.frequency_plan(7, 60)
+    hw.set_frequency(7, 60)
+    assert bus.registers[7][1] == plan.setpoint_raw == 270
+
+
+def test_preflight_collects_sensor_drive_relay_and_commissioning_failures():
+    from rtuforge.irrigation_preflight import check_start
+    bus, cfg, hw, _, _ = rig(enabled=False)
+    bus.raw[0] = 0
+    bus.coils[31] = True
+    bus.registers[7][0x65] = 2
+    bus.registers[7][0x5001] = 1
+    report = check_start(hw, cfg, 1, 1, "broth", 60)
+    assert not report.ready
+    failures = [check for check in report.checks if not check.passed]
+    assert len(failures) == 5
+    assert any("AI1" == check.name for check in failures)
+    assert any("Pb01" in check.detail for check in failures)
+    assert any("enabled" in check.detail for check in failures)
+    assert all(request[1] in (1, 3, 4) for request in bus.events)
+    assert bus.coils[31]  # even an unsafe initial state is never silently changed
+
+
+def test_preflight_calibrated_sensors_do_not_bypass_unknown_drive_feedback():
+    from rtuforge.irrigation_preflight import check_start
+    bus, cfg, hw, _, _ = rig(ai_verified=True, run_register=-1, fault_register=-1)
+    report = check_start(hw, cfg, 1, 1, "broth", 60)
+    assert not report.ready
+    assert all(check.passed for check in report.checks if check.name in ("AI1", "AI2"))
+    assert any("run_register" in check.detail for check in report.checks if not check.passed)
+    assert all(request[1] in (1, 3, 4) for request in bus.events)
+
+
+@pytest.mark.parametrize("failure", ["pressure", "frequency", "running", "timeout"])
+def test_preflight_detects_operating_limits_and_communication_failure(failure):
+    from rtuforge.irrigation_preflight import check_start
+    bus, cfg, hw, _, _ = rig()
+    percent = 60
+    if failure == "pressure":
+        bus.raw[1] = 16000
+    elif failure == "frequency":
+        percent = 35
+    elif failure == "running":
+        bus.registers[7][0x5000] = 1
+    else:
+        bus.failure = lambda request: b"" if request[0] == 6 else None
+    report = check_start(hw, cfg, 1, 1, "broth", percent)
+    assert not report.ready
+    assert all(request[1] in (1, 3, 4) for request in bus.events)
+    assert any(check.passed and check.name == "Релейная плата" for check in report.checks)
+
+
+@pytest.mark.parametrize("args", [[], ["3", "1", "broth", "60"], ["1", "1", "water", "60"],
+                                  ["1", "1", "broth", "nan"], ["1", "1", "broth", "0"]])
+def test_preflight_cli_rejects_invalid_args_before_connecting(tmp_path, args):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    with pytest.raises(ValueError):
+        execute_command(ctx, "start check " + " ".join(args))
+    assert not transport.connected and not bus.events
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_preflight_cli_does_not_create_controller_or_change_user_files(tmp_path, enabled):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    ctx.irrigation_settings = replace(ctx.irrigation_settings, enabled=enabled)
+    original = "[irrigation]\nenabled=false\n[private]\nx=keep\n"
+    ctx.stand_config_path.write_text(original, encoding="utf-8")
+    if enabled:
+        execute_command(ctx, "start check 1 1 broth 60")
+    else:
+        with pytest.raises(RuntimeError, match="БЛОК"):
+            execute_command(ctx, "start check 1 1 broth 60")
+    assert ctx.irrigation is None
+    assert not any(bus.coils) and bus.registers[7][1] == 0
+    assert ctx.stand_config_path.read_text(encoding="utf-8") == original
+    assert ctx.irrigation_settings.enabled == enabled
+
+
+def test_successful_preflight_does_not_cache_permission_to_start(tmp_path):
+    from rtuforge.stand_cli import execute_command, _shutdown
+    ctx, transport, bus = cli_rig(tmp_path)
+    execute_command(ctx, "start check 1 1 broth 60")
+    bus.raw[0] = 0
+    ctx.one_shot = False
+    execute_command(ctx, "start 1 1 broth 60")
+    try:
+        assert ctx.irrigation.finished.wait(2)
+        assert ctx.irrigation.controller.state == State.FAULT
+        assert not any(request[1] == 15 and request[7] == 1 for request in bus.events)
+    finally:
+        _shutdown(ctx)
+
+
+def test_preflight_respects_explicit_pump_mapping():
+    from rtuforge.irrigation_preflight import check_start
+    bus, cfg, hw, _, _ = rig(pump1_drive=8, pump2_drive=7)
+    bus.registers[8][0x69] = 600
+    report = check_start(hw, cfg, 1, 3, "broth", 50)
+    assert report.ready
+    assert (report.drive, report.selector, report.valve) == (8, 19, 11)
+    assert any("30 Гц" in check.detail for check in report.checks)
+    assert not any(request[0] == 7 for request in bus.events)
+
+
+def test_hex_feedback_configuration_roundtrip(tmp_path):
+    path = tmp_path / "stand.ini"
+    cfg = IrrigationSettings()
+    for name, value in (("run_register", "0x5000"), ("fault_register", "0x5001"),
+                        ("run_mask", "0x02"), ("fault_mask", "0xFF00")):
+        cfg = set_irrigation_option(path, cfg, name, value)
+    assert load_irrigation_settings(path) == cfg
+    assert (cfg.run_register, cfg.fault_register, cfg.run_mask, cfg.fault_mask) == (0x5000, 0x5001, 2, 0xFF00)
+    path.write_text("[irrigation]\nrun_register=0x5000\nfault_register=0x5001\n", encoding="utf-8")
+    assert load_irrigation_settings(path).run_register == 0x5000
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        set_irrigation_option(path, cfg, "run_register", "0x0002")
+    assert path.read_bytes() == before
+
+
+def test_preflight_tab_completion():
+    from rtuforge.stand_completion import completion_candidates
+    assert completion_candidates("start c") == ["check"]
+    assert completion_candidates("start check ") == ["1", "2"]
+    assert completion_candidates("start check 1 ") == ["1", "2", "3"]
+    assert completion_candidates("start check 1 1 ") == ["broth"]
+
+
+def test_minimum_percent_advice_rounds_up_to_accepted_value():
+    bus, cfg, hw, _, _ = rig()
+    with pytest.raises(RuntimeError, match="44.444445%"):
+        hw.frequency_plan(7, 35)
+    assert hw.frequency_plan(7, 44.444445).setpoint_raw == 200
