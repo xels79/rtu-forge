@@ -301,10 +301,18 @@ def _stop(ctx: StandContext, *, emergency: bool = False) -> None:
         hw.emergency_off()
         ctx.console.print("Сняты команды пуска: реле 32, 31, 1; релейная плата подтвердила отключение. Клапаны ярусов не закрывались.", markup=False)
         if not emergency:
+            errors = []
             for drive in (7, 8):
-                hz, running, _ = hw.drive_feedback(drive)
-                if running or hz > ctx.irrigation_settings.stop_hz:
-                    raise RuntimeError(f"IDD {drive}: STOP ещё не подтверждён; повторите stop / idd {drive} monitor")
+                try:
+                    hz, running, _ = hw.drive_feedback(drive)
+                    if running or hz > ctx.irrigation_settings.stop_hz:
+                        errors.append(f"IDD {drive}: частота={hz:g} Гц, {'RUN' if running else 'STOP'}")
+                except (RuntimeError, OSError) as exc:
+                    errors.append(f"IDD {drive}: {exc}")
+            if errors:
+                raise RuntimeError("Команды пуска сняты и подтверждены релейной платой, но останов IDD не подтверждён: "
+                                   + "; ".join(errors))
+            ctx.console.print("IDD 7 и 8: STOP и частота около нуля подтверждены.", markup=False)
 
 
 def _tank(ctx: StandContext, parts: list[str]) -> None:

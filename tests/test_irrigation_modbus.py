@@ -12,7 +12,7 @@ from rtuforge.irrigation_service import IrrigationService
 from rtuforge.stand_config import load_stand_settings, save_stand_settings, StandSettings
 from rtuforge.stand_hardware import StandHardware
 from rtuforge.stand_protocol import build_read_request, validate_read_response
-from rtuforge.stand_sensors import LOW, decode_pressure, ma_to_bar
+from rtuforge.stand_sensors import HIGH, LOW, decode_pressure, ma_to_bar
 
 
 @pytest.fixture(autouse=True)
@@ -390,6 +390,27 @@ def test_microamps_scaling():
     assert decode_pressure(12000, 3, LOW) == (12, 3)
 
 
+def test_high_pressure_zero_requires_live_zero_current_not_zero_register():
+    assert decode_pressure(4000, 3, HIGH) == (4, 0)
+    assert decode_pressure(13600, 3, HIGH) == pytest.approx((13.6, 60))
+    with pytest.raises(ValueError, match="не подтверждает обрыв или нулевое давление") as error:
+        decode_pressure(0, 3, HIGH)
+    assert "4000 (4 мА)" in str(error.value)
+
+
+def test_captured_ai_frame_preserves_zero_and_blocks_sample():
+    bus, cfg, hw, _, _ = rig()
+    captured = bytes.fromhex("06 04 08 10 4B 00 00 00 00 00 00 C4 71")
+    bus.failure = lambda request: captured if request[:2] == b"\x06\x04" else None
+    low, high = hw.pressure()
+    assert low.raw == 4171 and low.bar == pytest.approx(0.064125)
+    assert high.raw == 0 and high.bar is None
+    assert "недостоверное измерение" in high.error
+    with pytest.raises(RuntimeError, match="AI2: raw=0"):
+        hw.sample(7)
+    assert all(request[1] in (3, 4) for request in bus.events)
+
+
 @pytest.mark.parametrize("topic", ["", "idd", "ai", "start", "stop", "pressure", "test-pressure", "reset", "set", "exit"])
 def test_cli_russian_help_never_connects_or_writes(tmp_path, topic):
     from test_standforge import make_ctx
@@ -446,6 +467,40 @@ def test_cli_emergency_stop_works_without_controller_or_commissioning(tmp_path):
     execute_command(ctx, "test-pressure stop")
     assert not bus.coils[0] and not bus.coils[30] and not bus.coils[31]
     assert bus.coils[8]
+
+
+def test_cli_stop_distinguishes_relay_off_from_unknown_drive_stop(tmp_path):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    ctx.irrigation_settings = IrrigationSettings()
+    bus.coils[0] = bus.coils[30] = bus.coils[31] = True
+    bus.coils[8] = True
+    with pytest.raises(RuntimeError, match="Команды пуска сняты.*останов IDD не подтверждён") as error:
+        execute_command(ctx, "stop")
+    assert "IDD 7" in str(error.value) and "IDD 8" in str(error.value)
+    assert not any(bus.coils[ch - 1] for ch in (1, 31, 32))
+    assert bus.coils[8]
+
+
+def test_cli_stop_checks_second_drive_when_first_does_not_respond(tmp_path):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    bus.failure = lambda request: b"" if request[0] == 7 else None
+    bus.registers[8][2] = 270
+    bus.registers[8][0x5000] = 1
+    with pytest.raises(RuntimeError, match="останов IDD не подтверждён") as error:
+        execute_command(ctx, "stop")
+    assert "IDD 7" in str(error.value) and "IDD 8: частота=27 Гц, RUN" in str(error.value)
+    assert any(request[0] == 8 for request in bus.events)
+    assert not any(bus.coils)
+
+
+def test_cli_stop_reports_confirmed_drive_stop(tmp_path):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    execute_command(ctx, "stop")
+    assert "IDD 7 и 8: STOP и частота около нуля подтверждены" in ctx.console.export_text()
+    assert not any(bus.coils)
 
 
 def test_cli_start_allows_stop_and_blocks_conflicting_commands(tmp_path):

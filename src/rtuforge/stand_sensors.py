@@ -32,7 +32,7 @@ def ma_to_bar(current_ma: float, maximum_bar: float, *, tolerance_ma: float = 0.
         or not isfinite(tolerance_ma) or not 0 <= tolerance_ma < 4):
         raise ValueError("Некорректное значение датчика")
     if current_ma < 4 - tolerance_ma or current_ma > 20 + tolerance_ma:
-        raise ValueError("Обрыв петли или ток датчика вне диапазона 4..20 мА")
+        raise ValueError("Недостоверный сигнал: ток вне диапазона 4..20 мА; причина по одному измерению не установлена")
     return max(0.0, min(maximum_bar, (current_ma - 4) * maximum_bar / 16.0))
 
 
@@ -50,6 +50,13 @@ def decode_pressure(raw: int, mode: int, sensor: Sensor) -> tuple[float, float]:
         raise ValueError(f"AI{sensor.channel}: требуется тип 3 (4–20 мА), получен {mode}; проверьте ai types")
     if not 0 <= raw <= 65535:
         raise ValueError(f"AI{sensor.channel}: неверный сырой регистр")
+    if raw == 0:
+        raise ValueError(
+            f"AI{sensor.channel}: raw=0 — недостоверное измерение для типа 3. "
+            "По документированному масштабу нулевому давлению соответствует raw около 4000 (4 мА). "
+            "Причина не установлена: проверьте ток петли, питание, перемычку канала и карту конкретной версии модуля; "
+            "raw=0 не подтверждает обрыв или нулевое давление"
+        )
     current = raw / 1000.0
     try:
         pressure = ma_to_bar(current, sensor.maximum_bar)
