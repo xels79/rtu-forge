@@ -9,6 +9,9 @@ from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, RELAY_CHANNEL_C
 
 
 TOP_LEVEL_COMMANDS = (
+    "idd",
+    "ai",
+    "start",
     "tank",
     "on",
     "off",
@@ -38,6 +41,12 @@ def completion_candidates(text: str) -> list[str]:
     choices: Iterable[str]
     if not completed:
         choices = TOP_LEVEL_COMMANDS
+    elif completed == ["idd"]:
+        choices = ("7", "8")
+    elif len(completed) == 2 and completed[0] == "idd":
+        choices = ("status", "setup", "frequency")
+    elif completed == ["ai"]:
+        choices = ("types",)
     elif completed == ["tank"]:
         choices = ("1", "2", "3", "4")
     elif len(completed) == 2 and completed[0] == "tank":
@@ -53,7 +62,7 @@ def completion_candidates(text: str) -> list[str]:
     elif completed == ["reset"]:
         choices = ("all",)
     elif completed == ["help"]:
-        choices = ("tank", "on", "off", "of", "output", "reset", "set", "status", "connect", "ports")
+        choices = ("idd", "ai", "start", "tank", "on", "off", "of", "output", "reset", "set", "status", "connect", "ports")
     else:
         choices = ()
     return sorted(
