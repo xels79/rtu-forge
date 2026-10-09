@@ -99,7 +99,7 @@ def test_completion():
     assert "pressure-high" in completion_candidates("output pressure-")
     assert completion_candidates("set output-range 4") == ["4-20ma"]
     assert "reset" in completion_candidates("res")
-    assert completion_candidates("reset ") == ["all"]
+    assert completion_candidates("reset ") == ["all", "fault"]
 
 
 class FakeTransport:

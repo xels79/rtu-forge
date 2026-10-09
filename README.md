@@ -931,6 +931,53 @@ One-shot mode suppresses the automatic `Connected ...` message.
 
 Expected user/runtime errors are returned as concise messages with exit code `1`, without a Python traceback.
 
+## Stand Forge: полив и давление
+
+`standforge` сохраняет ручные команды тестового стенда и добавляет опциональный
+полив в отдельном цикле с непрерывным контролем давления. Автопуск отключён до
+проверки реального оборудования; приложение само не запускает насосы.
+
+```text
+standforge --home . help start
+standforge --home . idd 7 status
+standforge --home . idd 7 setup
+standforge --home . idd 7 frequency 60
+standforge --home . idd 7 monitor
+standforge --home . test-pressure low 10
+```
+
+В интерактивной консоли: `start 1 1 broth 60`, `stop`, `emergency-stop`,
+`pressure`, `test-pressure stop`, `reset fault`. `help`, `help idd`, `help ai`,
+`help start`, `help stop`, `help pressure`, `help test-pressure` имеют русскую
+справку при `ui.language=ru`; новые команды и настройки дополняются клавишей Tab.
+Частота задаётся в процентах Pb05. Для Pb05=45 Гц/Pb06=20 Гц запрос 35%
+запрещён, поскольку он даёт 15,75 Гц. Границы IDD автоматически не меняются.
+
+Новые mutable options зарегистрированы в `irrigation_config.OPTION_SPECS`,
+хранятся в `[irrigation]` пользовательского `stand.ini` и изменяются только явной
+командой `set irrigation <имя> <значение>` либо редактированием файла:
+
+| Параметры | Значения по умолчанию |
+|---|---|
+| enabled; ai_verified; vfd_verified; hydraulics_verified; protections_verified; pressure_unit_verified; relay_id_verified | false для каждого |
+| pump1_drive; pump2_drive; rack1_pump; rack2_pump | 7; 8; 1; 2 |
+| low_ready_bar; low_min_bar; high_target_bar; high_min_bar; high_max_bar; hysteresis_bar | 1; 0.5; 60; 50; 70; 0.2 |
+| valve_delay_ms; prime_timeout_ms; rise_timeout_ms; stop_timeout_ms; leak_delay_ms; poll_ms | 2000; 10000; 20000; 15000; 2000; 250 |
+| stop_hz; run_register; run_mask; fault_register; fault_mask; setpoint_readback | 0.1; -1; 1; -1; 65535; false |
+
+Все времена конфигурации — миллисекунды. Пороги являются примерами для тестов;
+значение ДВД 60 требует подтверждения единиц давления на оборудовании. AI режима
+3 декодируются как микроамперы, raw=0 считается ошибкой. Опубликованное
+руководство IDD MINI подтверждает PA01/PA02, но не определяет однозначно
+RUN/STOP и текущую аварию: неизвестные регистры оставлены `-1`, пуск блокируется.
+PA10 содержит историю и не заменяет текущую аварию.
+
+Полный пример конфигурации — [examples/stand.ini](examples/stand.ini).
+Последовательность, назначение параметров, источники карт Modbus, ограничения
+и процедура проверки описаны в [IRRIGATION.md](IRRIGATION.md), прежние ручные
+команды — в [STANDFORGE.md](STANDFORGE.md). Реальная аппаратная защита и проверка
+гидравлики обязательны перед разрешением автоматического полива.
+
 ## Development
 
 Agent rules are in `AGENTS.md`.

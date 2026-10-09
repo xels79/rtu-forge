@@ -17,6 +17,15 @@ class FakeHardware:
     def sample(self, drive):
         return self.current
 
+    def precheck(self, drive):
+        pass
+
+    def confirm_off(self, channels):
+        pass
+
+    def drive_feedback(self, drive):
+        return self.current.hz, self.current.running, self.current.fault
+
 
 class TestIrrigation(unittest.TestCase):
     def setUp(self):
@@ -33,6 +42,8 @@ class TestIrrigation(unittest.TestCase):
 
     def begin(self):
         self.ctl.start(1, 1, "broth", 35, drive=7, selector=19)
+        for _ in range(3):
+            self.ctl.tick()
 
     def test_start_and_stop_waits_for_zero(self):
         self.begin()
@@ -40,6 +51,7 @@ class TestIrrigation(unittest.TestCase):
         self.assertNotIn(("relay", 32, True), self.hw.events)
         self.advance(3)
         self.assertEqual(self.ctl.state, State.BOOST)
+        self.advance(.2)
         self.advance(.2)
         self.assertIn(("relay", 32, True), self.hw.events)
         self.hw.current = Sample(1.4, 30, 16, True)

@@ -1,5 +1,27 @@
 # Stand Forge
 
+## Автоматический полив и русская диагностика
+
+Добавлены `idd <7|8> status|setup|frequency <процент>|monitor`, явная настройка
+`idd <7|8> configure --confirm`, `ai [types]`, `pressure`, `test-pressure low/high`,
+`start <стеллаж> <ярус> broth <процент>`, `stop`, `emergency-stop`,
+`test-pressure stop` и `reset fault`. Подробная русская справка: `help idd`,
+`help ai`, `help start`, `help stop`, `help pressure`, `help test-pressure`.
+Tab дополняет команды и настройки.
+
+Пуск работает в отдельном цикле, STOP остаётся доступен во время запуска.
+Ручные изменения при активном поливе/FAULT запрещены. Автопуск отключён до
+проверки входов, обратной связи IDD, единиц давления, адреса реле, гидравлики
+и аппаратных защит. Все новые параметры `[irrigation]` и пример конфигурации
+описаны в [IRRIGATION.md](IRRIGATION.md). Состояния и снятие пуска не заменяют
+аппаратный аварийный останов.
+
+Следующие прежние команды относятся к **имитационному тестовому стенду**.
+На поливной установке реле 1..8 имеют другое назначение. `reset all` выключает
+все реле сразу; для полива используется `stop`, который оставляет клапан яруса
+открытым до подтверждённого останова привода. AI устройства 6 — настоящие входы;
+аналоговые выходы ниже используются только для имитации и сохранены без изменения.
+
 Stand Forge is a small test-bench console built on RTU Forge's existing serial transport and configuration.
 
 It controls two Waveshare Modbus RTU devices:

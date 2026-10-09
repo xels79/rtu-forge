@@ -28,7 +28,8 @@ HIGH = Sensor("ПД100-ДИ10,0-111-0,5", 2, 100.0)
 
 def ma_to_bar(current_ma: float, maximum_bar: float, *, tolerance_ma: float = 0.1) -> float:
     """Scale calibrated 4..20mA to bar; fault on broken/out-of-range loop."""
-    if not isfinite(current_ma) or not isfinite(maximum_bar) or maximum_bar <= 0:
+    if (not isfinite(current_ma) or not isfinite(maximum_bar) or maximum_bar <= 0
+        or not isfinite(tolerance_ma) or not 0 <= tolerance_ma < 4):
         raise ValueError("Некорректное значение датчика")
     if current_ma < 4 - tolerance_ma or current_ma > 20 + tolerance_ma:
         raise ValueError("Обрыв петли или ток датчика вне диапазона 4..20 мА")
@@ -41,3 +42,17 @@ def low_pressure(current_ma: float) -> float:
 
 def high_pressure(current_ma: float) -> float:
     return ma_to_bar(current_ma, HIGH.maximum_bar)
+
+
+def decode_pressure(raw: int, mode: int, sensor: Sensor) -> tuple[float, float]:
+    """Waveshare Input 8CH protocol V2: mode 3 registers contain microamps."""
+    if mode != 3:
+        raise ValueError(f"AI{sensor.channel}: требуется тип 3 (4–20 мА), получен {mode}; проверьте ai types")
+    if not 0 <= raw <= 65535:
+        raise ValueError(f"AI{sensor.channel}: неверный сырой регистр")
+    current = raw / 1000.0
+    try:
+        pressure = ma_to_bar(current, sensor.maximum_bar)
+    except ValueError as exc:
+        raise ValueError(f"AI{sensor.channel}: raw={raw}, ток={current:g} мА: {exc}") from exc
+    return current, pressure

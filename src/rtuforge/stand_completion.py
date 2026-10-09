@@ -6,12 +6,17 @@ from prompt_toolkit.completion import CompleteEvent, Completer, Completion
 from prompt_toolkit.document import Document
 
 from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, RELAY_CHANNEL_COUNT
+from .irrigation_config import OPTION_SPECS
 
 
 TOP_LEVEL_COMMANDS = (
     "idd",
     "ai",
     "start",
+    "stop",
+    "pressure",
+    "test-pressure",
+    "emergency-stop",
     "tank",
     "on",
     "off",
@@ -44,7 +49,17 @@ def completion_candidates(text: str) -> list[str]:
     elif completed == ["idd"]:
         choices = ("7", "8")
     elif len(completed) == 2 and completed[0] == "idd":
-        choices = ("status", "setup", "frequency")
+        choices = ("status", "setup", "frequency", "monitor", "configure")
+    elif len(completed) == 3 and completed[0] == "idd" and completed[2] == "configure":
+        choices = ("--confirm",)
+    elif completed == ["start"]:
+        choices = ("1", "2")
+    elif len(completed) == 2 and completed[0] == "start":
+        choices = ("1", "2", "3")
+    elif len(completed) == 3 and completed[0] == "start":
+        choices = ("broth",)
+    elif completed == ["test-pressure"]:
+        choices = ("low", "high", "stop", "log")
     elif completed == ["ai"]:
         choices = ("types",)
     elif completed == ["tank"]:
@@ -56,13 +71,18 @@ def completion_candidates(text: str) -> list[str]:
     elif completed == ["output"]:
         choices = OUTPUT_CHANNEL_NAMES
     elif completed == ["set"]:
-        choices = ("relay-id", "output-id", "output-range")
+        choices = ("relay-id", "output-id", "output-range", "irrigation")
+    elif completed == ["set", "irrigation"]:
+        choices = (s.name for s in OPTION_SPECS)
+    elif len(completed) == 3 and completed[:2] == ["set", "irrigation"]:
+        spec = next((s for s in OPTION_SPECS if s.name == completed[2]), None)
+        choices = ("true", "false") if spec and spec.kind == "bool" else ()
     elif completed == ["set", "output-range"]:
         choices = OUTPUT_RANGES
     elif completed == ["reset"]:
-        choices = ("all",)
+        choices = ("all", "fault")
     elif completed == ["help"]:
-        choices = ("idd", "ai", "start", "tank", "on", "off", "of", "output", "reset", "set", "status", "connect", "ports")
+        choices = TOP_LEVEL_COMMANDS
     else:
         choices = ()
     return sorted(
