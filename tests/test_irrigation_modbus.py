@@ -469,6 +469,101 @@ def test_cli_emergency_stop_works_without_controller_or_commissioning(tmp_path):
     assert bus.coils[8]
 
 
+@pytest.mark.parametrize("drive", [7, 8])
+def test_cli_monitor_reads_uncommissioned_drive_without_claiming_stop(tmp_path, drive):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    cfg = IrrigationSettings()
+    ctx.irrigation_settings = cfg
+    bus.registers[drive][1] = 270
+    bus.registers[drive][10] = 69  # history need not be a currently active fault
+    execute_command(ctx, f"idd {drive} monitor")
+    output = ctx.console.export_text()
+    assert "связь Modbus подтверждена" in output
+    assert "PA01=27 Гц; PA02=0 Гц" in output
+    assert "RUN/STOP=неизвестно; текущая авария=неизвестно" in output
+    assert all(request[0] == drive and request[1] == 3 for request in bus.events)
+    assert ctx.irrigation_settings == cfg and ctx.irrigation is None
+    assert not ctx.stand_config_path.exists()
+
+
+@pytest.mark.parametrize("drive", [7, 8])
+def test_cli_monitor_verified_profile_reports_actual_fault(tmp_path, drive):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    bus.registers[drive][0x5001] = 1
+    execute_command(ctx, f"idd {drive} monitor")
+    assert "текущая авария=True" in ctx.console.export_text()
+    assert all(request[1] == 3 for request in bus.events)
+
+
+@pytest.mark.parametrize("drive", [7, 8])
+@pytest.mark.parametrize("failure", ["timeout", "crc", "frequency"])
+def test_cli_monitor_still_rejects_invalid_responses(tmp_path, drive, failure):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    ctx.irrigation_settings = IrrigationSettings()
+    if failure == "frequency":
+        bus.registers[drive][2] = 4001
+    else:
+        bus.failure = lambda request: b"" if failure == "timeout" else bytes.fromhex("07 03 04 00 00 00 00 00 00")
+    with pytest.raises(RuntimeError):
+        execute_command(ctx, f"idd {drive} monitor")
+    assert all(request[1] == 3 for request in bus.events)
+
+
+@pytest.mark.parametrize("action", ["setup", "status", "monitor"])
+def test_cli_all_drives_are_read_sequentially_without_commissioning(tmp_path, action):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    ctx.irrigation_settings = IrrigationSettings()
+    execute_command(ctx, f"idd all {action}")
+    ids = [request[0] for request in bus.events]
+    assert set(ids) == {7, 8} and ids == sorted(ids)
+    assert all(request[1] == 3 for request in bus.events)
+    assert not any(bus.coils) and not ctx.stand_config_path.exists()
+
+
+@pytest.mark.parametrize("action", ["setup", "status", "monitor"])
+def test_cli_all_drives_checks_drive_eight_when_seven_fails(tmp_path, action):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    ctx.irrigation_settings = IrrigationSettings()
+    bus.failure = lambda request: b"" if request[0] == 7 else None
+    with pytest.raises(RuntimeError, match="IDD 7"):
+        execute_command(ctx, f"idd all {action}")
+    assert any(request[0] == 8 for request in bus.events)
+    assert "IDD 8:" in ctx.console.export_text()
+    assert all(request[1] == 3 for request in bus.events)
+
+
+@pytest.mark.parametrize("command", ["idd all frequency 60", "idd all configure --confirm", "idd all monitor extra"])
+def test_cli_grouped_drive_writes_rejected_before_connect(tmp_path, command):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    with pytest.raises(ValueError):
+        execute_command(ctx, command)
+    assert not transport.connected and not bus.events
+
+
+def test_cli_unblocked_monitor_does_not_unlock_configuration_or_start(tmp_path):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    ctx.irrigation_settings = IrrigationSettings()
+    execute_command(ctx, "idd all monitor")
+    for command in ("idd 7 configure --confirm", "idd 8 configure --confirm", "start 1 1 broth 60"):
+        with pytest.raises(RuntimeError):
+            execute_command(ctx, command)
+    assert all(request[1] == 3 for request in bus.events)
+    assert not any(bus.coils)
+
+
+def test_completion_for_both_drives_offers_only_read_commands():
+    from rtuforge.stand_completion import completion_candidates
+    assert completion_candidates("idd a") == ["all"]
+    assert completion_candidates("idd all ") == ["monitor", "setup", "status"]
+
+
 def test_cli_stop_distinguishes_relay_off_from_unknown_drive_stop(tmp_path):
     from rtuforge.stand_cli import execute_command
     ctx, transport, bus = cli_rig(tmp_path)

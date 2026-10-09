@@ -943,6 +943,8 @@ standforge --home . idd 7 status
 standforge --home . idd 7 setup
 standforge --home . idd 7 frequency 60
 standforge --home . idd 7 monitor
+standforge --home . idd all setup
+standforge --home . idd all monitor
 standforge --home . test-pressure low 10
 standforge --home . start check 1 1 broth 60
 ```
@@ -979,6 +981,11 @@ standforge --home . start check 1 1 broth 60
 руководство IDD MINI подтверждает PA01/PA02, но не определяет однозначно
 RUN/STOP и текущую аварию: неизвестные регистры оставлены `-1`, пуск блокируется.
 PA10 содержит историю и не заменяет текущую аварию.
+Диагностика `idd 7 monitor` / `idd 8 monitor` читает PA01/PA02/PA10 без
+флагов подтверждения. При неизвестном профиле RUN/аварии эти статусы показаны
+как «неизвестно»; успешное чтение имеет код 0. Ошибки Modbus дают код 1.
+`idd all status|setup|monitor` последовательно проверяет оба привода, даже если
+первый не отвечает; запись для `all` запрещена. Эта диагностика не разрешает пуск.
 `run_register`, `fault_register`, `run_mask`, `fault_mask` принимают десятичные
 числа и запись `0x...`; в файл сохраняются нормализованные десятичные значения.
 

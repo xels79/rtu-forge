@@ -47,7 +47,9 @@ def completion_candidates(text: str) -> list[str]:
     if not completed:
         choices = TOP_LEVEL_COMMANDS
     elif completed == ["idd"]:
-        choices = ("7", "8")
+        choices = ("7", "8", "all")
+    elif completed == ["idd", "all"]:
+        choices = ("status", "setup", "monitor")
     elif len(completed) == 2 and completed[0] == "idd":
         choices = ("status", "setup", "frequency", "monitor", "configure")
     elif len(completed) == 3 and completed[0] == "idd" and completed[2] == "configure":

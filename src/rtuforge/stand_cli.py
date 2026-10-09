@@ -178,6 +178,19 @@ def _registers(ctx: StandContext, slave: int, fn: int, addr: int, count: int) ->
 
 def _idd(ctx: StandContext, args: list[str]) -> None:
     usage = "idd <7|8> <status|setup|frequency ПРОЦЕНТ|monitor|configure --confirm>"
+    if args and args[0].lower() == "all":
+        if len(args) != 2 or args[1].lower() not in {"status", "setup", "monitor"}:
+            raise ValueError("idd all <status|setup|monitor> — только чтение; запись выполняется для одного IDD")
+        errors: list[str] = []
+        for drive in (7, 8):
+            ctx.console.print(f"IDD {drive}:", markup=False)
+            try:
+                _idd(ctx, [str(drive), args[1]])
+            except (RuntimeError, OSError) as exc:
+                errors.append(f"IDD {drive}: {exc}")
+        if errors:
+            raise RuntimeError("Проверка IDD завершена с ошибками: " + "; ".join(errors))
+        return
     if len(args) < 2 or args[0] not in ("7", "8"):
         raise ValueError(usage)
     slave, action = int(args[0]), args[1].lower()
@@ -201,8 +214,14 @@ def _idd(ctx: StandContext, args: list[str]) -> None:
         ctx.console.print(f"IDD {slave}: {percent:g}% от Pb05; уставка подтверждена", markup=False)
     elif action == "monitor" and len(args) == 2:
         setpoint, frequency = hw.registers(slave, 3, 1, 2)
+        if frequency > 4000:
+            raise RuntimeError(f"IDD {slave}: PA02 вне диапазона 0..400 Гц; проверьте карту и масштабирование")
         history = hw.registers(slave, 3, 10, 1)[0]
-        ctx.console.print(f"IDD {slave}: PA01={setpoint/10:g} Гц; PA02={frequency/10:g} Гц; PA10 (последняя ошибка)={history}", markup=False)
+        ctx.console.print(f"IDD {slave}: связь Modbus подтверждена; PA01={setpoint/10:g} Гц; PA02={frequency/10:g} Гц; PA10 (история ошибок)={history}", markup=False)
+        cfg = ctx.irrigation_settings
+        if not cfg.vfd_verified or cfg.run_register < 0 or cfg.fault_register < 0:
+            ctx.console.print("RUN/STOP=неизвестно; текущая авария=неизвестно. Для управления нужны подтверждённые run_register/fault_register и vfd_verified. PA10 — история; нулевая PA02 сама по себе не подтверждает STOP.", markup=False)
+            return
         hz, running, fault = hw.drive_feedback(slave)
         ctx.console.print(f"Выход={hz:g} Гц; {'RUN' if running else 'STOP'}; текущая авария={fault}", markup=False)
     elif action == "configure" and args[2:] == ["--confirm"]:
