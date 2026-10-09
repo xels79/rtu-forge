@@ -8,6 +8,8 @@ from math import isfinite
 from time import monotonic
 from typing import Protocol
 
+from .stand_vfd import parse_frequency_hz
+
 
 class State(str, Enum):
     IDLE = "IDLE"
@@ -74,7 +76,7 @@ class Sample:
 class Hardware(Protocol):
     def relay(self, channel: int, active: bool) -> None: ...
     def precheck(self, drive: int) -> None: ...
-    def set_frequency(self, drive: int, percent: float) -> None: ...
+    def set_frequency(self, drive: int, hz: float) -> object: ...
     def sample(self, drive: int) -> Sample: ...
     def drive_feedback(self, drive: int) -> tuple[float, bool, bool]: ...
     def confirm_off(self, channels: tuple[int, ...]) -> None: ...
@@ -95,7 +97,7 @@ class IrrigationController:
         self.drive: int | None = None
         self.last: Sample | None = None
         self.low_since: float | None = None
-        self.power = 0.0
+        self.frequency_hz = 0.0
         self.stop_outputs_confirmed = False
         self.valve_opened = False
 
@@ -111,18 +113,17 @@ class IrrigationController:
         self.last = sample
         return sample
 
-    def start(self, rack: int, tier: int, liquid: str, power: float,
+    def start(self, rack: int, tier: int, liquid: str, hz: float,
               *, drive: int, selector: int) -> None:
         if self.state != State.IDLE:
             raise RuntimeError("Повторный START запрещён: требуется IDLE; выполните stop / reset fault")
         if (rack, tier) not in VALVES or liquid != "broth":
-            raise ValueError("start <1..2> <1..3> broth <0..100%>")
+            raise ValueError("start <1..2> <1..3> broth <частота в Гц>")
         if drive not in DRIVE_START or selector not in (19, 20):
             raise ValueError("Неизвестный частотник или выбор НВД")
-        if not isfinite(power) or not 0 < power <= 100:
-            raise ValueError("Задание должно быть больше 0 и не больше 100%")
+        hz = parse_frequency_hz(hz)
         self.drive, self.valve, self.select = drive, VALVES[(rack, tier)], selector
-        self.power, self.low_since, self.last = power, None, None
+        self.frequency_hz, self.low_since, self.last = hz, None, None
         self.fault_reason = ""
         self.stop_outputs_confirmed = False
         self.valve_opened = False
@@ -194,7 +195,7 @@ class IrrigationController:
                 self.hw.precheck(self.drive)
                 self._state(State.CONFIGURE_VFD)
             elif self.state == State.CONFIGURE_VFD:
-                self.hw.set_frequency(self.drive, self.power)
+                self.hw.set_frequency(self.drive, self.frequency_hz)
                 self._state(State.OPEN_VALVES)
             elif self.state == State.OPEN_VALVES:
                 self.valve_opened = True  # a lost acknowledgement may still mean the valve opened

@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from .irrigation import DRIVE_START, VALVES
 from .irrigation_config import IrrigationSettings
 from .stand_hardware import StandHardware
-from .stand_protocol import parse_percent
+from .stand_vfd import parse_frequency_hz
 
 
 @dataclass(frozen=True)
@@ -30,24 +30,24 @@ class PreflightReport:
 
 
 def parse_start_args(args: list[str]) -> tuple[int, int, str, float]:
-    usage = "start [check] <1..2> <1..3> broth <процент больше 0 и до 100>"
+    usage = "start [check] <1..2> <1..3> broth <частота в Гц>"
     if len(args) != 4:
         raise ValueError(usage)
     try:
         rack, tier = int(args[0]), int(args[1])
-        percent = parse_percent(args[3])
+        hz = parse_frequency_hz(args[3])
     except ValueError:
         raise ValueError(usage) from None
     liquid = args[2].lower()
-    if rack not in (1, 2) or tier not in (1, 2, 3) or liquid != "broth" or percent <= 0:
+    if rack not in (1, 2) or tier not in (1, 2, 3) or liquid != "broth":
         raise ValueError(usage)
-    return rack, tier, liquid, percent
+    return rack, tier, liquid, hz
 
 
 def check_start(hardware: StandHardware, settings: IrrigationSettings,
-                rack: int, tier: int, liquid: str, percent: float) -> PreflightReport:
+                rack: int, tier: int, liquid: str, hz: float) -> PreflightReport:
     """Collect every available blocker, even if commissioning is incomplete."""
-    parse_start_args([str(rack), str(tier), liquid, str(percent)])
+    parse_start_args([str(rack), str(tier), liquid, str(hz)])
     settings.validate()
     drive, selector = settings.mapping(rack)
     checks: list[ReadinessCheck] = []
@@ -81,10 +81,10 @@ def check_start(hardware: StandHardware, settings: IrrigationSettings,
         return f"RTU {hardware.relay_id}: реле гидравлики выключены; FWD выбранного IDD — реле {DRIVE_START[drive]}"
 
     def frequency() -> str:
-        plan = hardware.frequency_plan(drive, percent)
+        plan = hardware.frequency_plan(drive, hz)
         return (f"Pb01/Pb02/Pd15/Pd16 соответствуют RS485/FWD; "
-                f"диапазон {plan.minimum_raw / 10:g}..{plan.maximum_raw / 10:g} Гц; "
-                f"{plan.percent:g}% → {plan.setpoint_raw / 10:g} Гц (только расчёт)")
+                f"{plan.limits_description}; "
+                f"задание {plan.requested_hz:g} Гц → {plan.setpoint_raw / 10:g} Гц (только расчёт, шаг 0.1 Гц)")
 
     def feedback() -> str:
         hz, running, fault = hardware.drive_feedback(drive)

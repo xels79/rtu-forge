@@ -23,6 +23,8 @@ class IrrigationSettings:
     pump2_drive: int = 8
     rack1_pump: int = 1
     rack2_pump: int = 2
+    drive7_min_hz: float = 24.0
+    drive8_min_hz: float = 0.0
     low_ready_bar: float = 1.0
     low_min_bar: float = 0.5
     high_target_bar: float = 60.0
@@ -48,6 +50,9 @@ class IrrigationSettings:
             raise ValueError("pump1_drive/pump2_drive должны однозначно задавать адреса 7 и 8")
         if self.rack1_pump not in (1, 2) or self.rack2_pump not in (1, 2):
             raise ValueError("rack1_pump/rack2_pump: допустимы 1 и 2")
+        if any(not isfinite(v) or not 0 <= v <= 400
+               for v in (self.drive7_min_hz, self.drive8_min_hz)):
+            raise ValueError("drive7_min_hz/drive8_min_hz: допустимо 0..400 Гц")
         if any(v <= 0 for v in (self.poll_ms, self.prime_timeout_ms, self.rise_timeout_ms,
                                 self.stop_timeout_ms, self.leak_delay_ms)) or self.valve_delay_ms < 0:
             raise ValueError("Задержки/периоды должны быть положительными (valve_delay_ms допускает 0)")

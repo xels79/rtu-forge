@@ -941,23 +941,28 @@ Expected user/runtime errors are returned as concise messages with exit code `1`
 standforge --home . help start
 standforge --home . idd 7 status
 standforge --home . idd 7 setup
-standforge --home . idd 7 frequency 60
+standforge --home . idd 7 frequency 29
 standforge --home . idd 7 monitor
 standforge --home . idd 7 feedback
 standforge --home . idd all setup
 standforge --home . idd all monitor
 standforge --home . test-pressure low 10
-standforge --home . start check 1 1 broth 60
+standforge --home . start check 1 1 broth 29
 ```
 
-В интерактивной консоли: `start 1 1 broth 60`, `stop`, `emergency-stop`,
+В интерактивной консоли: `start 1 1 broth 29`, `stop`, `emergency-stop`,
 `pressure`, `test-pressure stop`, `reset fault`. `help`, `help idd`, `help ai`,
 `help start`, `help stop`, `help pressure`, `help test-pressure` имеют русскую
 справку при `ui.language=ru`; новые команды и настройки дополняются клавишей Tab.
-Частота задаётся в процентах Pb05. Для Pb05=45 Гц/Pb06=20 Гц запрос 35%
-запрещён, поскольку он даёт 15,75 Гц. Границы IDD автоматически не меняются.
+Частота в `start` и `idd … frequency` задаётся в **Гц**, с шагом записи 0.1 Гц.
+Вывод показывает максимум Pb05, минимум Pb06 и отдельный минимум мотора.
+Для IDD 7 `drive7_min_hz=24`: при Pb05=45 Гц/Pb06=20 Гц допустимо 24..45 Гц.
+Пример: `start check 1 1 broth 29` проверяет задание 29 Гц.
+Проценты в этих командах больше не используются: обновите сохранённые сценарии.
+Границы IDD автоматически не меняются; команды аналоговых выходов `output`
+сохраняют прежние проценты.
 
-`start check <стеллаж> <ярус> broth <процент>` читает устройства и показывает
+`start check <стеллаж> <ярус> broth <Гц>` читает устройства и показывает
 готовность датчиков, реле и выбранного IDD, включая расчёт частоты и причины
 блокировки. Реле, уставка и настройки не изменяются; проверка работает и при
 отключённой автоматике. Успешная проверка не запускает полив и не заменяет
@@ -972,6 +977,7 @@ standforge --home . start check 1 1 broth 60
 |---|---|
 | enabled; ai_verified; vfd_verified; hydraulics_verified; protections_verified; pressure_unit_verified; relay_id_verified | false для каждого |
 | pump1_drive; pump2_drive; rack1_pump; rack2_pump | 7; 8; 1; 2 |
+| drive7_min_hz; drive8_min_hz | 24; 0 (для IDD 8 применяется Pb06, отдельный минимум мотора не задан) |
 | low_ready_bar; low_min_bar; high_target_bar; high_min_bar; high_max_bar; hysteresis_bar | 1; 0.5; 60; 50; 70; 0.2 |
 | valve_delay_ms; prime_timeout_ms; rise_timeout_ms; stop_timeout_ms; leak_delay_ms; poll_ms | 2000; 10000; 20000; 15000; 2000; 250 |
 | stop_hz; run_register; run_mask; fault_register; fault_mask; setpoint_readback | 0.1; -1; 1; -1; 65535; false |

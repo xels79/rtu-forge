@@ -97,7 +97,7 @@ def rig(**kwargs):
 
 
 def to_running(bus, time, ctl):
-    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     for _ in range(6):
         ctl.tick()
     assert ctl.state == State.WAIT_HIGH_PRESSURE
@@ -119,7 +119,7 @@ def test_successful_sequence_and_valve_closes_only_after_confirmed_stop():
     to_running(bus, time, ctl)
     writes = [(int.from_bytes(r[2:4], "big") + 1, bool(r[7])) for r in bus.events if r[1] == 15]
     assert writes == [(9, True), (19, True), (23, True), (1, True), (32, True)]
-    assert bus.registers[7][1] == 270  # 60% of this drive's Pb05=450
+    assert bus.registers[7][1] == 270  # 27 Hz, written with the documented 0.1 Hz scale
     ctl.stop()
     ctl.tick()
     assert bus.coils[8] and ctl.state == State.STOPPING
@@ -132,7 +132,7 @@ def test_successful_sequence_and_valve_closes_only_after_confirmed_stop():
 def test_low_pressure_does_not_rise():
     bus, cfg, hw, time, ctl = rig()
     bus.raw[0] = 4000
-    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     for _ in range(4):
         ctl.tick()
     assert ctl.state == State.WAIT_LOW_PRESSURE
@@ -145,7 +145,7 @@ def test_low_pressure_does_not_rise():
 @pytest.mark.parametrize("running", [0, 1])
 def test_high_pressure_or_run_does_not_rise(running):
     bus, cfg, hw, time, ctl = rig()
-    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     for _ in range(6):
         ctl.tick()
     bus.registers[7][0x5000] = running
@@ -235,11 +235,11 @@ def test_failed_stop_relay_does_not_prevent_remaining_off_attempts():
 def test_frequency_below_minimum_does_not_write_or_change_limits():
     bus, cfg, hw, time, ctl = rig()
     with pytest.raises(RuntimeError, match="Pb06"):
-        hw.set_frequency(7, 35)
+        hw.set_frequency(7, 19)
     assert not any(r[1] == 6 for r in bus.events)
     assert bus.registers[7][0x69] == 450 and bus.registers[7][0x6A] == 200
     bus.registers[8][0x69] = 600
-    hw.set_frequency(8, 50)
+    hw.set_frequency(8, 30)
     assert bus.registers[8][1] == 300
 
 
@@ -250,17 +250,17 @@ def test_setpoint_readback_must_match():
             return append_crc(bytes.fromhex("07 03 02 00 00"))
     bus.failure = mismatch
     with pytest.raises(RuntimeError, match="Уставка"):
-        hw.set_frequency(7, 60)
+        hw.set_frequency(7, 27)
 
 
 @pytest.mark.parametrize("stage", range(7))
 def test_stop_during_every_start_stage(stage):
     bus, cfg, hw, time, ctl = rig()
-    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     for _ in range(stage):
         ctl.tick()
     with pytest.raises(RuntimeError, match="START"):
-        ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+        ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     ctl.stop()
     stop_feedback(bus)
     ctl.tick()
@@ -271,7 +271,7 @@ def test_stop_during_every_start_stage(stage):
 def test_bad_ai_cannot_start_actuators(raw, mode):
     bus, cfg, hw, time, ctl = rig()
     bus.raw[0], bus.types[0] = raw, mode
-    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     ctl.tick()
     assert ctl.state == State.STOPPING
     assert not any(r[1] == 15 and r[7] == 1 for r in bus.events)
@@ -312,11 +312,11 @@ def test_worker_nonblocking_stop_and_shutdown():
     bus.auto_feedback = True
     running = Event()
     service = IrrigationService(hw, cfg, RLock(), lambda text: running.set() if "RUNNING" in text else None)
-    service.start(1, 1, "broth", 60)
+    service.start(1, 1, "broth", 27)
     try:
         assert running.wait(2), service.controller.fault_reason
         with pytest.raises(RuntimeError, match="START"):
-            service.start(1, 1, "broth", 60)
+            service.start(1, 1, "broth", 27)
         service.close()
         assert service.finished.is_set() and service.controller.state == State.IDLE
         assert not any(bus.coils)
@@ -337,7 +337,7 @@ def test_stop_between_valve_writes_prevents_any_later_enable():
             stop.set()
         return result
     hw.transaction = transaction
-    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     for _ in range(3):
         ctl.tick()
     assert ctl.state == State.STOPPING and not ctl.fault_reason
@@ -411,7 +411,7 @@ def test_plus_feedback_rejects_undocumented_state_even_with_zero_frequency(state
 def test_plus_controller_uses_fwd_relay_and_waits_for_actual_state_before_closing():
     bus, cfg, hw, time, ctl = rig(run_register=28, fault_register=27)
     bus.registers[7].update({27: 0, 28: 0})
-    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     for _ in range(6):
         ctl.tick()
     assert bus.coils[31] and ctl.state == State.WAIT_HIGH_PRESSURE
@@ -434,7 +434,7 @@ def test_plus_controller_uses_fwd_relay_and_waits_for_actual_state_before_closin
 def test_plus_current_fault_blocks_start_even_when_history_is_zero():
     bus, cfg, hw, time, ctl = rig(run_register=28, fault_register=27)
     bus.registers[7].update({27: 9, 28: 0, 10: 0})
-    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     ctl.tick()
     assert ctl.state == State.STOPPING
     ctl.tick()
@@ -445,7 +445,7 @@ def test_plus_current_fault_blocks_start_even_when_history_is_zero():
 def test_plus_undocumented_state_keeps_tier_open_after_stop_timeout():
     bus, cfg, hw, time, ctl = rig(run_register=28, fault_register=27)
     bus.registers[7].update({27: 0, 28: 0})
-    ctl.start(1, 1, "broth", 60, drive=7, selector=19)
+    ctl.start(1, 1, "broth", 27, drive=7, selector=19)
     for _ in range(6):
         ctl.tick()
     bus.registers[7].update({2: 270, 28: 1})
@@ -548,7 +548,7 @@ def cli_rig(tmp_path):
     return ctx, transport, bus
 
 
-@pytest.mark.parametrize("command", ["start 1 1 broth 60", "start 9 1 broth 60", "start 1 1 broth nan", "idd 7 configure", "idd 7 frequency nan"])
+@pytest.mark.parametrize("command", ["start 1 1 broth 27", "start 9 1 broth 27", "start 1 1 broth nan", "idd 7 configure", "idd 7 frequency nan"])
 def test_cli_invalid_or_uncommissioned_commands_do_not_connect(tmp_path, command):
     from test_standforge import make_ctx
     from rtuforge.stand_cli import execute_command
@@ -649,7 +649,7 @@ def test_cli_all_drives_checks_drive_eight_when_seven_fails(tmp_path, action):
     assert all(request[1] == 3 for request in bus.events)
 
 
-@pytest.mark.parametrize("command", ["idd all frequency 60", "idd all configure --confirm", "idd all monitor extra"])
+@pytest.mark.parametrize("command", ["idd all frequency 27", "idd all configure --confirm", "idd all monitor extra"])
 def test_cli_grouped_drive_writes_rejected_before_connect(tmp_path, command):
     from rtuforge.stand_cli import execute_command
     ctx, transport, bus = cli_rig(tmp_path)
@@ -663,7 +663,7 @@ def test_cli_unblocked_monitor_does_not_unlock_configuration_or_start(tmp_path):
     ctx, transport, bus = cli_rig(tmp_path)
     ctx.irrigation_settings = IrrigationSettings()
     execute_command(ctx, "idd all monitor")
-    for command in ("idd 7 configure --confirm", "idd 8 configure --confirm", "start 1 1 broth 60"):
+    for command in ("idd 7 configure --confirm", "idd 8 configure --confirm", "start 1 1 broth 27"):
         with pytest.raises(RuntimeError):
             execute_command(ctx, command)
     assert all(request[1] == 3 for request in bus.events)
@@ -722,10 +722,10 @@ def test_cli_start_allows_stop_and_blocks_conflicting_commands(tmp_path):
                                 lambda text: running.set() if "RUNNING" in text else None)
     transport.connect()
     ctx.irrigation = service
-    execute_command(ctx, "start 1 1 broth 60")
+    execute_command(ctx, "start 1 1 broth 27")
     try:
         assert running.wait(2)
-        for command in ("on 32", "off 9", "reset", "disconnect", "set relay-id 5", "idd 7 frequency 60", "start 1 1 broth 60"):
+        for command in ("on 32", "off 9", "reset", "disconnect", "set relay-id 5", "idd 7 frequency 27", "start 1 1 broth 27"):
             with pytest.raises(RuntimeError):
                 execute_command(ctx, command)
         execute_command(ctx, "stop")
@@ -748,7 +748,7 @@ def test_worker_shutdown_during_precheck_never_starts_actuators():
         return original(request)
     hw.transaction = delayed
     service = IrrigationService(hw, cfg, RLock(), lambda text: None)
-    service.start(1, 1, "broth", 60)
+    service.start(1, 1, "broth", 27)
     try:
         assert entered.wait(2)
         service.stop()  # does not wait for the in-flight bus operation
@@ -779,7 +779,7 @@ def test_cli_oneshot_fault_returns_error_and_closes_transport(tmp_path, monkeypa
     monkeypatch.setattr(stand_cli, "load_config", lambda path: ctx.config)
     monkeypatch.setattr(stand_cli, "load_irrigation_settings", lambda path: ctx.irrigation_settings)
     monkeypatch.setattr(stand_cli, "SerialTransport", lambda *args: transport)
-    monkeypatch.setattr("sys.argv", ["standforge", "--home", str(tmp_path), "start", "1", "1", "broth", "60"])
+    monkeypatch.setattr("sys.argv", ["standforge", "--home", str(tmp_path), "start", "1", "1", "broth", "27"])
     assert stand_cli.main() == 1
     assert not transport.connected
     assert not any(bus.coils)
@@ -829,7 +829,7 @@ def test_cli_ctrl_c_stops_worker_before_disconnect(tmp_path, monkeypatch):
     monkeypatch.setattr(stand_cli, "load_config", lambda path: ctx.config)
     monkeypatch.setattr(stand_cli, "load_irrigation_settings", lambda path: ctx.irrigation_settings)
     monkeypatch.setattr(stand_cli, "SerialTransport", lambda *args: transport)
-    monkeypatch.setattr("sys.argv", ["standforge", "--home", str(tmp_path), "start", "1", "1", "broth", "60"])
+    monkeypatch.setattr("sys.argv", ["standforge", "--home", str(tmp_path), "start", "1", "1", "broth", "27"])
     real_execute = stand_cli.execute_command
     running = Event()
     observed = []
@@ -851,13 +851,13 @@ def test_cli_ctrl_c_stops_worker_before_disconnect(tmp_path, monkeypatch):
 def test_preflight_is_readonly_and_shares_frequency_calculation():
     from rtuforge.irrigation_preflight import check_start
     bus, cfg, hw, _, _ = rig()
-    report = check_start(hw, cfg, 1, 1, "broth", 60)
+    report = check_start(hw, cfg, 1, 1, "broth", 27)
     assert report.ready
     assert (report.drive, report.selector, report.valve) == (7, 19, 9)
     assert all(request[1] in (1, 3, 4) for request in bus.events)
     assert not any(bus.coils) and bus.registers[7][1] == 0
-    plan = hw.frequency_plan(7, 60)
-    hw.set_frequency(7, 60)
+    plan = hw.frequency_plan(7, 27)
+    hw.set_frequency(7, 27)
     assert bus.registers[7][1] == plan.setpoint_raw == 270
 
 
@@ -868,7 +868,7 @@ def test_preflight_collects_sensor_drive_relay_and_commissioning_failures():
     bus.coils[31] = True
     bus.registers[7][0x65] = 2
     bus.registers[7][0x5001] = 1
-    report = check_start(hw, cfg, 1, 1, "broth", 60)
+    report = check_start(hw, cfg, 1, 1, "broth", 27)
     assert not report.ready
     failures = [check for check in report.checks if not check.passed]
     assert len(failures) == 5
@@ -882,7 +882,7 @@ def test_preflight_collects_sensor_drive_relay_and_commissioning_failures():
 def test_preflight_calibrated_sensors_do_not_bypass_unknown_drive_feedback():
     from rtuforge.irrigation_preflight import check_start
     bus, cfg, hw, _, _ = rig(ai_verified=True, run_register=-1, fault_register=-1)
-    report = check_start(hw, cfg, 1, 1, "broth", 60)
+    report = check_start(hw, cfg, 1, 1, "broth", 27)
     assert not report.ready
     assert all(check.passed for check in report.checks if check.name in ("AI1", "AI2"))
     assert any("run_register" in check.detail for check in report.checks if not check.passed)
@@ -893,22 +893,22 @@ def test_preflight_calibrated_sensors_do_not_bypass_unknown_drive_feedback():
 def test_preflight_detects_operating_limits_and_communication_failure(failure):
     from rtuforge.irrigation_preflight import check_start
     bus, cfg, hw, _, _ = rig()
-    percent = 60
+    hz = 27
     if failure == "pressure":
         bus.raw[1] = 16000
     elif failure == "frequency":
-        percent = 35
+        hz = 19
     elif failure == "running":
         bus.registers[7][0x5000] = 1
     else:
         bus.failure = lambda request: b"" if request[0] == 6 else None
-    report = check_start(hw, cfg, 1, 1, "broth", percent)
+    report = check_start(hw, cfg, 1, 1, "broth", hz)
     assert not report.ready
     assert all(request[1] in (1, 3, 4) for request in bus.events)
     assert any(check.passed and check.name == "Релейная плата" for check in report.checks)
 
 
-@pytest.mark.parametrize("args", [[], ["3", "1", "broth", "60"], ["1", "1", "water", "60"],
+@pytest.mark.parametrize("args", [[], ["3", "1", "broth", "27"], ["1", "1", "water", "60"],
                                   ["1", "1", "broth", "nan"], ["1", "1", "broth", "0"]])
 def test_preflight_cli_rejects_invalid_args_before_connecting(tmp_path, args):
     from rtuforge.stand_cli import execute_command
@@ -926,10 +926,10 @@ def test_preflight_cli_does_not_create_controller_or_change_user_files(tmp_path,
     original = "[irrigation]\nenabled=false\n[private]\nx=keep\n"
     ctx.stand_config_path.write_text(original, encoding="utf-8")
     if enabled:
-        execute_command(ctx, "start check 1 1 broth 60")
+        execute_command(ctx, "start check 1 1 broth 27")
     else:
         with pytest.raises(RuntimeError, match="БЛОК"):
-            execute_command(ctx, "start check 1 1 broth 60")
+            execute_command(ctx, "start check 1 1 broth 27")
     assert ctx.irrigation is None
     assert not any(bus.coils) and bus.registers[7][1] == 0
     assert ctx.stand_config_path.read_text(encoding="utf-8") == original
@@ -939,10 +939,10 @@ def test_preflight_cli_does_not_create_controller_or_change_user_files(tmp_path,
 def test_successful_preflight_does_not_cache_permission_to_start(tmp_path):
     from rtuforge.stand_cli import execute_command, _shutdown
     ctx, transport, bus = cli_rig(tmp_path)
-    execute_command(ctx, "start check 1 1 broth 60")
+    execute_command(ctx, "start check 1 1 broth 27")
     bus.raw[0] = 0
     ctx.one_shot = False
-    execute_command(ctx, "start 1 1 broth 60")
+    execute_command(ctx, "start 1 1 broth 27")
     try:
         assert ctx.irrigation.finished.wait(2)
         assert ctx.irrigation.controller.state == State.FAULT
@@ -955,7 +955,7 @@ def test_preflight_respects_explicit_pump_mapping():
     from rtuforge.irrigation_preflight import check_start
     bus, cfg, hw, _, _ = rig(pump1_drive=8, pump2_drive=7)
     bus.registers[8][0x69] = 600
-    report = check_start(hw, cfg, 1, 3, "broth", 50)
+    report = check_start(hw, cfg, 1, 3, "broth", 30)
     assert report.ready
     assert (report.drive, report.selector, report.valve) == (8, 19, 11)
     assert any("30 Гц" in check.detail for check in report.checks)
@@ -986,8 +986,109 @@ def test_preflight_tab_completion():
     assert completion_candidates("start check 1 1 ") == ["broth"]
 
 
-def test_minimum_percent_advice_rounds_up_to_accepted_value():
+def test_motor_minimum_and_hz_setpoint():
     bus, cfg, hw, _, _ = rig()
-    with pytest.raises(RuntimeError, match="44.444445%"):
-        hw.frequency_plan(7, 35)
-    assert hw.frequency_plan(7, 44.444445).setpoint_raw == 200
+    with pytest.raises(RuntimeError, match="минимум мотора=24 Гц"):
+        hw.frequency_plan(7, 22.5)
+    assert hw.frequency_plan(7, 24).setpoint_raw == 240
+
+
+@pytest.mark.parametrize("hz, raw", [(24, 240), (29, 290), (29.04, 290), (45, 450)])
+def test_frequency_in_hz_writes_exact_scaled_setpoint_without_starting(hz, raw):
+    bus, _, hw, _, _ = rig()
+    plan = hw.set_frequency(7, hz)
+    assert plan.requested_hz == hz and plan.maximum_raw == 450
+    assert bus.registers[7][1] == plan.setpoint_raw == raw
+    assert not any(bus.coils)
+    writes = [r for r in bus.events if r[1] in (6, 15)]
+    assert len(writes) == 1 and writes[0][1:4] == bytes.fromhex("06 20 01")
+
+
+@pytest.mark.parametrize("hz", [20, 22.5, 23.99, 45.01, 50])
+def test_frequency_outside_motor_and_vfd_limits_never_writes(hz):
+    bus, _, hw, _, _ = rig()
+    with pytest.raises(RuntimeError) as error:
+        hw.set_frequency(7, hz)
+    assert "максимум Pb05=45 Гц" in str(error.value)
+    assert "допустимо 24..45 Гц" in str(error.value)
+    assert all(r[1] == 3 for r in bus.events)
+    assert bus.registers[7][1] == 0 and not any(bus.coils)
+
+
+def test_frequency_is_hz_even_when_maximum_changes_and_pb06_can_be_stricter():
+    bus, _, hw, _, _ = rig()
+    bus.registers[7][0x69] = 600
+    hw.set_frequency(7, 29)
+    assert bus.registers[7][1] == 290
+    bus.registers[7][0x6A] = 300
+    bus.events.clear()
+    with pytest.raises(RuntimeError, match="допустимо 30..60 Гц"):
+        hw.set_frequency(7, 29)
+    assert all(r[1] == 3 for r in bus.events)
+
+
+def test_motor_limits_belong_to_drive_address_and_are_independently_configurable():
+    bus, cfg, hw, _, _ = rig(pump1_drive=8, pump2_drive=7)
+    assert hw.frequency_plan(8, 22.5).setpoint_raw == 225
+    with pytest.raises(RuntimeError, match="минимум мотора=24 Гц"):
+        hw.frequency_plan(7, 22.5)
+    hw.settings = replace(cfg, drive8_min_hz=30)
+    with pytest.raises(RuntimeError, match="допустимо 30..45 Гц"):
+        hw.frequency_plan(8, 29)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "401", "50%"])
+@pytest.mark.parametrize("prefix", ["start check 1 1 broth", "start 1 1 broth", "idd 7 frequency"])
+def test_invalid_hz_commands_do_not_connect(tmp_path, value, prefix):
+    from rtuforge.stand_cli import execute_command
+    ctx, transport, bus = cli_rig(tmp_path)
+    with pytest.raises(ValueError):
+        execute_command(ctx, f"{prefix} {value}")
+    assert not transport.connected and not bus.events and ctx.irrigation is None
+
+
+@pytest.mark.parametrize("command", ["start check 1 1 broth 29", "idd 7 frequency 29", "idd 7 setup"])
+def test_hz_commands_show_maximum_and_motor_minimum(tmp_path, command):
+    from rtuforge.stand_cli import execute_command
+    ctx, _, bus = cli_rig(tmp_path)
+    execute_command(ctx, command)
+    output = " ".join(ctx.console.export_text().split())
+    assert "максимум Pb05=45 Гц" in output and "минимум мотора=24 Гц" in output
+    if "29" in command:
+        assert "задание 29 Гц" in output
+    if command != "idd 7 frequency 29":
+        assert all(r[1] in (1, 3, 4) for r in bus.events)
+    assert not any(bus.coils) and ctx.irrigation is None
+
+
+def test_motor_frequency_settings_roundtrip_and_reject_invalid_values(tmp_path):
+    path = tmp_path / "stand.ini"
+    cfg = load_irrigation_settings(path)
+    assert cfg.drive7_min_hz == 24 and cfg.drive8_min_hz == 0
+    cfg = set_irrigation_option(path, cfg, "drive8_min_hz", "30")
+    assert load_irrigation_settings(path).drive8_min_hz == 30
+    before = path.read_bytes()
+    for value in ("-1", "401", "nan", "inf"):
+        with pytest.raises(ValueError):
+            set_irrigation_option(path, cfg, "drive7_min_hz", value)
+        assert path.read_bytes() == before
+
+
+def test_motor_minimum_above_pb05_blocks_preflight_and_setpoint():
+    from rtuforge.irrigation_preflight import check_start
+    bus, cfg, hw, _, _ = rig()
+    bus.registers[7][0x69] = 230
+    report = check_start(hw, cfg, 1, 1, "broth", 23)
+    assert not report.ready
+    with pytest.raises(RuntimeError, match="минимум мотора=24 Гц"):
+        hw.set_frequency(7, 23)
+    assert all(r[1] in (1, 3, 4) for r in bus.events) and not any(bus.coils)
+
+
+def test_setup_rejects_motor_minimum_above_maximum_without_writes(tmp_path):
+    from rtuforge.stand_cli import execute_command
+    ctx, _, bus = cli_rig(tmp_path)
+    bus.registers[7][0x69] = 230
+    with pytest.raises(RuntimeError, match="выше максимума Pb05=23 Гц"):
+        execute_command(ctx, "idd 7 setup")
+    assert all(r[1] == 3 for r in bus.events)

@@ -26,14 +26,14 @@ class IrrigationService:
     def busy(self) -> bool:
         return not self.finished.is_set() or self.controller.state != State.IDLE
 
-    def start(self, rack: int, tier: int, liquid: str, percent: float) -> None:
+    def start(self, rack: int, tier: int, liquid: str, hz: float) -> None:
         with self.gate:
             self.settings.require_commissioned()
             if self.busy:
                 raise RuntimeError("Повторный START запрещён; выполните stop / reset fault")
             self.stop_requested.clear()
             drive, selector = self.settings.mapping(rack)
-            self.controller.start(rack, tier, liquid, percent, drive=drive, selector=selector)
+            self.controller.start(rack, tier, liquid, hz, drive=drive, selector=selector)
             self.finished.clear()
             self.thread = Thread(target=self._run, name="standforge-irrigation", daemon=True)
             try:

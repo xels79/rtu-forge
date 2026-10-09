@@ -2,9 +2,21 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import isfinite
 
 PLUS_FAULT_REGISTER = 0x001B  # PA27: current error code
 PLUS_STATE_REGISTER = 0x001C  # PA28: 0=STOP, 1=forward, 2=reverse
+
+
+def parse_frequency_hz(value: str | float | int) -> float:
+    """Frequency commands accept Hz only; never infer percentages."""
+    try:
+        hz = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("Частота задаётся числом в Гц, больше 0 и до 400") from None
+    if not isfinite(hz) or not 0 < hz <= 400:
+        raise ValueError("Частота задаётся в Гц, больше 0 и до 400; проверьте минимум мотора и максимум Pb05")
+    return hz
 
 
 @dataclass(frozen=True)

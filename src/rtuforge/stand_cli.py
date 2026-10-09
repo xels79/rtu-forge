@@ -26,7 +26,7 @@ from .stand_completion import StandForgeCompleter
 from .stand_config import StandSettings, load_stand_settings, save_stand_settings, with_overrides
 from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, RELAY_CHANNEL_COUNT, build_all_relays_off_request, build_output_request, build_tank_request, build_write_multiple_coils, validate_write_response
 from .transport import SerialTransport
-from .stand_protocol import parse_percent
+from .stand_vfd import parse_frequency_hz
 from .irrigation import State
 from .irrigation_config import IrrigationSettings, load_irrigation_settings, set_irrigation_option
 from .irrigation_service import IrrigationService
@@ -177,7 +177,7 @@ def _registers(ctx: StandContext, slave: int, fn: int, addr: int, count: int) ->
 
 
 def _idd(ctx: StandContext, args: list[str]) -> None:
-    usage = "idd <7|8> <status|setup|frequency ПРОЦЕНТ|monitor|feedback|configure --confirm>"
+    usage = "idd <7|8> <status|setup|frequency ГЦ|monitor|feedback|configure --confirm>"
     if args and args[0].lower() == "all":
         if len(args) != 2 or args[1].lower() not in {"status", "setup", "monitor"}:
             raise ValueError("idd all <status|setup|monitor> — только чтение; запись выполняется для одного IDD")
@@ -207,11 +207,14 @@ def _idd(ctx: StandContext, args: list[str]) -> None:
         maximum, minimum = hw.registers(slave, 3, 0x69, 2)
         if not 0 <= minimum <= maximum <= 4000 or maximum == 0:
             raise RuntimeError("Недопустимые Pb05/Pb06: проверьте настройки IDD")
-        ctx.console.print(f"Проверено: частота RS485, пуск FWD; диапазон {minimum/10:g}..{maximum/10:g} Гц. Параметры не менялись.", markup=False)
+        motor_minimum = ctx.irrigation_settings.drive7_min_hz if slave == 7 else ctx.irrigation_settings.drive8_min_hz
+        if motor_minimum > maximum / 10:
+            raise RuntimeError(f"IDD {slave}: минимум мотора={motor_minimum:g} Гц выше максимума Pb05={maximum/10:g} Гц; проверьте настройки мотора и IDD")
+        ctx.console.print(f"Проверено: частота RS485, пуск FWD; максимум Pb05={maximum/10:g} Гц; минимум Pb06={minimum/10:g} Гц; минимум мотора={motor_minimum:g} Гц. Параметры не менялись.", markup=False)
     elif action == "frequency" and len(args) == 3:
-        percent = parse_percent(args[2])
-        hw.set_frequency(slave, percent)
-        ctx.console.print(f"IDD {slave}: {percent:g}% от Pb05; уставка подтверждена", markup=False)
+        hz = parse_frequency_hz(args[2])
+        plan = hw.set_frequency(slave, hz)
+        ctx.console.print(f"IDD {slave}: задание {hz:g} Гц → {plan.setpoint_raw/10:g} Гц; {plan.limits_description}; уставка подтверждена", markup=False)
     elif action == "monitor" and len(args) == 2:
         setpoint, frequency = hw.registers(slave, 3, 1, 2)
         if frequency > 4000:
@@ -287,12 +290,12 @@ def _test_pressure(ctx: StandContext, args: list[str]) -> None:
 
 
 def _start(ctx: StandContext, args: list[str]) -> None:
-    rack, tier, liquid, percent = parse_start_args(args)
+    rack, tier, liquid, hz = parse_start_args(args)
     ctx.irrigation_settings.require_commissioned()
     if ctx.irrigation is None:
         ctx.irrigation = IrrigationService(_hardware(ctx, quiet=True), ctx.irrigation_settings,
                                           ctx.bus_lock, lambda text: ctx.console.print(text, markup=False))
-    ctx.irrigation.start(rack, tier, liquid, percent)
+    ctx.irrigation.start(rack, tier, liquid, hz)
     if ctx.one_shot:
         ctx.console.print("Полив под наблюдением этого процесса; Ctrl+C — безопасный останов.", markup=False)
         while not ctx.irrigation.finished.wait(ctx.irrigation_settings.poll_ms / 1000):
@@ -302,9 +305,9 @@ def _start(ctx: StandContext, args: list[str]) -> None:
 
 
 def _check_start(ctx: StandContext, args: list[str]) -> None:
-    rack, tier, liquid, percent = parse_start_args(args)
+    rack, tier, liquid, hz = parse_start_args(args)
     report = check_start(_hardware(ctx, quiet=True), ctx.irrigation_settings,
-                         rack, tier, liquid, percent)
+                         rack, tier, liquid, hz)
     ctx.console.print(f"Проверка без пуска: IDD {report.drive}; выбор НВД — реле {report.selector}; ярус — реле {report.valve}.", markup=False)
     for check in report.checks:
         ctx.console.print(f"{'OK' if check.passed else 'БЛОК'} — {check.name}: {check.detail}", markup=False)
@@ -516,9 +519,9 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
     else:
         text = (
             "Stand Forge commands:\n"
-            "  idd <7|8> status|setup|frequency <процент>|monitor|feedback|configure --confirm\n"
+            "  idd <7|8> status|setup|frequency <Гц>|monitor|feedback|configure --confirm\n"
             "  ai [types] — датчики RTU 6\n"
-            "  start <rack> <tier> broth <percent> | stop | emergency-stop\n"
+            "  start <rack> <tier> broth <Hz> | stop | emergency-stop\n"
             "  pressure | test-pressure low|high [count] | test-pressure stop\n"
             "  help idd | help ai | help start\n"
             "  tank <1..4> <empty|middle|full>\n"

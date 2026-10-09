@@ -8,11 +8,11 @@ from math import ceil
 from .irrigation import DRIVE_START, Sample, StopRequested
 from .irrigation_config import IrrigationSettings
 from .stand_protocol import (build_read_request, build_write_multiple_coils,
-                             build_write_single_register, parse_percent,
+                             build_write_single_register,
                              validate_read_response, validate_write_response)
 from .stand_sensors import HIGH, LOW, Sensor, decode_pressure
 from .stand_vfd import (DriveFeedback, PLUS_FAULT_REGISTER, PLUS_STATE_REGISTER,
-                        decode_plus_feedback)
+                        decode_plus_feedback, parse_frequency_hz)
 
 
 @dataclass(frozen=True)
@@ -27,10 +27,22 @@ class PressureReading:
 
 @dataclass(frozen=True)
 class FrequencyPlan:
-    percent: float
+    requested_hz: float
     minimum_raw: int
     maximum_raw: int
     setpoint_raw: int
+    motor_minimum_raw: int
+
+    @property
+    def effective_minimum_hz(self) -> float:
+        return max(self.minimum_raw, self.motor_minimum_raw) / 10
+
+    @property
+    def limits_description(self) -> str:
+        return (f"максимум Pb05={self.maximum_raw / 10:g} Гц; "
+                f"минимум Pb06={self.minimum_raw / 10:g} Гц; "
+                f"минимум мотора={self.motor_minimum_raw / 10:g} Гц; "
+                f"допустимо {self.effective_minimum_hz:g}..{self.maximum_raw / 10:g} Гц")
 
 
 class StandHardware:
@@ -127,25 +139,27 @@ class StandHardware:
         if sources != [5, 1] or fwd != [6, 7]:
             raise RuntimeError(f"IDD {drive}: требуются Pb01=5, Pb02=1, Pd15=6, Pd16=7; получены {sources}, {fwd}. См. idd {drive} configure --confirm")
 
-    def frequency_plan(self, drive: int, percent: float) -> FrequencyPlan:
+    def frequency_plan(self, drive: int, hz: float) -> FrequencyPlan:
         """Read configuration and validate a setpoint without writing or starting."""
-        percent = parse_percent(percent)
-        if percent <= 0:
-            raise ValueError("Задание frequency должно быть больше 0%")
+        hz = parse_frequency_hz(hz)
         self.check_setup(drive)
         maximum, minimum = self.registers(drive, 3, 0x69, 2)
         if not 0 <= minimum <= maximum <= 4000 or maximum == 0:
             raise RuntimeError("Недопустимые Pb05/Pb06; проверьте диапазон частоты на частотнике")
-        requested = maximum * percent / 100
+        motor_hz = self.settings.drive7_min_hz if drive == 7 else self.settings.drive8_min_hz
+        motor_minimum = ceil(motor_hz * 10)
+        requested = hz * 10
         value = int(requested + .5)
-        if requested < minimum or value == 0:
-            # Round advice upward so copying it cannot produce another below-minimum request.
-            minimum_percent = ceil(minimum * 100_000_000 / maximum) / 1_000_000
-            raise RuntimeError(f"Задание {requested / 10:g} Гц ниже минимума Pb06={minimum / 10:g} Гц. Минимальный процент от Pb05: {minimum_percent:.6f}%. Проверьте процент и настройки IDD; Pb05/Pb06 автоматически не меняются")
-        return FrequencyPlan(percent, minimum, maximum, value)
+        plan = FrequencyPlan(hz, minimum, maximum, value, motor_minimum)
+        if requested < max(minimum, motor_minimum) or value == 0:
+            raise RuntimeError(f"IDD {drive}: задание {hz:g} Гц ниже допустимого минимума; {plan.limits_description}. Задайте частоту в Гц; Pb05/Pb06 автоматически не меняются")
+        if requested > maximum:
+            raise RuntimeError(f"IDD {drive}: задание {hz:g} Гц превышает максимум; {plan.limits_description}. Задайте частоту в Гц; Pb05/Pb06 автоматически не меняются")
+        return plan
 
-    def set_frequency(self, drive: int, percent: float) -> None:
-        value = self.frequency_plan(drive, percent).setpoint_raw
+    def set_frequency(self, drive: int, hz: float) -> FrequencyPlan:
+        plan = self.frequency_plan(drive, hz)
+        value = plan.setpoint_raw
         self.write_register(drive, 0x2001, value)
         if self.settings.setpoint_readback:
             # 0x2001 is write-only in the published manual; only enable for verified firmware.
@@ -154,6 +168,7 @@ class StandHardware:
             actual = self.registers(drive, 3, 1, 1)[0]  # PA01: effective setpoint
         if actual != value:
             raise RuntimeError(f"Уставка IDD не подтверждена: записано {value}, прочитано {actual}")
+        return plan
 
     def sample(self, drive: int) -> Sample:
         readings = self.pressure()

@@ -11,8 +11,8 @@ class FakeHardware:
     def relay(self, channel, active):
         self.events.append(("relay", channel, active))
 
-    def set_frequency(self, drive, percent):
-        self.events.append(("frequency", drive, percent))
+    def set_frequency(self, drive, hz):
+        self.events.append(("frequency", drive, hz))
 
     def sample(self, drive):
         return self.current
