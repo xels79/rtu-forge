@@ -20,6 +20,8 @@ from .stand_completion import StandForgeCompleter
 from .stand_config import StandSettings, load_stand_settings, save_stand_settings, with_overrides
 from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, RELAY_CHANNEL_COUNT, build_all_relays_off_request, build_output_request, build_tank_request, build_write_multiple_coils, validate_write_response
 from .transport import SerialTransport
+from .crc import has_valid_crc
+from .stand_protocol import build_write_single_register
 
 
 @dataclass
@@ -139,6 +141,62 @@ def _exchange(ctx: StandContext, request: bytes) -> None:
     _print_exchange(ctx, exchange.tx, exchange.rx, exchange.elapsed_ms)
     validate_write_response(request, exchange.rx)
 
+
+
+def _registers(ctx: StandContext, slave: int, fn: int, addr: int, count: int) -> list[int]:
+    request = bytes((slave, fn, addr >> 8, addr & 255, 0, count))
+    _ensure_connected(ctx)
+    reply = ctx.transport.exchange(request, crc_mode_override="append")
+    _print_exchange(ctx, reply.tx, reply.rx, reply.elapsed_ms)
+    rx = reply.rx
+    if len(rx) >= 5 and rx[0] == slave and rx[1] == (fn | 128) and has_valid_crc(rx):
+        raise RuntimeError(f"Modbus exception {rx[2]}")
+    if len(rx) != 5 + 2 * count or rx[:3] != bytes((slave, fn, 2 * count)) or not has_valid_crc(rx):
+        raise RuntimeError("Ошибка ответа Modbus: адрес/функция/длина/CRC")
+    return [int.from_bytes(rx[3 + 2*i:5 + 2*i], "big") for i in range(count)]
+
+
+def _idd(ctx: StandContext, args: list[str]) -> None:
+    if len(args) < 2 or args[0] not in ("7", "8"):
+        raise ValueError("idd <7|8> <status|setup|frequency> [процент]")
+    slave, action = int(args[0]), args[1]
+    if action == "status" and len(args) == 2:
+        for label, addr in (("Pb00", 0x64), ("Pb01", 0x65), ("Pb02", 0x66),
+                            ("Pb05", 0x69), ("Pb06", 0x6a),
+                            ("Pd15", 0x13b), ("Pd16", 0x13c)):
+            val = _registers(ctx, slave, 3, addr, 1)[0]
+            ctx.console.print(f"{label} = {val}", markup=False)
+        return
+    if action == "setup" and len(args) == 2:
+        vals = _registers(ctx, slave, 3, 0x65, 2)
+        if vals != [5, 1]:
+            raise RuntimeError(f"Ожидаются Pb01=5, Pb02=1; получено {vals}. Автоматическая запись запрещена.")
+        ctx.console.print("Проверено: частота RS485, пуск FWD; параметры не менялись.", markup=False)
+        return
+    if action == "frequency" and len(args) == 3:
+        import math
+        percent = float(args[2].replace(",", "."))
+        if not math.isfinite(percent) or not 0 < percent <= 100:
+            raise ValueError("Частота: число 0..100%, не включая 0")
+        if _registers(ctx, slave, 3, 0x65, 2) != [5, 1]:
+            raise RuntimeError("Требуются Pb01=5 и Pb02=1")
+        maximum, minimum = _registers(ctx, slave, 3, 0x69, 2)
+        value = int(maximum * percent / 100 + .5)
+        if value < minimum:
+            raise RuntimeError(f"Задание {value/10:g} Гц ниже минимума {minimum/10:g} Гц")
+        _exchange(ctx, build_write_single_register(slave, 0x2001, value))
+        ctx.console.print(f"IDD {slave}: {percent:g}% = {value/10:g} Гц", markup=False)
+        return
+    raise ValueError("idd 7 status | idd 7 setup | idd 7 frequency 35")
+
+
+def _ai(ctx: StandContext, args: list[str]) -> None:
+    if args not in ([], ["types"]):
+        raise ValueError("ai [types]")
+    fn, address = (3, 0x1000) if args else (4, 0)
+    values = _registers(ctx, 6, fn, address, 4)
+    for i, value in enumerate(values, 1):
+        ctx.console.print(f"AI{i}: {'тип' if args else 'сырое значение'} = {value}", markup=False)
 
 def _tank(ctx: StandContext, parts: list[str]) -> None:
     if len(parts) != 2:
@@ -267,7 +325,13 @@ def _set(ctx: StandContext, parts: list[str]) -> None:
 
 
 def _help(ctx: StandContext, topic: str | None = None) -> None:
-    if topic == "tank":
+    if topic == "idd":
+        text = "idd 7 status — параметры IDD; idd 7 setup — проверка настройки FWD/RS485 без записи; idd 7 frequency 35 — установить 35% от Pb05 по RS485. Также адрес 8. Максимальная частота не меняется."
+    elif topic == "ai":
+        text = "ai — сырые значения AI1..AI4 модуля RTU 6; ai types — типы входов. Давление требует проверки масштабирования."
+    elif topic == "start":
+        text = "Автоматический пуск пока заблокирован до аппаратной проверки. Состояния автоматики: IRRIGATION.md."
+    elif topic == "tank":
         text = "tank <1..4> <empty|middle|full>\n  empty=both off, middle=lower on, full=both on"
     elif topic in {"on", "off", "of"}:
         description = (
@@ -293,6 +357,9 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
     else:
         text = (
             "Stand Forge commands:\n"
+            "  idd <7|8> status|setup|frequency <процент>\n"
+            "  ai [types] — датчики RTU 6\n"
+            "  help idd | help ai | help start\n"
             "  tank <1..4> <empty|middle|full>\n"
             f"  on <1..{RELAY_CHANNEL_COUNT}> [<1..{RELAY_CHANNEL_COUNT}> ...]\n"
             f"  off <1..{RELAY_CHANNEL_COUNT}> [<1..{RELAY_CHANNEL_COUNT}> ...] (alias: of)\n"
@@ -320,7 +387,13 @@ def execute_command(ctx: StandContext, line: str) -> str | None:
         return None
     parts = shlex.split(stripped, posix=True)
     command, args = parts[0].lower(), parts[1:]
-    if command == "tank":
+    if command == "idd":
+        _idd(ctx, args)
+    elif command == "ai":
+        _ai(ctx, args)
+    elif command == "start":
+        raise RuntimeError("Автопуск заблокирован: требуется калибровка AI и проверка VFD RUN/частоты")
+    elif command == "tank":
         _tank(ctx, args)
     elif command in {"on", "off", "of"}:
         _relay(ctx, args, enabled=command == "on")
