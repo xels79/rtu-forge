@@ -17,7 +17,6 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.table import Table
-from rich.text import Text
 
 from .config import load_config
 from .connection import parse_connection_overrides
@@ -503,13 +502,7 @@ def _set(ctx: StandContext, parts: list[str]) -> None:
 
 
 def _print_help(ctx: StandContext, text: str) -> None:
-    formatted = Text()
-    for index, line in enumerate(text.splitlines()):
-        if index:
-            formatted.append("\n")
-        heading = index == 0 or line.isupper()
-        formatted.append(line, style="bold cyan" if heading and not _clean(ctx) else "")
-    ctx.console.print(formatted)
+    ctx.console.print(text, markup=False, highlight=False)
 
 
 def _help(ctx: StandContext, topic: str | None = None) -> None:

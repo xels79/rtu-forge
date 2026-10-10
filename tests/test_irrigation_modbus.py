@@ -525,12 +525,17 @@ def test_captured_ai_frame_preserves_zero_and_blocks_sample():
 
 @pytest.mark.parametrize("topic", ["", "idd", "ai", "start", "stop", "pressure", "test-pressure", "reset", "set", "exit"])
 def test_cli_russian_help_never_connects_or_writes(tmp_path, topic):
+    from io import StringIO
+    from rich.console import Console
     from test_standforge import make_ctx
     from rtuforge.stand_cli import execute_command
     ctx, transport = make_ctx(tmp_path)
+    output = StringIO()
+    ctx.console = Console(file=output, record=True, force_terminal=True, color_system="standard")
     execute_command(ctx, f"help {topic}")
     assert not transport.connected and not transport.requests
     assert ctx.console.export_text()
+    assert "\x1b" not in output.getvalue()  # Inspect actual output, not ANSI-stripped export.
     assert not (tmp_path / "stand.ini").exists()
 
 
