@@ -27,7 +27,7 @@ from .stand_config import StandSettings, load_stand_settings, save_stand_setting
 from .stand_protocol import OUTPUT_CHANNEL_NAMES, OUTPUT_RANGES, RELAY_CHANNEL_COUNT, build_all_relays_off_request, build_output_request, build_tank_request, build_write_multiple_coils, validate_write_response
 from .transport import SerialTransport
 from .stand_vfd import parse_frequency_hz
-from .irrigation import State
+from .irrigation import State, TIER_VALVES
 from .irrigation_config import IrrigationSettings, load_irrigation_settings, set_irrigation_option
 from .irrigation_service import IrrigationService
 from .stand_hardware import StandHardware
@@ -339,12 +339,12 @@ def _stop(ctx: StandContext, *, emergency: bool = False) -> None:
     if ctx.irrigation is not None and ctx.irrigation.busy:
         ctx.irrigation.stop()
         if not emergency:
-            ctx.console.print("STOP принят; клапан яруса закроется после подтверждения STOP и нулевой частоты.", markup=False)
+            ctx.console.print("STOP принят; все клапаны 9..14 закроются после подтверждения STOP и нулевой частоты.", markup=False)
             return
     with ctx.bus_lock:
         hw = _hardware(ctx)
         hw.emergency_off()
-        ctx.console.print("Сняты команды пуска: реле 32, 31, 1; релейная плата подтвердила отключение. Клапаны ярусов не закрывались.", markup=False)
+        ctx.console.print("Сняты команды пуска: реле 32, 31, 1; релейная плата подтвердила отключение. Клапаны 9..14 пока сохраняют состояние.", markup=False)
         if not emergency:
             errors = []
             for drive in (7, 8):
@@ -358,6 +358,19 @@ def _stop(ctx: StandContext, *, emergency: bool = False) -> None:
                 raise RuntimeError("Команды пуска сняты и подтверждены релейной платой, но останов IDD не подтверждён: "
                                    + "; ".join(errors))
             ctx.console.print("IDD 7 и 8: STOP и частота около нуля подтверждены.", markup=False)
+            errors = []
+            for channel in TIER_VALVES:
+                try:
+                    hw.relay(channel, False)
+                except Exception as exc:
+                    errors.append(f"реле {channel}: {exc}")
+            try:
+                hw.confirm_off(TIER_VALVES)
+            except Exception as exc:
+                errors.append(str(exc))
+            if errors:
+                raise RuntimeError("Закрытие клапанов 9..14 не подтверждено: " + "; ".join(errors))
+            ctx.console.print("Все клапаны 9..14 выключены; плата подтвердила состояние.", markup=False)
 
 
 def _tank(ctx: StandContext, parts: list[str]) -> None:
@@ -385,6 +398,9 @@ def _relay(ctx: StandContext, parts: list[str], *, enabled: bool) -> None:
         raise ValueError(f"Relay channels must be integers in range 1..{RELAY_CHANNEL_COUNT}. {usage}") from None
     if any(not 1 <= channel <= RELAY_CHANNEL_COUNT for channel in channels):
         raise ValueError(f"Relay channels must be in range 1..{RELAY_CHANNEL_COUNT}. {usage}")
+    if ctx.irrigation is not None and ctx.irrigation.busy:
+        ctx.irrigation.set_tier_valves(channels, enabled)
+        return
     for channel in dict.fromkeys(channels):
         request = build_write_multiple_coils(ctx.settings.relay_address, channel - 1, [enabled])
         _exchange(ctx, request)
@@ -648,7 +664,8 @@ def execute_command(ctx: StandContext, line: str) -> str | None:
     busy = ctx.irrigation is not None and ctx.irrigation.busy
     mutating = command in {"tank", "on", "off", "of", "output", "reset", "set", "connect", "disconnect"}
     mutating |= command == "idd" and len(args) > 1 and args[1].lower() in {"frequency", "configure"}
-    if busy and (mutating or command == "test-pressure" and args != ["log"]):
+    if busy and ((mutating and command not in {"on", "off", "of"})
+                 or command == "test-pressure" and args != ["log"]):
         raise RuntimeError(f"{command}: конфликт с циклом полива/FAULT; выполните stop и дождитесь IDLE или reset fault")
     if command == "start":
         if args and args[0].lower() == "check":

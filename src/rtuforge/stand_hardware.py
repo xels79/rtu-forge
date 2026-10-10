@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from math import ceil
 
-from .irrigation import DRIVE_START, Sample, StopRequested, relay_purpose
+from .irrigation import DRIVE_START, TIER_VALVES, Sample, StopRequested, relay_purpose
 from .irrigation_config import IrrigationSettings
 from .stand_protocol import (build_read_request, build_write_multiple_coils,
                              build_write_single_register,
@@ -85,6 +85,12 @@ class StandHardware:
         request = build_write_multiple_coils(self.relay_id, channel - 1, [active])
         if active:
             self._allow_write()  # STOP may have arrived while displaying the command.
+        elif channel in TIER_VALVES and self.expected_hydraulics is not None:
+            actual = self.coils()
+            if any(actual[ch - 1] for ch in (1, 31, 32)):
+                self.check_hydraulic_coils(actual)
+                if not any(actual[ch - 1] for ch in TIER_VALVES if ch != channel):
+                    raise RuntimeError("Нельзя закрыть последний клапан 9..14 при работе насоса; сначала on другого клапана или stop")
         validate_write_response(request, self.transaction(request))
         if self.expected_hydraulics is not None:
             if active:
@@ -94,13 +100,15 @@ class StandHardware:
         actual = self.coils()
         if actual[channel - 1] != active:
             raise RuntimeError(f"Реле {channel}: плата не подтвердила {'включение' if active else 'отключение'}")
-        if active:
+        if active or any(actual[ch - 1] for ch in (1, 31, 32)):
             self.check_hydraulic_coils(actual)
         self.report(f"Реле {channel}: {'ВКЛ' if active else 'ВЫКЛ'} подтверждено платой")
 
     def check_hydraulic_coils(self, coils: list[bool]) -> None:
         if self.expected_hydraulics is None:
             return
+        if any(coils[ch - 1] for ch in (1, 31, 32)) and not any(coils[ch - 1] for ch in TIER_VALVES):
+            raise RuntimeError("Ни один клапан 9..14 не открыт при работе насоса; требуется останов")
         owned = {1, *range(9, 15), 19, 20, 23, 31, 32}
         active = {ch for ch in owned if coils[ch - 1]}
         if active != self.expected_hydraulics:

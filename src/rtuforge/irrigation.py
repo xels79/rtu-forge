@@ -31,6 +31,7 @@ class State(str, Enum):
 VALVES = {(1, 1): 9, (1, 2): 10, (1, 3): 11,
           (2, 1): 12, (2, 2): 13, (2, 3): 14}
 DRIVE_START = {7: 32, 8: 31}
+TIER_VALVES = tuple(sorted(VALVES.values()))
 
 
 def relay_purpose(channel: int) -> str:
@@ -219,6 +220,20 @@ class IrrigationController:
         else:
             self.stop()
 
+    def _close_tier_valves(self) -> None:
+        errors = []
+        for channel in TIER_VALVES:
+            try:
+                self.hw.relay(channel, False)
+            except Exception as exc:
+                errors.append(f"реле {channel}: {exc}")
+        try:
+            self.hw.confirm_off(TIER_VALVES)
+        except Exception as exc:
+            errors.append(f"подтверждение клапанов: {exc}")
+        if errors:
+            raise RuntimeError("Закрытие клапанов 9..14 не подтверждено: " + "; ".join(errors))
+
     def tick(self) -> State:
         if self.state in (State.IDLE, State.FAULT):
             return self.state
@@ -234,7 +249,7 @@ class IrrigationController:
                 self.last_stop_hz = hz
                 if hz <= self.limits.stop_hz and not running and self.stop_outputs_confirmed:
                     if self.valve is not None and self.valve_opened:
-                        self.hw.relay(self.valve, False)
+                        self._close_tier_valves()
                     self.valve = None
                     self.valve_opened = False
                     self._state(State.FAULT if self.fault_reason else State.IDLE)
@@ -328,7 +343,7 @@ class IrrigationController:
         if not self.stop_outputs_confirmed or not isfinite(hz) or hz < 0 or running or fault or hz > self.limits.stop_hz:
             raise RuntimeError("reset fault: останов частотника и реле не подтверждён")
         if self.valve is not None and self.valve_opened:
-            self.hw.relay(self.valve, False)
+            self._close_tier_valves()
         self.valve_opened = False
         self.valve = self.drive = self.select = self.last = None
         self.fault_reason = ""

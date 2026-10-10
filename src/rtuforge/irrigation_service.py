@@ -5,7 +5,7 @@ from collections.abc import Callable
 from threading import Event, RLock, Thread
 from time import monotonic
 
-from .irrigation import IrrigationController, State
+from .irrigation import IrrigationController, State, StopRequested, TIER_VALVES
 from .irrigation_config import IrrigationSettings
 from .stand_hardware import StandHardware
 
@@ -57,6 +57,45 @@ class IrrigationService:
                 raise RuntimeError("STOP уже принят; подтверждение шага отменено")
             self.controller.confirm_step(step.number)
             self.report(f"Шаг {step.number}: Enter принят; проверки повторятся перед действием")
+
+    def set_tier_valves(self, channels: list[int], active: bool) -> None:
+        """Explicit test commands share the polling lock and hydraulic checks."""
+        channels = list(dict.fromkeys(channels))
+        if not channels or any(ch not in TIER_VALVES for ch in channels):
+            raise RuntimeError("Во время полива on/off разрешены только для клапанов 9..14; смешанные команды запрещены")
+        with self.bus_lock:
+            ctl = self.controller
+
+            def check_state() -> None:
+                if self.stop_requested.is_set() or ctl.state not in (State.WAIT_HIGH_PRESSURE, State.RUNNING):
+                    raise RuntimeError("Клапаны можно переключать только в WAIT_HIGH_PRESSURE/RUNNING; при пуске, STOPPING и FAULT команда запрещена")
+
+            check_state()
+            ctl.tick()  # Fresh pressure/drive/relay checks before an operator write.
+            check_state()
+            try:
+                actual = self.hardware.coils()
+                self.hardware.check_hydraulic_coils(actual)
+            except Exception as exc:
+                ctl.emergency(f"Проверка клапанов: {exc}")
+                raise
+            opened = {ch for ch in TIER_VALVES if actual[ch - 1]}
+            remaining = opened | set(channels) if active else opened - set(channels)
+            if not remaining:
+                raise RuntimeError("Нельзя закрыть последний клапан: хотя бы один из 9..14 должен остаться открыт; сначала on другого клапана или stop")
+            for channel in channels:
+                check_state()
+                ctl.tick()  # Keep protection active between multi-valve transactions.
+                check_state()
+                try:
+                    self.hardware.relay(channel, active)
+                except StopRequested:
+                    ctl.stop()
+                    raise RuntimeError("STOP принят; переключение клапанов отменено") from None
+                except Exception as exc:
+                    ctl.emergency(f"Переключение клапана {channel}: {exc}")
+                    raise
+            self._telemetry()
 
     def _telemetry(self) -> None:
         ctl = self.controller
