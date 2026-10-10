@@ -948,6 +948,7 @@ standforge --home . idd all setup
 standforge --home . idd all monitor
 standforge --home . test-pressure low 10
 standforge --home . start check 1 1 broth 29
+standforge --home . start step 1 1 broth 29
 ```
 
 В интерактивной консоли: `start 1 1 broth 29`, `stop`, `emergency-stop`,
@@ -969,6 +970,18 @@ standforge --home . start check 1 1 broth 29
 повторные проверки при настоящем `start`. Исправность AI не снимает требования
 к обратной связи IDD, проверке гидравлики и аппаратных защит.
 
+`start step 1 1 broth 29` запускает проверку и пошаговый цикл. Перед записью
+частоты и каждым включением реле требуется отдельный пустой Enter. Вывод показывает
+назначение клапана/насоса, давление НВД/ДВД, частоту, ток двигателя и состояния
+реле. Стеллаж 1 соответствует реле 9/10/11, стеллаж 2 — 12/13/14.
+После записи читается состояние релейной платы; лишний включённый клапан вызывает
+останов. Проверка платы не доказывает физическое положение клапана — оператор
+сверяет его перед следующим Enter. STOP и аварийный останов не ждут подтверждения.
+Давление и IDD продолжают опрашиваться при ожидании Enter; ожидание ограничено
+`step_timeout_ms`, вывод — `telemetry_ms`. Набор давления и RUNNING переходят
+автоматически по обратной связи. Режим доступен в интерактивном и one-shot запуске,
+выход/EOF/Ctrl+C завершает контроллер. Обычный `start` сохраняет автоматический пуск.
+
 Новые mutable options зарегистрированы в `irrigation_config.OPTION_SPECS`,
 хранятся в `[irrigation]` пользовательского `stand.ini` и изменяются только явной
 командой `set irrigation <имя> <значение>` либо редактированием файла:
@@ -980,6 +993,7 @@ standforge --home . start check 1 1 broth 29
 | drive7_min_hz; drive8_min_hz | 24; 0 (для IDD 8 применяется Pb06, отдельный минимум мотора не задан) |
 | low_ready_bar; low_min_bar; high_target_bar; high_min_bar; high_max_bar; hysteresis_bar | 1; 0.5; 60; 50; 70; 0.2 |
 | valve_delay_ms; prime_timeout_ms; rise_timeout_ms; stop_timeout_ms; leak_delay_ms; poll_ms | 2000; 10000; 20000; 15000; 2000; 250 |
+| telemetry_ms; step_timeout_ms | 1000; 30000 |
 | stop_hz; run_register; run_mask; fault_register; fault_mask; setpoint_readback | 0.1; -1; 1; -1; 65535; false |
 
 Все времена конфигурации — миллисекунды. Пороги являются примерами для тестов;

@@ -33,6 +33,21 @@ VALVES = {(1, 1): 9, (1, 2): 10, (1, 3): 11,
 DRIVE_START = {7: 32, 8: 31}
 
 
+def relay_purpose(channel: int) -> str:
+    for (rack, tier), valve in VALVES.items():
+        if channel == valve:
+            return f"клапан ВД: стеллаж {rack}, ярус {tier}"
+    return {1: "подпорный насос НВД", 19: "выбор НВД 1", 20: "выбор НВД 2",
+            23: "клапан бульона", 31: "FWD IDD 8", 32: "FWD IDD 7"}.get(channel, "реле")
+
+
+@dataclass(frozen=True)
+class PendingStep:
+    number: int
+    description: str
+    deadline: float
+
+
 @dataclass(frozen=True)
 class Limits:
     low_ready: float
@@ -71,6 +86,7 @@ class Sample:
     hz: float
     running: bool
     fault: bool = False
+    drive_current_a: float | None = None
 
 
 class Hardware(Protocol):
@@ -87,8 +103,18 @@ class StopRequested(Exception):
 
 
 class IrrigationController:
-    def __init__(self, hw: Hardware, limits: Limits, *, clock: Callable[[], float] = monotonic):
+    def __init__(self, hw: Hardware, limits: Limits, *, clock: Callable[[], float] = monotonic,
+                 confirm_timeout: float = 30.0):
+        if not isfinite(confirm_timeout) or confirm_timeout <= 0:
+            raise ValueError("Тайм-аут подтверждения должен быть положительным")
         self.hw, self.limits, self.clock = hw, limits, clock
+        self.confirm_timeout = confirm_timeout
+        self.guided = False
+        self.pending_step: PendingStep | None = None
+        self.step_number = 0
+        self.step_approved = False
+        self.valve_index = 0
+        self.last_stop_hz: float | None = None
         self.state = State.IDLE
         self.changed = clock()
         self.fault_reason = ""
@@ -105,16 +131,19 @@ class IrrigationController:
         self.state, self.changed = value, self.clock()
 
     def _read(self) -> Sample:
+        self.last = None
         sample = self.hw.sample(self.drive)
         if (not all(isfinite(v) for v in (sample.low_bar, sample.high_bar, sample.hz))
             or not 0 <= sample.low_bar <= 6 or not 0 <= sample.high_bar <= 100
             or sample.hz < 0 or sample.fault):
             raise RuntimeError("Некорректная обратная связь датчика/частотника или авария IDD")
+        if sample.drive_current_a is not None and (not isfinite(sample.drive_current_a) or sample.drive_current_a < 0):
+            raise RuntimeError("Некорректный выходной ток IDD")
         self.last = sample
         return sample
 
     def start(self, rack: int, tier: int, liquid: str, hz: float,
-              *, drive: int, selector: int) -> None:
+              *, drive: int, selector: int, guided: bool = False) -> None:
         if self.state != State.IDLE:
             raise RuntimeError("Повторный START запрещён: требуется IDLE; выполните stop / reset fault")
         if (rack, tier) not in VALVES or liquid != "broth":
@@ -124,10 +153,38 @@ class IrrigationController:
         hz = parse_frequency_hz(hz)
         self.drive, self.valve, self.select = drive, VALVES[(rack, tier)], selector
         self.frequency_hz, self.low_since, self.last = hz, None, None
+        self.guided = guided
+        self.pending_step = None
+        self.step_number = self.valve_index = 0
+        self.step_approved = False
+        self.last_stop_hz = None
         self.fault_reason = ""
         self.stop_outputs_confirmed = False
         self.valve_opened = False
         self._state(State.PRECHECK)
+
+    def confirm_step(self, number: int) -> None:
+        if (not self.guided or self.pending_step is None or self.pending_step.number != number
+            or self.step_approved or self.state in (State.IDLE, State.STOPPING, State.FAULT)):
+            raise RuntimeError("Нет ожидающего подтверждения шага; Enter заранее не сохраняется")
+        if self.clock() >= self.pending_step.deadline:
+            raise RuntimeError("Время подтверждения шага истекло; дождитесь останова")
+        self.step_approved = True
+
+    def _approve(self, description: str) -> bool:
+        if not self.guided:
+            return True
+        if self.pending_step is None:
+            self.step_number += 1
+            self.pending_step = PendingStep(self.step_number, description, self.clock() + self.confirm_timeout)
+            return False
+        if self.clock() >= self.pending_step.deadline:
+            raise RuntimeError("Тайм-аут подтверждения шага оператором")
+        if not self.step_approved:
+            return False
+        self.pending_step = None
+        self.step_approved = False
+        return True
 
     def _drop_outputs(self) -> None:
         errors = []
@@ -150,6 +207,8 @@ class IrrigationController:
             return
         if self.state != State.STOPPING:
             self._state(State.STOPPING)
+        self.pending_step = None
+        self.step_approved = False
         self._drop_outputs()
 
     def emergency(self, reason: str) -> None:
@@ -165,11 +224,13 @@ class IrrigationController:
         now = self.clock()
         if self.state == State.STOPPING:
             try:
+                self.last_stop_hz = None
                 if not self.stop_outputs_confirmed:
                     self._drop_outputs()
                 hz, running, _ = self.hw.drive_feedback(self.drive)
                 if not isfinite(hz) or hz < 0:
                     raise RuntimeError("Некорректная выходная частота при останове")
+                self.last_stop_hz = hz
                 if hz <= self.limits.stop_hz and not running and self.stop_outputs_confirmed:
                     if self.valve is not None and self.valve_opened:
                         self.hw.relay(self.valve, False)
@@ -189,21 +250,37 @@ class IrrigationController:
             age = now - self.changed
             if r.high_bar >= self.limits.high_max:
                 raise RuntimeError("Превышено ДВД: возможна закупорка линии")
+            if self.guided and self.state in (State.CONFIGURE_VFD, State.OPEN_VALVES,
+                                              State.START_BOOSTER, State.WAIT_LOW_PRESSURE, State.START_VFD):
+                if r.running or r.hz > self.limits.stop_hz:
+                    raise RuntimeError("IDD запущен до подтверждённого шага FWD")
             if self.state == State.PRECHECK:
                 if r.running or r.hz > self.limits.stop_hz:
                     raise RuntimeError("Частотник уже работает; пуск запрещён")
                 self.hw.precheck(self.drive)
                 self._state(State.CONFIGURE_VFD)
             elif self.state == State.CONFIGURE_VFD:
-                self.hw.set_frequency(self.drive, self.frequency_hz)
-                self._state(State.OPEN_VALVES)
+                if self._approve(f"IDD {self.drive}: записать задание {self.frequency_hz:g} Гц, пуск FWD выключен"):
+                    self.hw.set_frequency(self.drive, self.frequency_hz)
+                    self._state(State.OPEN_VALVES)
             elif self.state == State.OPEN_VALVES:
-                self.valve_opened = True  # a lost acknowledgement may still mean the valve opened
-                for channel in (self.valve, self.select, 23):
-                    self.hw.relay(channel, True)
-                self._state(State.START_BOOSTER)
+                channels = (self.valve, self.select, 23)
+                if self.guided:
+                    channel = channels[self.valve_index]
+                    if self._approve(f"ВКЛ реле {channel}: {relay_purpose(channel)}"):
+                        if channel == self.valve:
+                            self.valve_opened = True  # lost acknowledgement may still mean open
+                        self.hw.relay(channel, True)
+                        self.valve_index += 1
+                        if self.valve_index == len(channels):
+                            self._state(State.START_BOOSTER)
+                else:
+                    self.valve_opened = True
+                    for channel in channels:
+                        self.hw.relay(channel, True)
+                    self._state(State.START_BOOSTER)
             elif self.state == State.START_BOOSTER:
-                if age >= self.limits.valve_delay:
+                if age >= self.limits.valve_delay and self._approve("ВКЛ реле 1: подпорный насос НВД"):
                     self.hw.relay(1, True)
                     self._state(State.WAIT_LOW_PRESSURE)
             elif self.state == State.WAIT_LOW_PRESSURE:
@@ -214,8 +291,10 @@ class IrrigationController:
             elif self.state == State.START_VFD:
                 if r.low_bar < self.limits.low_ready:
                     raise RuntimeError("Подпор пропал до пуска частотника")
-                self.hw.relay(DRIVE_START[self.drive], True)
-                self._state(State.WAIT_HIGH_PRESSURE)
+                channel = DRIVE_START[self.drive]
+                if self._approve(f"ВКЛ реле {channel}: FWD IDD {self.drive}, после подтверждения НВД"):
+                    self.hw.relay(channel, True)
+                    self._state(State.WAIT_HIGH_PRESSURE)
             elif self.state == State.WAIT_HIGH_PRESSURE:
                 if r.low_bar < self.limits.low_min:
                     raise RuntimeError("Нет подпора во время набора ДВД")

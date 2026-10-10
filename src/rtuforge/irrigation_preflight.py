@@ -30,7 +30,7 @@ class PreflightReport:
 
 
 def parse_start_args(args: list[str]) -> tuple[int, int, str, float]:
-    usage = "start [check] <1..2> <1..3> broth <частота в Гц>"
+    usage = "start [check|step] <1..2> <1..3> broth <частота в Гц>"
     if len(args) != 4:
         raise ValueError(usage)
     try:

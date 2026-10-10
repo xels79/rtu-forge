@@ -5,7 +5,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from math import ceil
 
-from .irrigation import DRIVE_START, Sample, StopRequested
+from .irrigation import DRIVE_START, Sample, StopRequested, relay_purpose
 from .irrigation_config import IrrigationSettings
 from .stand_protocol import (build_read_request, build_write_multiple_coils,
                              build_write_single_register,
@@ -52,6 +52,9 @@ class StandHardware:
         self.relay_id = relay_id
         self.settings = settings
         self.cancelled = cancelled
+        self.report: Callable[[str], None] = lambda text: None
+        self.last_coils: list[bool] | None = None
+        self.expected_hydraulics: set[int] | None = None
 
     def registers(self, slave: int, function: int, address: int, count: int) -> list[int]:
         request = build_read_request(slave, function, address, count)
@@ -61,7 +64,8 @@ class StandHardware:
     def coils(self) -> list[bool]:
         request = build_read_request(self.relay_id, 1, 0, 32)
         data = validate_read_response(request, self.transaction(request))
-        return [bool(data[i // 8] & (1 << (i % 8))) for i in range(32)]
+        self.last_coils = [bool(data[i // 8] & (1 << (i % 8))) for i in range(32)]
+        return self.last_coils
 
     def _allow_write(self) -> None:
         if self.cancelled():
@@ -72,8 +76,30 @@ class StandHardware:
             raise ValueError("Реле: допустимы каналы 1..32")
         if active:
             self._allow_write()
+        self.report(f"Реле {channel}: {'ВКЛ' if active else 'ВЫКЛ'} — {relay_purpose(channel)}; команда")
         request = build_write_multiple_coils(self.relay_id, channel - 1, [active])
+        if active:
+            self._allow_write()  # STOP may have arrived while displaying the command.
         validate_write_response(request, self.transaction(request))
+        if self.expected_hydraulics is not None:
+            if active:
+                self.expected_hydraulics.add(channel)
+            else:
+                self.expected_hydraulics.discard(channel)
+        actual = self.coils()
+        if actual[channel - 1] != active:
+            raise RuntimeError(f"Реле {channel}: плата не подтвердила {'включение' if active else 'отключение'}")
+        if active:
+            self.check_hydraulic_coils(actual)
+        self.report(f"Реле {channel}: {'ВКЛ' if active else 'ВЫКЛ'} подтверждено платой")
+
+    def check_hydraulic_coils(self, coils: list[bool]) -> None:
+        if self.expected_hydraulics is None:
+            return
+        owned = {1, *range(9, 15), 19, 20, 23, 31, 32}
+        active = {ch for ch in owned if coils[ch - 1]}
+        if active != self.expected_hydraulics:
+            raise RuntimeError(f"Состояние реле гидравлики не соответствует командам: ожидались {sorted(self.expected_hydraulics)}, включены {sorted(active)}; проверьте клапаны и адреса")
 
     def write_register(self, slave: int, register: int, value: int) -> None:
         self._allow_write()
@@ -126,6 +152,7 @@ class StandHardware:
         active = [ch for ch in owned if coils[ch - 1]]
         if active:
             raise RuntimeError(f"Пуск запрещён: уже включены реле {active}; проверьте гидравлику и выполните stop")
+        self.expected_hydraulics = set()
 
     def confirm_off(self, channels: tuple[int, ...]) -> None:
         coils = self.coils()
@@ -168,6 +195,7 @@ class StandHardware:
             actual = self.registers(drive, 3, 1, 1)[0]  # PA01: effective setpoint
         if actual != value:
             raise RuntimeError(f"Уставка IDD не подтверждена: записано {value}, прочитано {actual}")
+        self.report(f"IDD {drive}: задание {value/10:g} Гц подтверждено; {plan.limits_description}")
         return plan
 
     def sample(self, drive: int) -> Sample:
@@ -176,7 +204,11 @@ class StandHardware:
             if reading.error:
                 raise RuntimeError(reading.error)
         hz, running, fault = self.drive_feedback(drive)
-        return Sample(readings[0].bar, readings[1].bar, hz, running, fault)
+        # PA03=0x0003, documented current scaling: 0.1 A per register unit.
+        current = self.registers(drive, 3, 3, 1)[0] / 10
+        if self.expected_hydraulics is not None:
+            self.check_hydraulic_coils(self.coils())
+        return Sample(readings[0].bar, readings[1].bar, hz, running, fault, current)
 
     def configure(self, drive: int) -> None:
         hz, running, fault = self.drive_feedback(drive)

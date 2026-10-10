@@ -40,7 +40,7 @@ class ModbusBus:
         self.types = [3, 3, 2, 2]
         self.registers = {drive: {0x64: 500, 0x65: 5, 0x66: 1, 0x69: 450,
                                   0x6A: 200, 0x13B: 6, 0x13C: 7,
-                                  1: 0, 2: 0, 10: 0, 0x5000: 0, 0x5001: 0}
+                                  1: 0, 2: 0, 3: 0, 10: 0, 0x5000: 0, 0x5001: 0}
                           for drive in (7, 8)}
         self.failure = None
         self.auto_feedback = False

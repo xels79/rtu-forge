@@ -37,6 +37,8 @@ class IrrigationSettings:
     stop_timeout_ms: int = 15000
     leak_delay_ms: int = 2000
     poll_ms: int = 250
+    telemetry_ms: int = 1000
+    step_timeout_ms: int = 30000
     stop_hz: float = 0.1
     run_register: int = -1
     run_mask: int = 1
@@ -54,7 +56,8 @@ class IrrigationSettings:
                for v in (self.drive7_min_hz, self.drive8_min_hz)):
             raise ValueError("drive7_min_hz/drive8_min_hz: допустимо 0..400 Гц")
         if any(v <= 0 for v in (self.poll_ms, self.prime_timeout_ms, self.rise_timeout_ms,
-                                self.stop_timeout_ms, self.leak_delay_ms)) or self.valve_delay_ms < 0:
+                                self.stop_timeout_ms, self.leak_delay_ms, self.telemetry_ms,
+                                self.step_timeout_ms)) or self.valve_delay_ms < 0:
             raise ValueError("Задержки/периоды должны быть положительными (valve_delay_ms допускает 0)")
         if not isfinite(self.stop_hz) or not 0 <= self.stop_hz <= 0.1:
             raise ValueError("stop_hz: допустимо 0..0.1 Гц")

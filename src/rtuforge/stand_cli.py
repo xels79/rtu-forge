@@ -221,6 +221,8 @@ def _idd(ctx: StandContext, args: list[str]) -> None:
             raise RuntimeError(f"IDD {slave}: PA02 вне диапазона 0..400 Гц; проверьте карту и масштабирование")
         history = hw.registers(slave, 3, 10, 1)[0]
         ctx.console.print(f"IDD {slave}: связь Modbus подтверждена; PA01={setpoint/10:g} Гц; PA02={frequency/10:g} Гц; PA10 (история ошибок)={history}", markup=False)
+        current = hw.registers(slave, 3, 3, 1)[0] / 10
+        ctx.console.print(f"PA03: выходной ток двигателя={current:g} А (0x0003, шаг 0.1 А)", markup=False)
         cfg = ctx.irrigation_settings
         if not cfg.vfd_verified or cfg.run_register < 0 or cfg.fault_register < 0:
             ctx.console.print("RUN/STOP=неизвестно; текущая авария=неизвестно. Для управления нужны подтверждённые run_register/fault_register и vfd_verified. PA10 — история; нулевая PA02 сама по себе не подтверждает STOP.", markup=False)
@@ -290,14 +292,29 @@ def _test_pressure(ctx: StandContext, args: list[str]) -> None:
 
 
 def _start(ctx: StandContext, args: list[str]) -> None:
+    guided = bool(args) and args[0].lower() == "step"
+    if guided:
+        args = args[1:]
     rack, tier, liquid, hz = parse_start_args(args)
     ctx.irrigation_settings.require_commissioned()
     if ctx.irrigation is None:
         ctx.irrigation = IrrigationService(_hardware(ctx, quiet=True), ctx.irrigation_settings,
                                           ctx.bus_lock, lambda text: ctx.console.print(text, markup=False))
-    ctx.irrigation.start(rack, tier, liquid, hz)
+    ctx.irrigation.start(rack, tier, liquid, hz, guided=guided)
     if ctx.one_shot:
         ctx.console.print("Полив под наблюдением этого процесса; Ctrl+C — безопасный останов.", markup=False)
+        if guided:
+            session = PromptSession()
+            with patch_stdout():
+                while not ctx.irrigation.finished.is_set():
+                    try:
+                        line = session.prompt("step> ")
+                    except EOFError:
+                        ctx.irrigation.stop()
+                        break
+                    if execute_command(ctx, line) == "exit":
+                        ctx.irrigation.stop()
+                        break
         while not ctx.irrigation.finished.wait(ctx.irrigation_settings.poll_ms / 1000):
             pass
         if ctx.irrigation.controller.state == State.FAULT:
@@ -447,6 +464,8 @@ def _show_status(ctx: StandContext) -> None:
     ctx.console.print(f"Полив: {ctl.state.value if ctl else 'IDLE'}; enabled={ctx.irrigation_settings.enabled}", markup=False)
     if ctl and ctl.fault_reason:
         ctx.console.print(f"Авария: {ctl.fault_reason}", markup=False)
+    if ctl and ctl.pending_step is not None:
+        ctx.console.print(f"Ожидает Enter: шаг {ctl.pending_step.number} — {ctl.pending_step.description}", markup=False)
 
 
 def _show_paths(ctx: StandContext) -> None:
@@ -522,6 +541,7 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
             "  idd <7|8> status|setup|frequency <Гц>|monitor|feedback|configure --confirm\n"
             "  ai [types] — датчики RTU 6\n"
             "  start <rack> <tier> broth <Hz> | stop | emergency-stop\n"
+            "  start step <rack> <tier> broth <Hz> — Enter перед каждым действием\n"
             "  pressure | test-pressure low|high [count] | test-pressure stop\n"
             "  help idd | help ai | help start\n"
             "  tank <1..4> <empty|middle|full>\n"
@@ -602,7 +622,12 @@ def _execute_command(ctx: StandContext, line: str) -> str | None:
 
 def execute_command(ctx: StandContext, line: str) -> str | None:
     parts = shlex.split(line.strip(), posix=True)
-    if not parts or line.lstrip().startswith("#"):
+    if not parts:
+        if (ctx.irrigation is not None and ctx.irrigation.controller.guided
+            and ctx.irrigation.controller.pending_step is not None):
+            ctx.irrigation.confirm_step()
+        return None
+    if line.lstrip().startswith("#"):
         return None
     command, args = parts[0].lower(), parts[1:]
     if command in {"stop", "emergency-stop"} or (command == "test-pressure" and args == ["stop"]):
