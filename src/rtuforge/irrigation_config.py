@@ -14,6 +14,8 @@ from .irrigation import Limits
 class IrrigationSettings:
     enabled: bool = False
     ai_verified: bool = False
+    ai1_zero_raw_is_zero: bool = False
+    ai2_zero_raw_is_zero: bool = False
     vfd_verified: bool = False
     hydraulics_verified: bool = False
     protections_verified: bool = False

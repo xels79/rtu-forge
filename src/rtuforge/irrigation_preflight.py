@@ -68,8 +68,9 @@ def check_start(hardware: StandHardware, settings: IrrigationSettings,
     else:
         for reading in readings:
             detail = (f"raw={reading.raw}; тип={reading.mode}; "
-                      f"ток={reading.current_ma} мА; "
-                      + (reading.error or f"расчётное давление={reading.bar:g} бар"))
+                      f"ток={reading.current_text}; "
+                      + (reading.error or f"расчётное давление={reading.bar:g} бар")
+                      + (f"; ВНИМАНИЕ: {reading.warning}" if reading.warning else ""))
             checks.append(ReadinessCheck(f"AI{reading.sensor.channel}", not reading.error, detail))
         high = readings[1]
         if high.bar is not None and high.bar >= settings.high_max_bar:

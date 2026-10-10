@@ -87,6 +87,7 @@ class Sample:
     running: bool
     fault: bool = False
     drive_current_a: float | None = None
+    pressure_warning: str = ""
 
 
 class Hardware(Protocol):

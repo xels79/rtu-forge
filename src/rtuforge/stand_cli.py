@@ -257,8 +257,8 @@ def _pressure(ctx: StandContext, args: list[str]) -> None:
         raise ValueError("pressure")
     for reading in _hardware(ctx).pressure():
         value = f"{reading.bar:g} бар" if reading.bar is not None else reading.error
-        current = f"{reading.current_ma:g} мА" if reading.current_ma is not None else "единицы не подтверждены"
-        text = f"AI{reading.sensor.channel}: raw={reading.raw}, тип={reading.mode}, {current}, {value}"
+        warning = f"; ВНИМАНИЕ: {reading.warning}" if reading.warning else ""
+        text = f"AI{reading.sensor.channel}: raw={reading.raw}, тип={reading.mode}, ток={reading.current_text}, {value}{warning}"
         ctx.console.print(text, markup=False)
         ctx.pressure_log.append(datetime.now(timezone.utc).isoformat() + " " + text)
 
@@ -281,7 +281,8 @@ def _test_pressure(ctx: StandContext, args: list[str]) -> None:
             reading = _hardware(ctx, quiet=True).pressure()[channel]
             pressure = f"{reading.bar:g} бар" if reading.bar is not None else "давление недостоверно"
             text = (f"AI{channel+1}: модуль отвечает; raw={reading.raw}; тип={reading.mode}; "
-                    f"ток={reading.current_ma} мА; {pressure}; ошибка={reading.error or 'нет'}")
+                    f"ток={reading.current_text}; {pressure}; ошибка={reading.error or 'нет'}"
+                    + (f"; ВНИМАНИЕ: {reading.warning}" if reading.warning else ""))
         except (RuntimeError, OSError) as exc:
             text = f"AI{channel+1}: потеря связи/неверный ответ: {exc}"
         entry = datetime.now(timezone.utc).isoformat() + " " + text

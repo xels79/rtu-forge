@@ -23,6 +23,11 @@ class PressureReading:
     current_ma: float | None
     bar: float | None
     error: str = ""
+    warning: str = ""
+
+    @property
+    def current_text(self) -> str:
+        return f"{self.current_ma:g} мА" if self.current_ma is not None else "не определён"
 
 
 @dataclass(frozen=True)
@@ -112,8 +117,12 @@ class StandHardware:
         readings = []
         for i, sensor in enumerate((LOW, HIGH)):
             try:
-                ma, bar = decode_pressure(raw[i], modes[i], sensor)
-                readings.append(PressureReading(sensor, raw[i], modes[i], ma, bar))
+                allow_zero = (self.settings.ai1_zero_raw_is_zero if i == 0
+                              else self.settings.ai2_zero_raw_is_zero)
+                ma, bar = decode_pressure(raw[i], modes[i], sensor, zero_raw_is_zero=allow_zero)
+                warning = ("raw=0 принят как 0 бар по проверке оператора; "
+                           "исправность петли не определена") if ma is None else ""
+                readings.append(PressureReading(sensor, raw[i], modes[i], ma, bar, warning=warning))
             except ValueError as exc:
                 readings.append(PressureReading(sensor, raw[i], modes[i],
                                                 raw[i] / 1000 if modes[i] == 3 else None,
@@ -208,7 +217,8 @@ class StandHardware:
         current = self.registers(drive, 3, 3, 1)[0] / 10
         if self.expected_hydraulics is not None:
             self.check_hydraulic_coils(self.coils())
-        return Sample(readings[0].bar, readings[1].bar, hz, running, fault, current)
+        warning = "; ".join(f"AI{r.sensor.channel}: {r.warning}" for r in readings if r.warning)
+        return Sample(readings[0].bar, readings[1].bar, hz, running, fault, current, warning)
 
     def configure(self, drive: int) -> None:
         hz, running, fault = self.drive_feedback(drive)

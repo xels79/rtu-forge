@@ -44,13 +44,19 @@ def high_pressure(current_ma: float) -> float:
     return ma_to_bar(current_ma, HIGH.maximum_bar)
 
 
-def decode_pressure(raw: int, mode: int, sensor: Sensor) -> tuple[float, float]:
-    """Waveshare Input 8CH protocol V2: mode 3 registers contain microamps."""
+def decode_pressure(raw: int, mode: int, sensor: Sensor, *,
+                    zero_raw_is_zero: bool = False) -> tuple[float | None, float]:
+    """Decode documented microamps, with an explicit operator-calibrated zero marker.
+
+    The marker cannot establish loop health or current: return None for current.
+    """
     if mode != 3:
         raise ValueError(f"AI{sensor.channel}: требуется тип 3 (4–20 мА), получен {mode}; проверьте ai types")
     if not 0 <= raw <= 65535:
         raise ValueError(f"AI{sensor.channel}: неверный сырой регистр")
     if raw == 0:
+        if zero_raw_is_zero:
+            return None, 0.0
         raise ValueError(
             f"AI{sensor.channel}: raw=0 — недостоверное измерение для типа 3. "
             "По документированному масштабу нулевому давлению соответствует raw около 4000 (4 мА). "

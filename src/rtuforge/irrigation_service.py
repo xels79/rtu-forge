@@ -65,7 +65,8 @@ class IrrigationService:
         current = f"{sample.drive_current_a:g} А" if sample.drive_current_a is not None else "нет измерения"
         relays = (", ".join(str(i + 1) for i, value in enumerate(self.hardware.last_coils) if value)
                   or "нет") if self.hardware.last_coils is not None else "нет измерения"
-        self.report(f"Измерения: НВД={sample.low_bar:g} бар; ДВД={sample.high_bar:g} бар; IDD {ctl.drive}: {sample.hz:g} Гц, ток={current}, {'RUN' if sample.running else 'STOP'}; включены реле: {relays}")
+        warning = f"; ВНИМАНИЕ: {sample.pressure_warning}" if sample.pressure_warning else ""
+        self.report(f"Измерения: НВД={sample.low_bar:g} бар; ДВД={sample.high_bar:g} бар; IDD {ctl.drive}: {sample.hz:g} Гц, ток={current}, {'RUN' if sample.running else 'STOP'}; включены реле: {relays}{warning}")
 
     def stop(self) -> None:
         self.stop_requested.set()
