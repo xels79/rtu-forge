@@ -17,6 +17,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from .config import load_config
 from .connection import parse_connection_overrides
@@ -501,11 +502,21 @@ def _set(ctx: StandContext, parts: list[str]) -> None:
     ctx.console.print(_t(ctx, "saved", path=ctx.stand_config_path), markup=False)
 
 
+def _print_help(ctx: StandContext, text: str) -> None:
+    formatted = Text()
+    for index, line in enumerate(text.splitlines()):
+        if index:
+            formatted.append("\n")
+        heading = index == 0 or line.isupper()
+        formatted.append(line, style="bold cyan" if heading and not _clean(ctx) else "")
+    ctx.console.print(formatted)
+
+
 def _help(ctx: StandContext, topic: str | None = None) -> None:
     if _lang(ctx) == "ru" or topic in {"stop", "pressure", "test-pressure", "emergency-stop"}:
         if topic and topic not in HELP_RU:
             raise ValueError("Неизвестная тема справки; используйте help")
-        ctx.console.print(HELP_RU[topic] if topic else GENERAL_RU, markup=False)
+        _print_help(ctx, HELP_RU[topic] if topic else GENERAL_RU)
         return
     if topic == "idd":
         text = HELP_RU["idd"]
@@ -563,7 +574,7 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
             "  reset\n"
             "  set output-range 4-20ma"
         )
-    ctx.console.print(text, markup=False)
+    _print_help(ctx, text)
 
 
 def _execute_command(ctx: StandContext, line: str) -> str | None:
