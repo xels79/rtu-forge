@@ -296,12 +296,12 @@ def _start(ctx: StandContext, args: list[str]) -> None:
     guided = bool(args) and args[0].lower() == "step"
     if guided:
         args = args[1:]
-    rack, tier, liquid, hz = parse_start_args(args)
+    rack, tier, liquid, hz, pump = parse_start_args(args)
     ctx.irrigation_settings.require_commissioned()
     if ctx.irrigation is None:
         ctx.irrigation = IrrigationService(_hardware(ctx, quiet=True), ctx.irrigation_settings,
                                           ctx.bus_lock, lambda text: ctx.console.print(text, markup=False))
-    ctx.irrigation.start(rack, tier, liquid, hz, guided=guided)
+    ctx.irrigation.start(rack, tier, liquid, hz, guided=guided, pump=pump)
     if ctx.one_shot:
         ctx.console.print("Полив под наблюдением этого процесса; Ctrl+C — безопасный останов.", markup=False)
         if guided:
@@ -323,10 +323,10 @@ def _start(ctx: StandContext, args: list[str]) -> None:
 
 
 def _check_start(ctx: StandContext, args: list[str]) -> None:
-    rack, tier, liquid, hz = parse_start_args(args)
+    rack, tier, liquid, hz, pump = parse_start_args(args)
     report = check_start(_hardware(ctx, quiet=True), ctx.irrigation_settings,
-                         rack, tier, liquid, hz)
-    ctx.console.print(f"Проверка без пуска: IDD {report.drive}; выбор НВД — реле {report.selector}; ярус — реле {report.valve}.", markup=False)
+                         rack, tier, liquid, hz, pump=pump)
+    ctx.console.print(f"Проверка без пуска: НВД{report.selector - 18} ({'ручной выбор' if pump is not None else 'по stand.ini'}); IDD {report.drive}; выбор НВД — реле {report.selector}; ярус — реле {report.valve}.", markup=False)
     for check in report.checks:
         ctx.console.print(f"{'OK' if check.passed else 'БЛОК'} — {check.name}: {check.detail}", markup=False)
     ctx.console.print("Реле, частота и stand.ini не изменялись. Проверки повторятся при настоящем start.", markup=False)
@@ -541,8 +541,8 @@ def _help(ctx: StandContext, topic: str | None = None) -> None:
             "Stand Forge commands:\n"
             "  idd <7|8> status|setup|frequency <Гц>|monitor|feedback|configure --confirm\n"
             "  ai [types] — датчики RTU 6\n"
-            "  start <rack> <tier> broth <Hz> | stop | emergency-stop\n"
-            "  start step <rack> <tier> broth <Hz> — Enter перед каждым действием\n"
+            "  start <rack> <tier> broth <Hz> [--pump <1|2>] | stop | emergency-stop\n"
+            "  start step <rack> <tier> broth <Hz> [--pump <1|2>] — Enter перед каждым действием\n"
             "  pressure | test-pressure low|high [count] | test-pressure stop\n"
             "  help idd | help ai | help start\n"
             "  tank <1..4> <empty|middle|full>\n"

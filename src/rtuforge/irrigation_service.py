@@ -29,15 +29,16 @@ class IrrigationService:
     def busy(self) -> bool:
         return not self.finished.is_set() or self.controller.state != State.IDLE
 
-    def start(self, rack: int, tier: int, liquid: str, hz: float, *, guided: bool = False) -> None:
+    def start(self, rack: int, tier: int, liquid: str, hz: float, *, guided: bool = False,
+              pump: int | None = None) -> None:
         with self.gate:
             self.settings.require_commissioned()
             if self.busy:
                 raise RuntimeError("Повторный START запрещён; выполните stop / reset fault")
             self.stop_requested.clear()
-            drive, selector = self.settings.mapping(rack)
+            drive, selector = self.settings.mapping(rack, pump=pump)
             self.controller.start(rack, tier, liquid, hz, drive=drive, selector=selector, guided=guided)
-            self.report(f"Пуск {'по шагам' if guided else 'автоматический'}: стеллаж {rack}, ярус {tier}; клапан — реле {self.controller.valve}; выбор НВД — {selector}; бульон — 23; подпор — 1; FWD IDD {drive} — {32 if drive == 7 else 31}; задание {hz:g} Гц")
+            self.report(f"Пуск {'по шагам' if guided else 'автоматический'}: стеллаж {rack}, ярус {tier}; НВД{selector - 18} ({'ручной выбор' if pump is not None else 'по stand.ini'}); клапан — реле {self.controller.valve}; выбор НВД — {selector}; бульон — 23; подпор — 1; FWD IDD {drive} — {32 if drive == 7 else 31}; задание {hz:g} Гц")
             self.finished.clear()
             self.thread = Thread(target=self._run, name="standforge-irrigation", daemon=True)
             try:

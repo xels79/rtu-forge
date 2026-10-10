@@ -29,27 +29,30 @@ class PreflightReport:
         return all(check.passed for check in self.checks)
 
 
-def parse_start_args(args: list[str]) -> tuple[int, int, str, float]:
-    usage = "start [check|step] <1..2> <1..3> broth <частота в Гц>"
-    if len(args) != 4:
+def parse_start_args(args: list[str]) -> tuple[int, int, str, float, int | None]:
+    usage = "start [check|step] <1..2> <1..3> broth <частота в Гц> [--pump <1|2>]"
+    if len(args) not in (4, 6) or (len(args) == 6 and args[4].lower() != "--pump"):
         raise ValueError(usage)
     try:
         rack, tier = int(args[0]), int(args[1])
         hz = parse_frequency_hz(args[3])
+        pump = int(args[5]) if len(args) == 6 else None
     except ValueError:
         raise ValueError(usage) from None
     liquid = args[2].lower()
-    if rack not in (1, 2) or tier not in (1, 2, 3) or liquid != "broth":
+    if (rack not in (1, 2) or tier not in (1, 2, 3) or liquid != "broth"
+        or (pump is not None and pump not in (1, 2))):
         raise ValueError(usage)
-    return rack, tier, liquid, hz
+    return rack, tier, liquid, hz, pump
 
 
 def check_start(hardware: StandHardware, settings: IrrigationSettings,
-                rack: int, tier: int, liquid: str, hz: float) -> PreflightReport:
+                rack: int, tier: int, liquid: str, hz: float, *,
+                pump: int | None = None) -> PreflightReport:
     """Collect every available blocker, even if commissioning is incomplete."""
     parse_start_args([str(rack), str(tier), liquid, str(hz)])
     settings.validate()
-    drive, selector = settings.mapping(rack)
+    drive, selector = settings.mapping(rack, pump=pump)
     checks: list[ReadinessCheck] = []
     missing = settings.commissioning_blockers()
     checks.append(ReadinessCheck("Подтверждения и разрешение пуска", not missing,

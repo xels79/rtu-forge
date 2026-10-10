@@ -66,6 +66,10 @@ def completion_candidates(text: str) -> list[str]:
         choices = ("1", "2", "3")
     elif len(completed) == 3 and completed[0] == "start":
         choices = ("broth",)
+    elif completed[0] == "start":
+        args = completed[2:] if completed[1] in {"check", "step"} else completed[1:]
+        choices = (("--pump",) if len(args) == 4 else
+                   ("1", "2") if len(args) == 5 and args[4] == "--pump" else ())
     elif completed == ["test-pressure"]:
         choices = ("low", "high", "stop", "log")
     elif completed == ["ai"]:

@@ -92,8 +92,11 @@ class IrrigationSettings:
         missing.extend(name for name in ("run_register", "fault_register") if getattr(self, name) < 0)
         return missing
 
-    def mapping(self, rack: int) -> tuple[int, int]:
-        pump = self.rack1_pump if rack == 1 else self.rack2_pump
+    def mapping(self, rack: int, *, pump: int | None = None) -> tuple[int, int]:
+        if rack not in (1, 2) or (pump is not None and pump not in (1, 2)):
+            raise ValueError("Стеллаж и насос: допустимы 1 и 2")
+        if pump is None:
+            pump = self.rack1_pump if rack == 1 else self.rack2_pump
         return (self.pump1_drive if pump == 1 else self.pump2_drive, 18 + pump)
 
 
