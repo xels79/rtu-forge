@@ -1,0 +1,254 @@
+"""Validated sequential Modbus operations for the irrigation controller."""
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass
+from math import ceil
+
+from .irrigation import DRIVE_START, TIER_VALVES, Sample, StopRequested, relay_purpose
+from .irrigation_config import IrrigationSettings
+from .stand_protocol import (build_read_request, build_write_multiple_coils,
+                             build_write_single_register,
+                             validate_read_response, validate_write_response)
+from .stand_sensors import HIGH, LOW, Sensor, decode_pressure
+from .stand_vfd import (DriveFeedback, PLUS_FAULT_REGISTER, PLUS_STATE_REGISTER,
+                        decode_plus_feedback, parse_frequency_hz)
+
+
+@dataclass(frozen=True)
+class PressureReading:
+    sensor: Sensor
+    raw: int
+    mode: int
+    current_ma: float | None
+    bar: float | None
+    error: str = ""
+    warning: str = ""
+
+    @property
+    def current_text(self) -> str:
+        return f"{self.current_ma:g} мА" if self.current_ma is not None else "не определён"
+
+
+@dataclass(frozen=True)
+class FrequencyPlan:
+    requested_hz: float
+    minimum_raw: int
+    maximum_raw: int
+    setpoint_raw: int
+    motor_minimum_raw: int
+
+    @property
+    def effective_minimum_hz(self) -> float:
+        return max(self.minimum_raw, self.motor_minimum_raw) / 10
+
+    @property
+    def limits_description(self) -> str:
+        return (f"максимум Pb05={self.maximum_raw / 10:g} Гц; "
+                f"минимум Pb06={self.minimum_raw / 10:g} Гц; "
+                f"минимум мотора={self.motor_minimum_raw / 10:g} Гц; "
+                f"допустимо {self.effective_minimum_hz:g}..{self.maximum_raw / 10:g} Гц")
+
+
+class StandHardware:
+    def __init__(self, transaction: Callable[[bytes], bytes], relay_id: int,
+                 settings: IrrigationSettings, *, cancelled: Callable[[], bool] = lambda: False):
+        self.transaction = transaction
+        self.relay_id = relay_id
+        self.settings = settings
+        self.cancelled = cancelled
+        self.report: Callable[[str], None] = lambda text: None
+        self.last_coils: list[bool] | None = None
+        self.expected_hydraulics: set[int] | None = None
+
+    def registers(self, slave: int, function: int, address: int, count: int) -> list[int]:
+        request = build_read_request(slave, function, address, count)
+        data = validate_read_response(request, self.transaction(request))
+        return [int.from_bytes(data[i:i + 2], "big") for i in range(0, len(data), 2)]
+
+    def coils(self) -> list[bool]:
+        request = build_read_request(self.relay_id, 1, 0, 32)
+        data = validate_read_response(request, self.transaction(request))
+        self.last_coils = [bool(data[i // 8] & (1 << (i % 8))) for i in range(32)]
+        return self.last_coils
+
+    def _allow_write(self) -> None:
+        if self.cancelled():
+            raise StopRequested()
+
+    def relay(self, channel: int, active: bool) -> None:
+        if not 1 <= channel <= 32:
+            raise ValueError("Реле: допустимы каналы 1..32")
+        if active:
+            self._allow_write()
+        self.report(f"Реле {channel}: {'ВКЛ' if active else 'ВЫКЛ'} — {relay_purpose(channel)}; команда")
+        request = build_write_multiple_coils(self.relay_id, channel - 1, [active])
+        if active:
+            self._allow_write()  # STOP may have arrived while displaying the command.
+        elif channel in TIER_VALVES and self.expected_hydraulics is not None:
+            actual = self.coils()
+            if any(actual[ch - 1] for ch in (1, 31, 32)):
+                self.check_hydraulic_coils(actual)
+                if not any(actual[ch - 1] for ch in TIER_VALVES if ch != channel):
+                    raise RuntimeError("Нельзя закрыть последний клапан 9..14 при работе насоса; сначала on другого клапана или stop")
+        validate_write_response(request, self.transaction(request))
+        if self.expected_hydraulics is not None:
+            if active:
+                self.expected_hydraulics.add(channel)
+            else:
+                self.expected_hydraulics.discard(channel)
+        actual = self.coils()
+        if actual[channel - 1] != active:
+            raise RuntimeError(f"Реле {channel}: плата не подтвердила {'включение' if active else 'отключение'}")
+        if active or any(actual[ch - 1] for ch in (1, 31, 32)):
+            self.check_hydraulic_coils(actual)
+        self.report(f"Реле {channel}: {'ВКЛ' if active else 'ВЫКЛ'} подтверждено платой")
+
+    def check_hydraulic_coils(self, coils: list[bool]) -> None:
+        if self.expected_hydraulics is None:
+            return
+        if any(coils[ch - 1] for ch in (1, 31, 32)) and not any(coils[ch - 1] for ch in TIER_VALVES):
+            raise RuntimeError("Ни один клапан 9..14 не открыт при работе насоса; требуется останов")
+        owned = {1, *range(9, 15), 19, 20, 23, 31, 32}
+        active = {ch for ch in owned if coils[ch - 1]}
+        if active != self.expected_hydraulics:
+            raise RuntimeError(f"Состояние реле гидравлики не соответствует командам: ожидались {sorted(self.expected_hydraulics)}, включены {sorted(active)}; проверьте клапаны и адреса")
+
+    def write_register(self, slave: int, register: int, value: int) -> None:
+        self._allow_write()
+        request = build_write_single_register(slave, register, value)
+        validate_write_response(request, self.transaction(request))
+
+    def pressure(self) -> list[PressureReading]:
+        modes = self.registers(6, 3, 0x1000, 4)
+        raw = self.registers(6, 4, 0, 4)
+        readings = []
+        for i, sensor in enumerate((LOW, HIGH)):
+            try:
+                allow_zero = (self.settings.ai1_zero_raw_is_zero if i == 0
+                              else self.settings.ai2_zero_raw_is_zero)
+                ma, bar = decode_pressure(raw[i], modes[i], sensor, zero_raw_is_zero=allow_zero)
+                warning = ("raw=0 принят как 0 бар по проверке оператора; "
+                           "исправность петли не определена") if ma is None else ""
+                readings.append(PressureReading(sensor, raw[i], modes[i], ma, bar, warning=warning))
+            except ValueError as exc:
+                readings.append(PressureReading(sensor, raw[i], modes[i],
+                                                raw[i] / 1000 if modes[i] == 3 else None,
+                                                None, str(exc)))
+        return readings
+
+    def drive_feedback(self, drive: int) -> tuple[float, bool, bool]:
+        cfg = self.settings
+        if not cfg.vfd_verified or cfg.run_register < 0 or cfg.fault_register < 0:
+            raise RuntimeError("Профиль обратной связи IDD не выбран/не проверен: задайте run_register/fault_register и vfd_verified. Для IDD222M21E (mini PLUS) см. idd <7|8> feedback: PA28=0x001C, PA27=0x001B; PA10 — история ошибок")
+        if cfg.run_register == PLUS_STATE_REGISTER and cfg.fault_register == PLUS_FAULT_REGISTER:
+            feedback = self.plus_feedback(drive)
+            return feedback.output_hz, feedback.running, feedback.fault
+        hz = self.registers(drive, 3, 2, 1)[0] / 10
+        if hz > 400:
+            raise RuntimeError(f"IDD {drive}: выходная частота вне документированного диапазона 0..400 Гц; проверьте масштабирование")
+        run = self.registers(drive, 3, cfg.run_register, 1)[0]
+        fault = self.registers(drive, 3, cfg.fault_register, 1)[0]
+        return hz, bool(run & cfg.run_mask), bool(fault & cfg.fault_mask)
+
+    def plus_feedback(self, drive: int) -> DriveFeedback:
+        """Read the published PLUS map without commissioning or actuator writes."""
+        frequency = self.registers(drive, 3, 2, 1)[0]
+        error, state = self.registers(drive, 3, PLUS_FAULT_REGISTER, 2)
+        return decode_plus_feedback(frequency, state, error)
+
+    def precheck(self, drive: int) -> None:
+        self.precheck_relays()
+        self.check_setup(drive)
+
+    def precheck_relays(self) -> None:
+        """Verify inactive hydraulic relays without changing any coils."""
+        coils = self.coils()
+        # Do not start onto an already active hydraulic circuit or another rack.
+        owned = [1, *range(9, 15), 19, 20, 23, 31, 32]
+        active = [ch for ch in owned if coils[ch - 1]]
+        if active:
+            raise RuntimeError(f"Пуск запрещён: уже включены реле {active}; проверьте гидравлику и выполните stop")
+        self.expected_hydraulics = set()
+
+    def confirm_off(self, channels: tuple[int, ...]) -> None:
+        coils = self.coils()
+        active = [ch for ch in channels if coils[ch - 1]]
+        if active:
+            raise RuntimeError(f"Снятие команд реле не подтверждено: {active}")
+
+    def check_setup(self, drive: int) -> None:
+        sources = self.registers(drive, 3, 0x65, 2)
+        fwd = self.registers(drive, 3, 0x13B, 2)
+        if sources != [5, 1] or fwd != [6, 7]:
+            raise RuntimeError(f"IDD {drive}: требуются Pb01=5, Pb02=1, Pd15=6, Pd16=7; получены {sources}, {fwd}. См. idd {drive} configure --confirm")
+
+    def frequency_plan(self, drive: int, hz: float) -> FrequencyPlan:
+        """Read configuration and validate a setpoint without writing or starting."""
+        hz = parse_frequency_hz(hz)
+        self.check_setup(drive)
+        maximum, minimum = self.registers(drive, 3, 0x69, 2)
+        if not 0 <= minimum <= maximum <= 4000 or maximum == 0:
+            raise RuntimeError("Недопустимые Pb05/Pb06; проверьте диапазон частоты на частотнике")
+        motor_hz = self.settings.drive7_min_hz if drive == 7 else self.settings.drive8_min_hz
+        motor_minimum = ceil(motor_hz * 10)
+        requested = hz * 10
+        value = int(requested + .5)
+        plan = FrequencyPlan(hz, minimum, maximum, value, motor_minimum)
+        if requested < max(minimum, motor_minimum) or value == 0:
+            raise RuntimeError(f"IDD {drive}: задание {hz:g} Гц ниже допустимого минимума; {plan.limits_description}. Задайте частоту в Гц; Pb05/Pb06 автоматически не меняются")
+        if requested > maximum:
+            raise RuntimeError(f"IDD {drive}: задание {hz:g} Гц превышает максимум; {plan.limits_description}. Задайте частоту в Гц; Pb05/Pb06 автоматически не меняются")
+        return plan
+
+    def set_frequency(self, drive: int, hz: float) -> FrequencyPlan:
+        plan = self.frequency_plan(drive, hz)
+        value = plan.setpoint_raw
+        self.write_register(drive, 0x2001, value)
+        if self.settings.setpoint_readback:
+            # 0x2001 is write-only in the published manual; only enable for verified firmware.
+            actual = self.registers(drive, 3, 0x2001, 1)[0]
+        else:
+            actual = self.registers(drive, 3, 1, 1)[0]  # PA01: effective setpoint
+        if actual != value:
+            raise RuntimeError(f"Уставка IDD не подтверждена: записано {value}, прочитано {actual}")
+        self.report(f"IDD {drive}: задание {value/10:g} Гц подтверждено; {plan.limits_description}")
+        return plan
+
+    def sample(self, drive: int) -> Sample:
+        readings = self.pressure()
+        for reading in readings:
+            if reading.error:
+                raise RuntimeError(reading.error)
+        hz, running, fault = self.drive_feedback(drive)
+        # PA03=0x0003, documented current scaling: 0.1 A per register unit.
+        current = self.registers(drive, 3, 3, 1)[0] / 10
+        if self.expected_hydraulics is not None:
+            self.check_hydraulic_coils(self.coils())
+        warning = "; ".join(f"AI{r.sensor.channel}: {r.warning}" for r in readings if r.warning)
+        return Sample(readings[0].bar, readings[1].bar, hz, running, fault, current, warning)
+
+    def configure(self, drive: int) -> None:
+        hz, running, fault = self.drive_feedback(drive)
+        if hz > self.settings.stop_hz or running or fault or self.coils()[DRIVE_START[drive] - 1]:
+            raise RuntimeError("Изменение настроек запрещено: требуются STOP, нулевая частота, отсутствие аварии и разомкнутый FWD")
+        for register, value in ((0x65, 5), (0x66, 1), (0x13B, 6), (0x13C, 7)):
+            self.write_register(drive, register, value)
+            if self.registers(drive, 3, register, 1)[0] != value:
+                raise RuntimeError(f"IDD {drive}: настройка 0x{register:04X} не подтверждена")
+
+    def emergency_off(self) -> None:
+        errors = []
+        for channel in (32, 31, 1):
+            try:
+                self.relay(channel, False)
+            except Exception as exc:
+                errors.append(f"реле {channel}: {exc}")
+        try:
+            coils = self.coils()
+            if any(coils[ch - 1] for ch in (32, 31, 1)):
+                errors.append("релейная плата не подтвердила снятие пуска")
+        except Exception as exc:
+            errors.append(f"чтение реле: {exc}")
+        if errors:
+            raise RuntimeError("Снятие пуска не подтверждено: " + "; ".join(errors))
