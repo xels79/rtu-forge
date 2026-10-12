@@ -35,7 +35,7 @@ def ctx(tmp_path):
     cfg["runtime"]["crc_mode"] = "append"
     return CommandContext(
         tmp_path / "config.ini", cfg, ScriptStore(tmp_path / "scripts.ini"),
-        FakePulsarTransport(cfg), Console(record=True, width=160),
+        FakePulsarTransport(cfg), Console(record=True, width=160), one_shot=True,
     )
 
 def text(ctx):
