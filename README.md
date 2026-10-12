@@ -940,3 +940,35 @@ Run tests:
 ```bash
 uv run --extra dev pytest -q
 ```
+
+## Pulsar water meters (proprietary RS-485 protocol)
+
+The `pulsar` subcommand is deliberately separate from Modbus RTU `send` / `scan` and Stand Forge. It uses its own fully formed CRC16 frames, validating BCD address, function, frame length, request ID, and CRC of responses. No `config.ini` change is needed. Tested using a real discovery frame from the electronic water meter Pulsar model 1, N00014163, address `17440707`, and the Wiren Board protocol vectors.
+
+Use a separate RS-485 test adapter or ensure the existing Bionic controller is not operating on this bus. Do **not** run two masters on the same physical RS-485 line. Use 9600 8N1; override your usual even-parity Modbus settings with `--parity N`. The software does not change serial/parity configuration automatically.
+
+```powershell
+rtuforge.exe --port COM4 --baudrate 9600 --parity N pulsar read 17440707
+rtuforge.exe --port COM4 --baudrate 9600 --parity N pulsar read 17440707 --format raw
+rtuforge.exe --port COM4 --parity N pulsar param get 17440707 0x000A
+rtuforge.exe --port COM4 --parity N pulsar time get 17440707
+rtuforge.exe pulsar decode 17 44 07 07 0A 12 C3 1F 0A 01 00 00 00 00 79 E6 B4 7B
+rtuforge.exe --port COM4 --parity N pulsar discover --single
+```
+
+Channel 1 defaults to little-endian float32 (Pulsar Water model 1). For other Pulsar models use `--format s32`, `--format u32`, `--format f64`, or `--format raw` as appropriate. Parameter indices and value encodings are model-dependent; `param get` prints all 8 raw value bytes by default, with optional `--format u8|u16|u32|s32|float|f64`. Do **not** infer parameter names, permissions or scalings without the manufacturer's model-specific table.
+
+Parameter and clock writes default to dry-run, showing the complete frame **without opening the port**. Writing requires `--execute`:
+
+```powershell
+rtuforge.exe pulsar param set 17440707 0x0010 0102030405060708
+rtuforge.exe --port COM4 --parity N pulsar param set 17440707 0x0010 0102030405060708 --execute
+rtuforge.exe pulsar time set 17440707 2026-10-12T15:34:56
+rtuforge.exe --port COM4 --parity N pulsar time set 17440707 2026-10-12T15:34:56 --execute
+```
+
+**WARNING:** The example parameter index and bytes are synthetic placeholders, **not** validated settings for N00014163. Parameter writes can alter calibration, configuration, accounting, or communications, and may be refused pending authorization. Changing clock impacts archives. Do not use `--execute` without confirming parameter mapping and implications on a test device. `discover --single` is a broadcast-style probe and is unsafe on a bus with several Pulsar devices.
+
+The existing Modbus transport remains single-owner. `pulsar` always uses `crc_mode_override="none"` on frames that already contain CRC16; it does not mutate `runtime.crc_mode`, `decode_rx`, or other runtime options. Ordinary `send`, `scan`, and `standforge` work as before.
+
+References: [Pulsar application-layer functions](https://docs.pulsarm.ru/spaces/PULSARPROTOCOLS/pages/75759667/), [Wiren Board Pulsar driver](https://github.com/wirenboard/wb-mqtt-serial/blob/master/src/devices/pulsar_device.cpp), [Pulsar Water model 1 template](https://github.com/wirenboard/wb-mqtt-serial/blob/master/templates/config-pulsar-water.json).

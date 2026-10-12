@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import configparser
+import threading
 import time
 from dataclasses import dataclass
 
@@ -42,23 +43,81 @@ class SerialTransport:
     def is_overridden(self, name: str) -> bool:
         return self.overrides.contains(name)
 
+    @staticmethod
+    def _close_quietly(candidate: serial.Serial) -> None:
+        try:
+            candidate.close()
+        except (serial.SerialException, OSError):
+            pass
+
     def connect(self) -> None:
         if self.connected:
             return
+
         settings = self.settings
-        self.serial = serial.Serial(
-            port=settings.port,
+        timeout_s = settings.timeout_ms / 1000.0
+        candidate = serial.Serial(
+            port=None,
             baudrate=settings.baudrate,
             bytesize=settings.bytesize,
             parity=settings.parity,
             stopbits=settings.stopbits,
-            timeout=settings.timeout_ms / 1000.0,
+            timeout=timeout_s,
+            write_timeout=timeout_s,
         )
+        candidate.port = settings.port
+
+        done = threading.Event()
+        state_lock = threading.Lock()
+        state = {"cancelled": False, "finished": False}
+        errors: list[Exception] = []
+
+        def open_port() -> None:
+            error: Exception | None = None
+            try:
+                candidate.open()
+            except Exception as exc:
+                error = exc
+
+            with state_lock:
+                if error is not None:
+                    errors.append(error)
+                state["finished"] = True
+                cancelled = state["cancelled"]
+
+            if cancelled and candidate.is_open:
+                self._close_quietly(candidate)
+            done.set()
+
+        thread = threading.Thread(
+            target=open_port,
+            name=f"rtuforge-open-{settings.port}",
+            daemon=True,
+        )
+        thread.start()
+
+        if not done.wait(timeout_s):
+            with state_lock:
+                state["cancelled"] = True
+                finished = state["finished"]
+            if finished and candidate.is_open:
+                self._close_quietly(candidate)
+            raise serial.SerialTimeoutException(
+                f"Timed out opening {settings.port} after {settings.timeout_ms} ms"
+            )
+
+        if errors:
+            raise errors[0]
+        if not candidate.is_open:
+            raise serial.SerialException(f"Failed to open serial port {settings.port}")
+
+        self.serial = candidate
 
     def disconnect(self) -> None:
-        if self.serial is not None:
-            self.serial.close()
+        candidate = self.serial
         self.serial = None
+        if candidate is not None:
+            self._close_quietly(candidate)
 
     def exchange(
         self,
@@ -76,37 +135,45 @@ class SerialTransport:
         silence = runtime.getint("response_silence_ms") / 1000.0
         max_bytes = runtime.getint("max_response_bytes")
         post_write = runtime.getint("post_write_delay_ms") / 1000.0
+        candidate = self.serial
 
-        self.serial.reset_input_buffer()
-        started = time.perf_counter()
-        self.serial.write(tx)
-        self.serial.flush()
-        if post_write > 0:
-            time.sleep(post_write)
+        try:
+            candidate.reset_input_buffer()
+            started = time.perf_counter()
+            written = candidate.write(tx)
+            if written != len(tx):
+                raise serial.SerialTimeoutException(
+                    f"Serial write incomplete: {written}/{len(tx)} bytes"
+                )
+            if post_write > 0:
+                time.sleep(post_write)
 
-        rx = bytearray()
-        last_data = time.perf_counter()
-        saw_data = False
-        effective_timeout_ms = (
-            self.settings.timeout_ms
-            if timeout_ms is None
-            else timeout_ms
-        )
-        timeout_s = effective_timeout_ms / 1000.0
-        deadline = time.perf_counter() + timeout_s
+            rx = bytearray()
+            last_data = time.perf_counter()
+            saw_data = False
+            effective_timeout_ms = (
+                self.settings.timeout_ms
+                if timeout_ms is None
+                else timeout_ms
+            )
+            timeout_s = effective_timeout_ms / 1000.0
+            deadline = time.perf_counter() + timeout_s
 
-        while len(rx) < max_bytes and time.perf_counter() < deadline:
-            waiting = self.serial.in_waiting
-            if waiting:
-                chunk = self.serial.read(min(waiting, max_bytes - len(rx)))
-                if chunk:
-                    rx.extend(chunk)
-                    last_data = time.perf_counter()
-                    saw_data = True
-                    continue
-            if saw_data and time.perf_counter() - last_data >= silence:
-                break
-            time.sleep(0.001)
+            while len(rx) < max_bytes and time.perf_counter() < deadline:
+                waiting = candidate.in_waiting
+                if waiting:
+                    chunk = candidate.read(min(waiting, max_bytes - len(rx)))
+                    if chunk:
+                        rx.extend(chunk)
+                        last_data = time.perf_counter()
+                        saw_data = True
+                        continue
+                if saw_data and time.perf_counter() - last_data >= silence:
+                    break
+                time.sleep(0.001)
 
-        elapsed_ms = (time.perf_counter() - started) * 1000.0
-        return Exchange(tx=tx, rx=bytes(rx), elapsed_ms=elapsed_ms)
+            elapsed_ms = (time.perf_counter() - started) * 1000.0
+            return Exchange(tx=tx, rx=bytes(rx), elapsed_ms=elapsed_ms)
+        except (serial.SerialException, OSError):
+            self.disconnect()
+            raise
