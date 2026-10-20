@@ -1,0 +1,187 @@
+import pytest
+
+from rtuforge.bionic_model import AlarmState, BionicModel
+
+
+def running_model() -> BionicModel:
+    model = BionicModel()
+    model.running = True
+    return model
+
+
+def enable_pressure(model: BionicModel, *, hz: float = 29.0, tiers=(9, 10, 11)) -> None:
+    for relay in (1, 19, 21, 32, *tiers):
+        model.set_relay(relay, True)
+    model.drives["hp1"].setpoint_hz = hz
+    model.tick(10)
+
+
+def test_osmosis_fill_obeys_do22_and_never_closes_it_on_overflow():
+    model = running_model()
+    initial = model.tanks["bo"].volume_l
+    model.tick(60)
+    assert model.tanks["bo"].volume_l == initial
+    model.set_relay(22, True)
+    model.tick(60)
+    assert model.tanks["bo"].volume_l == pytest.approx(initial + 3)
+    model.tanks["bo"].volume_l = model.tanks["bo"].capacity_l
+    model.tick(60)
+    assert model.relay(22)
+    assert model.tanks["bo"].volume_l == model.tanks["bo"].capacity_l
+    assert model.tanks["bo"].overflow_l == pytest.approx(3)
+    assert model.alarms[("TANK_OVERFLOW", "bo")].state == AlarmState.ACTIVE
+
+
+def test_stuck_fill_valve_is_explicit_fault_effect():
+    model = running_model()
+    model.fill_valve_stuck_open = True
+    model.tick(60)
+    assert model.tanks["bo"].volume_l == pytest.approx(253)
+    assert not model.relay(22)
+
+
+@pytest.mark.parametrize(
+    "pump_id,relay,source",
+    [("bo-to-bp", 2, "bo"), ("bso1-to-bp", 17, "bso1"), ("bso2-to-bp", 18, "bso2")],
+)
+def test_transfer_routes_end_in_broth(pump_id, relay, source):
+    model = running_model()
+    model.pumps[pump_id].start_s = 0
+    before_source = model.tanks[source].volume_l
+    before_broth = model.tanks["bp"].volume_l
+    model.set_relay(relay, True)
+    model.tick(60)
+    moved = model.pumps[pump_id].flow_lpm
+    assert model.tanks[source].volume_l == pytest.approx(before_source - moved)
+    assert model.tanks["bp"].volume_l == pytest.approx(before_broth + moved)
+
+
+def test_both_drain_returns_can_run_together():
+    model = running_model()
+    for pump in model.pumps.values():
+        pump.start_s = 0
+    before = model.tanks["bp"].volume_l
+    model.set_relay(17, True)
+    model.set_relay(18, True)
+    model.tick(60)
+    assert model.tanks["bp"].volume_l == pytest.approx(before + 16)
+
+
+def test_empty_source_does_not_rewrite_controller_run_command():
+    model = running_model()
+    model.tanks["bso1"].volume_l = 0
+    model.pumps["bso1-to-bp"].start_s = 0
+    model.set_relay(17, True)
+    model.tick(60)
+    assert model.relay(17)
+    assert model.pumps["bso1-to-bp"].actual_flow_lpm == 8
+    assert ("WATER_SHORTAGE", "bso1") in model.alarms
+
+
+@pytest.mark.parametrize("tank_relay,tank_id", [(21, "bo"), (23, "bp")])
+def test_irrigation_takes_selected_source_and_returns_to_each_rack_drain(tank_relay, tank_id):
+    model = running_model()
+    model.tiers["tier-1"].return_delay_s = 0
+    before_source = model.tanks[tank_id].volume_l
+    before_drain = model.tanks["bso1"].volume_l
+    for relay in (1, 19, 32, 9, tank_relay):
+        model.set_relay(relay, True)
+    model.tick(10)
+    assert model.tanks[tank_id].volume_l < before_source
+    assert model.tanks["bso1"].volume_l > before_drain
+    assert model.operation == "Операция не определена"
+
+
+def test_pressure_calibration_points_after_settling():
+    model = running_model()
+    model.pressure_rise_s = 0
+    model.boost_rise_s = 0
+    enable_pressure(model, hz=29)
+    assert model.high_pressure_bar == pytest.approx(30, abs=0.2)
+    model.drives["hp1"].setpoint_hz = 42
+    model.tick(10)
+    assert model.high_pressure_bar == pytest.approx(57, abs=0.2)
+
+
+def test_fewer_open_tiers_increases_pressure():
+    model = running_model()
+    model.pressure_rise_s = 0
+    model.pressure_fall_s = 0
+    model.boost_rise_s = 0
+    enable_pressure(model)
+    three = model.high_pressure_bar
+    model.set_relay(10, False)
+    model.set_relay(11, False)
+    model.tick(1)
+    assert model.high_pressure_bar > three
+
+
+def test_rupture_latches_without_stopping_controller_and_requires_repair():
+    model = running_model()
+    model.pressure_rise_s = 0
+    model.boost_rise_s = 0
+    model.rupture_threshold_bar = 40
+    enable_pressure(model, hz=42, tiers=(9,))
+    assert model.pipe_ruptured
+    assert model.relay(32)
+    assert model.high_pressure_bar <= 3
+    model.tick(10)
+    assert model.high_pressure_bar <= 3
+    model.reset_alarms()
+    assert model.pipe_ruptured
+    model.repair_pipe()
+    model.set_relay(10, True)
+    model.set_relay(11, True)
+    model.rupture_threshold_bar = 75
+    model.tick(1)
+    assert model.high_pressure_bar > 3
+
+
+def test_leak_loses_water_and_blockage_reduces_flow():
+    clean = running_model()
+    clean.pressure_rise_s = clean.boost_rise_s = 0
+    enable_pressure(clean)
+    clean_flow = clean.tiers["tier-1"].actual_flow_lpm
+    blocked = running_model()
+    blocked.pressure_rise_s = blocked.boost_rise_s = 0
+    blocked.blockage_enabled = True
+    enable_pressure(blocked)
+    assert blocked.tiers["tier-1"].actual_flow_lpm < clean_flow
+    blocked.leak_enabled = True
+    before = blocked.tanks["bo"].volume_l
+    blocked.tick(60)
+    assert blocked.total_leak_l > 0
+    assert blocked.tanks["bo"].volume_l < before
+
+
+def test_level_sensor_delay_hysteresis_and_force_do_not_change_volume():
+    model = running_model()
+    sensor = model.sensors["bo-min"]
+    model.set_tank_level("bo", sensor.threshold_l + sensor.hysteresis_l + 1)
+    model.tick(sensor.delay_s)
+    assert sensor.automatic
+    model.set_tank_level("bo", sensor.threshold_l)
+    model.tick(sensor.delay_s)
+    assert sensor.automatic
+    model.set_tank_level("bo", sensor.threshold_l - sensor.hysteresis_l - 1)
+    model.tick(sensor.delay_s)
+    assert not sensor.automatic
+    volume = model.tanks["bo"].volume_l
+    model.force_sensor("bo-min", True)
+    assert sensor.value
+    assert model.tanks["bo"].volume_l == volume
+    model.force_sensor("bo-min", None)
+    assert not sensor.value
+
+
+def test_pause_and_speed_only_affect_physics():
+    model = running_model()
+    model.set_relay(22, True)
+    model.paused = True
+    model.tick(60)
+    assert model.tanks["bo"].volume_l == 250
+    assert model.relay(22)
+    model.paused = False
+    model.speed = 5
+    model.tick(60)
+    assert model.tanks["bo"].volume_l == pytest.approx(265)

@@ -59,6 +59,18 @@ uv run rtuforge --home .
 uv run rtuforge --home . send 01 03 00 65 00 01
 ```
 
+The separate Russian-language Bionic Mini physical imitator is launched with:
+
+```powershell
+uv run bionic-immitator --home .\bionic-data
+uv run bionic-immitator --home .\bionic-data --no-controller
+```
+
+It has its own configuration and event journal and does not modify
+`config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,
+verified Stage 7 Modbus maps, USB safety rules, and hardware assumptions are in
+[BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md).
+
 Linux development launch uses the same explicit checkout-local home:
 
 ```bash
