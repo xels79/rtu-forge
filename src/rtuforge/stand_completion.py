@@ -53,6 +53,8 @@ def completion_candidates(text: str) -> list[str]:
     elif len(completed) == 2 and completed[0] == "idd":
         choices = ("status", "setup", "frequency", "monitor", "feedback", "configure")
     elif len(completed) == 3 and completed[0] == "idd" and completed[2] == "configure":
+        choices = ("--confirm", "manual")
+    elif len(completed) == 4 and completed[0] == "idd" and completed[2:] == ["configure", "manual"]:
         choices = ("--confirm",)
     elif completed == ["start"]:
         choices = ("1", "2", "check", "step")

@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from math import isfinite
 from time import monotonic
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from .stand_vfd import parse_frequency_hz
+from .pressure_control import PressureControl, PressureRegulator
+
+if TYPE_CHECKING:
+    from .stand_hardware import FrequencyPlan, PressureReading
 
 
 class State(str, Enum):
@@ -95,7 +99,11 @@ class Hardware(Protocol):
     def relay(self, channel: int, active: bool) -> None: ...
     def precheck(self, drive: int) -> None: ...
     def set_frequency(self, drive: int, hz: float) -> object: ...
-    def sample(self, drive: int) -> Sample: ...
+    def pressure_frequency_plan(self, drive: int, hz: float, maximum_hz: float,
+                                minimum_hz: float = 0) -> FrequencyPlan: ...
+    def adjust_frequency(self, drive: int, hz: float) -> None: ...
+    def high_pressure(self) -> PressureReading: ...
+    def sample(self, drive: int, *, pressure_callback: Callable[[float, float], None] | None = None) -> Sample: ...
     def drive_feedback(self, drive: int) -> tuple[float, bool, bool]: ...
     def confirm_off(self, channels: tuple[int, ...]) -> None: ...
 
@@ -106,10 +114,15 @@ class StopRequested(Exception):
 
 class IrrigationController:
     def __init__(self, hw: Hardware, limits: Limits, *, clock: Callable[[], float] = monotonic,
-                 confirm_timeout: float = 30.0):
+                 confirm_timeout: float = 30.0, pressure_control: PressureControl | None = None) -> None:
         if not isfinite(confirm_timeout) or confirm_timeout <= 0:
             raise ValueError("Тайм-аут подтверждения должен быть положительным")
         self.hw, self.limits, self.clock = hw, limits, clock
+        self.pressure_control = pressure_control
+        if pressure_control is not None:
+            pressure_control.validate_limits(limits.high_ready, limits.high_max)
+        self.regulator: PressureRegulator | None = None
+        self.reduced_pressure_min: float | None = None
         self.confirm_timeout = confirm_timeout
         self.guided = False
         self.pending_step: PendingStep | None = None
@@ -134,7 +147,8 @@ class IrrigationController:
 
     def _read(self) -> Sample:
         self.last = None
-        sample = self.hw.sample(self.drive)
+        sample = (self.hw.sample(self.drive, pressure_callback=self._pressure_observed)
+                  if self.pressure_control is not None else self.hw.sample(self.drive))
         if (not all(isfinite(v) for v in (sample.low_bar, sample.high_bar, sample.hz))
             or not 0 <= sample.low_bar <= 6 or not 0 <= sample.high_bar <= 100
             or sample.hz < 0 or sample.fault):
@@ -143,6 +157,68 @@ class IrrigationController:
             raise RuntimeError("Некорректный выходной ток IDD")
         self.last = sample
         return sample
+
+    def _pressure_observed(self, low_bar: float, high_bar: float) -> None:
+        """Process pressure before nonessential I/O; only decreases are allowed here."""
+        if (not isfinite(low_bar) or not isfinite(high_bar)
+            or not 0 <= low_bar <= 6 or not 0 <= high_bar <= 100):
+            raise RuntimeError("Некорректное давление AI1/AI2")
+        if high_bar >= self.limits.high_max:
+            raise RuntimeError(f"Превышено ДВД: {high_bar:g} бар >= {self.limits.high_max:g} бар; возможна закупорка линии")
+        if self.state not in (State.WAIT_HIGH_PRESSURE, State.RUNNING):
+            if high_bar >= self.pressure_control.limit_bar:
+                raise RuntimeError("ДВД перед FWD выше pressure_limit_bar; сбросьте давление перед пуском")
+            return
+        if high_bar <= self.pressure_control.rise_stop_bar:
+            self.reduced_pressure_min = None
+        elif self.reduced_pressure_min is not None:
+            if high_bar - self.reduced_pressure_min >= self.pressure_control.rise_margin_bar - 1e-7:
+                raise RuntimeError("ДВД растёт после снижения частоты при давлении выше "
+                                   f"{self.pressure_control.rise_stop_bar:g} бар: возможен засор; требуется останов")
+            self.reduced_pressure_min = min(high_bar, self.reduced_pressure_min)
+        self._adjust_pressure(high_bar, allow_increase=False)
+
+    def _adjust_pressure(self, high_bar: float, *, allow_increase: bool) -> None:
+        if self.regulator is None:
+            return
+        now = self.clock()
+        hz = self.regulator.propose(high_bar, now, allow_increase=allow_increase)
+        if hz is not None and hz > self.frequency_hz:
+            # A full feedback cycle takes time. Recheck AI2 immediately before raising.
+            previous = self.frequency_hz
+            self._observe_high_pressure()
+            if self.frequency_hz != previous:
+                return  # the fresh pressure reading required a priority decrease
+            hz = self.regulator.propose(self.last.high_bar, self.clock(), allow_increase=True)
+        if hz is not None:
+            self.hw.adjust_frequency(self.drive, hz)
+            if hz < self.frequency_hz and self.reduced_pressure_min is None:
+                self.reduced_pressure_min = high_bar
+            self.frequency_hz = hz
+            self.regulator.commit(hz, self.clock())
+
+    def _observe_high_pressure(self) -> None:
+        high = self.hw.high_pressure()
+        if high.error or self.last is None:
+            self.last = None
+            raise RuntimeError(high.error or "Нет полного измерения для контроля давления")
+        warning = self.last.pressure_warning
+        if high.warning and high.warning not in warning:
+            warning += ("; " if warning else "") + f"AI2: {high.warning}"
+        self.last = replace(self.last, high_bar=high.bar, pressure_warning=warning)
+        self._pressure_observed(self.last.low_bar, high.bar)
+
+    def tick_pressure(self) -> State:
+        """AI2-only safety/reduction tick; upward steps always require full feedback."""
+        if self.pressure_control is None or self.state not in (State.WAIT_HIGH_PRESSURE, State.RUNNING):
+            return self.state
+        try:
+            self._observe_high_pressure()
+        except StopRequested:
+            self.stop()
+        except Exception as exc:
+            self.emergency(str(exc))
+        return self.state
 
     def start(self, rack: int, tier: int, liquid: str, hz: float,
               *, drive: int, selector: int, guided: bool = False) -> None:
@@ -153,6 +229,10 @@ class IrrigationController:
         if drive not in DRIVE_START or selector not in (19, 20):
             raise ValueError("Неизвестный частотник или выбор НВД")
         hz = parse_frequency_hz(hz)
+        if self.pressure_control is not None:
+            self.pressure_control.validate_start(hz)
+        self.regulator = None
+        self.reduced_pressure_min = None
         self.drive, self.valve, self.select = drive, VALVES[(rack, tier)], selector
         self.frequency_hz, self.low_since, self.last = hz, None, None
         self.guided = guided
@@ -274,6 +354,12 @@ class IrrigationController:
                 if r.running or r.hz > self.limits.stop_hz:
                     raise RuntimeError("Частотник уже работает; пуск запрещён")
                 self.hw.precheck(self.drive)
+                if self.pressure_control is not None:
+                    plan = self.hw.pressure_frequency_plan(self.drive, self.frequency_hz,
+                                                           self.pressure_control.max_hz, self.pressure_control.min_hz)
+                    self.frequency_hz = plan.setpoint_raw / 10
+                    self.regulator = PressureRegulator(self.pressure_control, self.limits.high_ready,
+                                                       max(plan.effective_minimum_hz, self.pressure_control.min_hz), self.frequency_hz)
                 self._state(State.CONFIGURE_VFD)
             elif self.state == State.CONFIGURE_VFD:
                 if self._approve(f"IDD {self.drive}: записать задание {self.frequency_hz:g} Гц, пуск FWD выключен"):
@@ -310,6 +396,8 @@ class IrrigationController:
                 channel = DRIVE_START[self.drive]
                 if self._approve(f"ВКЛ реле {channel}: FWD IDD {self.drive}, после подтверждения НВД"):
                     self.hw.relay(channel, True)
+                    if self.regulator is not None:
+                        self.regulator.arm(self.clock())
                     self._state(State.WAIT_HIGH_PRESSURE)
             elif self.state == State.WAIT_HIGH_PRESSURE:
                 if r.low_bar < self.limits.low_min:
@@ -329,6 +417,10 @@ class IrrigationController:
                     self.low_since = None
                 if self.low_since is not None and now - self.low_since >= self.limits.leak_delay:
                     raise RuntimeError("Падение давления: возможна протечка или потеря подпора")
+            if self.regulator is not None and self.state in (State.WAIT_HIGH_PRESSURE, State.RUNNING):
+                self._adjust_pressure(r.high_bar, allow_increase=(
+                    r.running and r.hz > self.limits.stop_hz and r.low_bar >= self.limits.low_ready
+                    and abs(r.hz - self.frequency_hz) <= 0.050001))
         except StopRequested:
             self.stop()
         except Exception as exc:

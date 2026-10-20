@@ -60,6 +60,7 @@ class StandHardware:
         self.report: Callable[[str], None] = lambda text: None
         self.last_coils: list[bool] | None = None
         self.expected_hydraulics: set[int] | None = None
+        self.regulation_limits: tuple[int, int, int] | None = None
 
     def registers(self, slave: int, function: int, address: int, count: int) -> list[int]:
         request = build_read_request(slave, function, address, count)
@@ -122,20 +123,24 @@ class StandHardware:
     def pressure(self) -> list[PressureReading]:
         modes = self.registers(6, 3, 0x1000, 4)
         raw = self.registers(6, 4, 0, 4)
-        readings = []
-        for i, sensor in enumerate((LOW, HIGH)):
-            try:
-                allow_zero = (self.settings.ai1_zero_raw_is_zero if i == 0
-                              else self.settings.ai2_zero_raw_is_zero)
-                ma, bar = decode_pressure(raw[i], modes[i], sensor, zero_raw_is_zero=allow_zero)
-                warning = ("raw=0 принят как 0 бар по проверке оператора; "
-                           "исправность петли не определена") if ma is None else ""
-                readings.append(PressureReading(sensor, raw[i], modes[i], ma, bar, warning=warning))
-            except ValueError as exc:
-                readings.append(PressureReading(sensor, raw[i], modes[i],
-                                                raw[i] / 1000 if modes[i] == 3 else None,
-                                                None, str(exc)))
-        return readings
+        return [self._pressure_reading(sensor, raw[i], modes[i]) for i, sensor in enumerate((LOW, HIGH))]
+
+    def high_pressure(self) -> PressureReading:
+        """Fast AI2-only poll between full feedback cycles; validate mode every time."""
+        mode = self.registers(6, 3, 0x1001, 1)[0]
+        raw = self.registers(6, 4, 1, 1)[0]
+        return self._pressure_reading(HIGH, raw, mode)
+
+    def _pressure_reading(self, sensor: Sensor, raw: int, mode: int) -> PressureReading:
+        try:
+            allow_zero = (self.settings.ai1_zero_raw_is_zero if sensor.channel == 1
+                          else self.settings.ai2_zero_raw_is_zero)
+            ma, bar = decode_pressure(raw, mode, sensor, zero_raw_is_zero=allow_zero)
+            warning = ("raw=0 принят как 0 бар по проверке оператора; "
+                       "исправность петли не определена") if ma is None else ""
+            return PressureReading(sensor, raw, mode, ma, bar, warning=warning)
+        except ValueError as exc:
+            return PressureReading(sensor, raw, mode, raw / 1000 if mode == 3 else None, None, str(exc))
 
     def drive_feedback(self, drive: int) -> tuple[float, bool, bool]:
         cfg = self.settings
@@ -204,6 +209,36 @@ class StandHardware:
     def set_frequency(self, drive: int, hz: float) -> FrequencyPlan:
         plan = self.frequency_plan(drive, hz)
         value = plan.setpoint_raw
+        self._write_frequency(drive, value)
+        self.report(f"IDD {drive}: задание {value/10:g} Гц подтверждено; {plan.limits_description}")
+        return plan
+
+    def pressure_frequency_plan(self, drive: int, hz: float, maximum_hz: float,
+                                minimum_hz: float = 0) -> FrequencyPlan:
+        """Validate the whole control range without writing; cache it for fast updates."""
+        self.regulation_limits = None
+        if hz > maximum_hz:
+            raise ValueError("Начальная частота выше pressure_max_hz")
+        plan = self.frequency_plan(drive, hz)
+        # The maximum must obey the selected drive's motor floor and Pb05/Pb06 too.
+        ceiling = self.frequency_plan(drive, maximum_hz)
+        minimum = max(plan.minimum_raw, plan.motor_minimum_raw, ceil(minimum_hz * 10), 1)
+        if plan.setpoint_raw < minimum:
+            raise ValueError("Начальная частота ниже pressure_min_hz")
+        self.regulation_limits = (drive, minimum,
+                                  ceiling.setpoint_raw)
+        return plan
+
+    def adjust_frequency(self, drive: int, hz: float) -> None:
+        """Priority adjustment within a range validated before FWD; verify every write."""
+        hz = parse_frequency_hz(hz)
+        value = int(hz * 10 + .5)
+        if (self.regulation_limits is None or self.regulation_limits[0] != drive
+            or not self.regulation_limits[1] <= value <= self.regulation_limits[2]):
+            raise RuntimeError("Регулирование вне проверенного диапазона выбранного IDD; требуется новый start check")
+        self._write_frequency(drive, value)
+
+    def _write_frequency(self, drive: int, value: int) -> None:
         self.write_register(drive, 0x2001, value)
         if self.settings.setpoint_readback:
             # 0x2001 is write-only in the published manual; only enable for verified firmware.
@@ -212,14 +247,16 @@ class StandHardware:
             actual = self.registers(drive, 3, 1, 1)[0]  # PA01: effective setpoint
         if actual != value:
             raise RuntimeError(f"Уставка IDD не подтверждена: записано {value}, прочитано {actual}")
-        self.report(f"IDD {drive}: задание {value/10:g} Гц подтверждено; {plan.limits_description}")
-        return plan
 
-    def sample(self, drive: int) -> Sample:
+    def sample(self, drive: int, *,
+               pressure_callback: Callable[[float, float], None] | None = None) -> Sample:
         readings = self.pressure()
         for reading in readings:
             if reading.error:
                 raise RuntimeError(reading.error)
+        if pressure_callback is not None:
+            # Reductions/cutoff take priority over drive, current and coil telemetry.
+            pressure_callback(readings[0].bar, readings[1].bar)
         hz, running, fault = self.drive_feedback(drive)
         # PA03=0x0003, documented current scaling: 0.1 A per register unit.
         current = self.registers(drive, 3, 3, 1)[0] / 10
@@ -228,11 +265,15 @@ class StandHardware:
         warning = "; ".join(f"AI{r.sensor.channel}: {r.warning}" for r in readings if r.warning)
         return Sample(readings[0].bar, readings[1].bar, hz, running, fault, current, warning)
 
-    def configure(self, drive: int) -> None:
+    def configure(self, drive: int, *, manual: bool = False) -> None:
+        """Configure RS485/FWD, or FWD with frequency from Pb00 and panel STOP."""
         hz, running, fault = self.drive_feedback(drive)
         if hz > self.settings.stop_hz or running or fault or self.coils()[DRIVE_START[drive] - 1]:
             raise RuntimeError("Изменение настроек запрещено: требуются STOP, нулевая частота, отсутствие аварии и разомкнутый FWD")
-        for register, value in ((0x65, 5), (0x66, 1), (0x13B, 6), (0x13C, 7)):
+        # Pb03 enables the panel STOP before manual frequency/start sources change.
+        parameters = (((0x67, 1), (0x65, 0), (0x66, 1), (0x13B, 6), (0x13C, 7))
+                      if manual else ((0x65, 5), (0x66, 1), (0x13B, 6), (0x13C, 7)))
+        for register, value in parameters:
             self.write_register(drive, register, value)
             if self.registers(drive, 3, register, 1)[0] != value:
                 raise RuntimeError(f"IDD {drive}: настройка 0x{register:04X} не подтверждена")

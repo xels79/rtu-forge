@@ -177,7 +177,7 @@ def _registers(ctx: StandContext, slave: int, fn: int, addr: int, count: int) ->
 
 
 def _idd(ctx: StandContext, args: list[str]) -> None:
-    usage = "idd <7|8> <status|setup|frequency ГЦ|monitor|feedback|configure --confirm>"
+    usage = "idd <7|8> <status|setup|frequency ГЦ|monitor|feedback|configure [manual] --confirm>"
     if args and args[0].lower() == "all":
         if len(args) != 2 or args[1].lower() not in {"status", "setup", "monitor"}:
             raise ValueError("idd all <status|setup|monitor> — только чтение; запись выполняется для одного IDD")
@@ -234,9 +234,13 @@ def _idd(ctx: StandContext, args: list[str]) -> None:
         state = {0: "STOP", 1: "RUN вперёд", 2: "RUN назад"}[feedback.state]
         ctx.console.print(f"IDD {slave}, карта mini PLUS: PA02={feedback.output_hz:g} Гц; PA28 (0x001C)={feedback.state} — {state}; PA27 (0x001B), текущая ошибка={feedback.error_code}.", markup=False)
         ctx.console.print("Только чтение обратной связи. Пуск/останов остаётся через реле FWD; параметры и флаги stand.ini не менялись.", markup=False)
-    elif action == "configure" and args[2:] == ["--confirm"]:
-        hw.configure(slave)
-        ctx.console.print("Записаны и проверены Pb01=5, Pb02=1, Pd15=6, Pd16=7; Pb05/Pb06 не менялись.", markup=False)
+    elif action == "configure" and args[2:] in (["--confirm"], ["manual", "--confirm"]):
+        manual = args[2] == "manual"
+        hw.configure(slave, manual=manual)
+        if manual:
+            ctx.console.print(f"Записаны и проверены Pb01=0 (частота из Pb00), Pb02=1 (пуск FWD), Pb03=1 (кнопка STOP доступна), Pd15=6, Pd16=7; Pb00/Pb05/Pb06 не менялись. Реле не переключались, команда пуска не отправлялась. Возврат к RS485/FWD: idd {slave} configure --confirm.", markup=False)
+        else:
+            ctx.console.print("Записаны и проверены Pb01=5, Pb02=1, Pd15=6, Pd16=7; Pb05/Pb06 не менялись.", markup=False)
     else:
         raise ValueError(usage + "; configure требует явного --confirm после проверки оператором")
 

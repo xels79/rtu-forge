@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import OptionSpec, parse_value
 from .irrigation import Limits
+from .pressure_control import PressureControl
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,19 @@ class IrrigationSettings:
     high_target_bar: float = 60.0
     high_min_bar: float = 50.0
     high_max_bar: float = 70.0
+    pressure_control_enabled: bool = False
+    pressure_limit_bar: float = 70.0
+    pressure_max_hz: float = 23.7
+    pressure_min_hz: float = 20.0
+    pressure_deadband_bar: float = 1.0
+    pressure_up_step_hz: float = 0.1
+    pressure_down_step_hz: float = 0.5
+    pressure_up_interval_ms: int = 1000
+    pressure_down_interval_ms: int = 250
+    pressure_poll_ms: int = 50
+    pressure_feedback_ms: int = 250
+    pressure_rise_stop_bar: float = 63.0
+    pressure_rise_margin_bar: float = 0.5
     hysteresis_bar: float = 0.2
     valve_delay_ms: int = 2000
     prime_timeout_ms: int = 10000
@@ -50,6 +64,11 @@ class IrrigationSettings:
 
     def validate(self) -> None:
         self.limits()
+        control = self._pressure_control_settings()
+        if self.pressure_poll_ms <= 0 or self.pressure_feedback_ms <= 0:
+            raise ValueError("pressure_poll_ms/pressure_feedback_ms должны быть положительными")
+        if self.pressure_control_enabled:
+            control.validate_limits(self.high_target_bar, self.high_max_bar)
         if {self.pump1_drive, self.pump2_drive} != {7, 8}:
             raise ValueError("pump1_drive/pump2_drive должны однозначно задавать адреса 7 и 8")
         if self.rack1_pump not in (1, 2) or self.rack2_pump not in (1, 2):
@@ -77,6 +96,17 @@ class IrrigationSettings:
                       self.valve_delay_ms / 1000, self.prime_timeout_ms / 1000,
                       self.rise_timeout_ms / 1000, self.stop_timeout_ms / 1000,
                       self.leak_delay_ms / 1000, self.hysteresis_bar, self.stop_hz)
+
+    def _pressure_control_settings(self) -> PressureControl:
+        return PressureControl(self.pressure_limit_bar, self.pressure_max_hz,
+                               self.pressure_deadband_bar, self.pressure_up_step_hz,
+                               self.pressure_down_step_hz, self.pressure_up_interval_ms / 1000,
+                               self.pressure_down_interval_ms / 1000,
+                               self.pressure_rise_stop_bar, self.pressure_rise_margin_bar,
+                               self.pressure_min_hz)
+
+    def pressure_control(self) -> PressureControl | None:
+        return self._pressure_control_settings() if self.pressure_control_enabled else None
 
     def require_commissioned(self) -> None:
         self.validate()

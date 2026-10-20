@@ -17,7 +17,9 @@ class IrrigationService:
         self.bus_lock, self.report = bus_lock, report
         hardware.report = report
         self.controller = IrrigationController(hardware, settings.limits(),
-                                              confirm_timeout=settings.step_timeout_ms / 1000)
+                                              confirm_timeout=settings.step_timeout_ms / 1000,
+                                              pressure_control=settings.pressure_control())
+        self.poll_interval_ms = settings.pressure_poll_ms if settings.pressure_control_enabled else settings.poll_ms
         self.stop_requested = Event()
         hardware.cancelled = self.stop_requested.is_set
         self.finished = Event()
@@ -106,7 +108,10 @@ class IrrigationService:
         relays = (", ".join(str(i + 1) for i, value in enumerate(self.hardware.last_coils) if value)
                   or "нет") if self.hardware.last_coils is not None else "нет измерения"
         warning = f"; ВНИМАНИЕ: {sample.pressure_warning}" if sample.pressure_warning else ""
-        self.report(f"Измерения: НВД={sample.low_bar:g} бар; ДВД={sample.high_bar:g} бар; IDD {ctl.drive}: {sample.hz:g} Гц, ток={current}, {'RUN' if sample.running else 'STOP'}; включены реле: {relays}{warning}")
+        control = (f"; уставка={ctl.frequency_hz:g} Гц; цель={self.settings.high_target_bar:g} бар; "
+                   f"снижение от {self.settings.pressure_limit_bar:g}; останов от {self.settings.high_max_bar:g} бар"
+                   if self.settings.pressure_control_enabled else "")
+        self.report(f"Измерения: НВД={sample.low_bar:g} бар; ДВД={sample.high_bar:g} бар; IDD {ctl.drive}: {sample.hz:g} Гц, ток={current}, {'RUN' if sample.running else 'STOP'}; включены реле: {relays}{control}{warning}")
 
     def stop(self) -> None:
         self.stop_requested.set()
@@ -121,6 +126,7 @@ class IrrigationService:
         previous = None
         announced_step = 0
         next_telemetry = 0.0
+        next_feedback = 0.0
         try:
             while True:
                 with self.bus_lock:
@@ -128,7 +134,13 @@ class IrrigationService:
                     if self.stop_requested.is_set() and ctl.state != State.STOPPING:
                         ctl.stop()
                     before = ctl.state
-                    ctl.tick()
+                    if (self.settings.pressure_control_enabled and not self.stop_requested.is_set()
+                        and ctl.state in (State.WAIT_HIGH_PRESSURE, State.RUNNING)
+                        and monotonic() < next_feedback):
+                        ctl.tick_pressure()
+                    else:
+                        ctl.tick()
+                        next_feedback = monotonic() + self.settings.pressure_feedback_ms / 1000
                     now = monotonic()
                     step = ctl.pending_step
                     new_step = step is not None and step.number != announced_step
@@ -148,9 +160,9 @@ class IrrigationService:
                         break
                 # Event wakes polling immediately for STOP; avoid spinning during deceleration.
                 if self.stop_requested.is_set():
-                    Event().wait(self.settings.poll_ms / 1000)
+                    Event().wait(self.poll_interval_ms / 1000)
                 else:
-                    self.stop_requested.wait(self.settings.poll_ms / 1000)
+                    self.stop_requested.wait(self.poll_interval_ms / 1000)
         except Exception as exc:
             # Unexpected worker failures still attempt all stop outputs before latching FAULT.
             with self.bus_lock:

@@ -770,7 +770,7 @@ def test_completion_for_irrigation_commands():
     from rtuforge.stand_completion import completion_candidates
     assert "stop" in completion_candidates("st")
     assert "monitor" in completion_candidates("idd 7 ")
-    assert completion_candidates("idd 8 configure ") == ["--confirm"]
+    assert completion_candidates("idd 8 configure ") == ["--confirm", "manual"]
     assert completion_candidates("start 1 1 ") == ["broth"]
     assert completion_candidates("test-pressure ") == ["high", "log", "low", "stop"]
     assert "poll_ms" in completion_candidates("set irrigation ")

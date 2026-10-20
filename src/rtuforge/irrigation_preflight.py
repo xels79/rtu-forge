@@ -79,16 +79,28 @@ def check_start(hardware: StandHardware, settings: IrrigationSettings,
         if high.bar is not None and high.bar >= settings.high_max_bar:
             checks.append(ReadinessCheck("ДВД перед пуском", False,
                                          f"{high.bar:g} бар >= аварийного максимума {settings.high_max_bar:g} бар"))
+        elif settings.pressure_control_enabled and high.bar is not None and high.bar >= settings.pressure_limit_bar:
+            checks.append(ReadinessCheck("ДВД перед пуском", False,
+                                         f"{high.bar:g} бар >= pressure_limit_bar={settings.pressure_limit_bar:g}; сбросьте давление перед FWD"))
 
     def relays() -> str:
         hardware.precheck_relays()
         return f"RTU {hardware.relay_id}: реле гидравлики выключены; FWD выбранного IDD — реле {DRIVE_START[drive]}"
 
     def frequency() -> str:
-        plan = hardware.frequency_plan(drive, hz)
+        control = settings.pressure_control()
+        if control is not None:
+            control.validate_start(hz)
+            plan = hardware.pressure_frequency_plan(drive, hz, control.max_hz, control.min_hz)
+        else:
+            plan = hardware.frequency_plan(drive, hz)
         return (f"Pb01/Pb02/Pd15/Pd16 соответствуют RS485/FWD; "
                 f"{plan.limits_description}; "
-                f"задание {plan.requested_hz:g} Гц → {plan.setpoint_raw / 10:g} Гц (только расчёт, шаг 0.1 Гц)")
+                f"задание {plan.requested_hz:g} Гц → {plan.setpoint_raw / 10:g} Гц (только расчёт, шаг 0.1 Гц)"
+                + (f"; регулирование: минимум {max(plan.effective_minimum_hz, control.min_hz):g} Гц, "
+                   f"начало {hz:g} Гц, потолок {control.max_hz:g} Гц; "
+                   f"цель {settings.high_target_bar:g}, снижение от {control.limit_bar:g}, останов от {settings.high_max_bar:g} бар"
+                   if control is not None else ""))
 
     def feedback() -> str:
         hz, running, fault = hardware.drive_feedback(drive)
