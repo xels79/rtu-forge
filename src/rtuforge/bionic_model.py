@@ -533,6 +533,8 @@ class BionicModel:
         self.total_leak_l = 0.0
         self.total_irrigation_loss_l = 0.0
         self.osmosis_profile = {"ec": 0.1, "ph": 6.8, "temperature": 20.0, "buffer": 0.3}
+        # Reference-only profile: the confirmed stand has no controllable tap-water path.
+        self.tap_profile = {"ec": 0.5, "ph": 7.2, "temperature": 18.0, "buffer": 0.8}
         self.nutrient_absorption_fraction = 0.05
         self.deposition_fraction = 0.01
         self.ph_drift_per_pass = 0.02

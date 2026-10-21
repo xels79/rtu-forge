@@ -5,7 +5,10 @@ from dataclasses import dataclass
 from rich.console import Console
 from rich.text import Text
 from .bionic_config import BionicSettings, OPTION_SPECS, parse_sensor_relay_map
-from .bionic_equipment import EQUIPMENT_IDS, parse_equipment_profile
+from .bionic_equipment import (
+    EQUIPMENT_IDS, lifetime_for_new_equipment, parse_equipment_profile,
+    remaining_dry_run_s,
+)
 from .bionic_events import EventJournal
 from .bionic_idd import IDD_PARAMETERS, IDD_TELEMETRY
 from .bionic_lights import (
@@ -36,6 +39,9 @@ HELP_GROUPS = (
         "sim speed 1          Нормальная скорость",
         "sim speed 5          Пятикратная скорость",
         "sim reset --confirm  Сбросить виртуальное состояние",
+        "sim state save <имя> Сохранить физическое состояние отдельно от настроек",
+        "sim state load <имя> --confirm  Загрузить состояние, не меняя команды платы",
+        "sim state list        Показать контрольные точки",
         "sim pause не закрывает RS485 и не отправляет плате команду остановки.",
     ))),
     ("ОБЩИЕ", "status — состояние; devices — устройства; ports — порты; help — справка; exit/quit — выход"),
@@ -44,7 +50,7 @@ HELP_GROUPS = (
     ("PONICPILOT", "view ponics; view ponics settings; view ponics registers; ponics dose <a|b|c|ph_plus|ph_minus> <мл>"),
     ("ЧАСТОТНИКИ", "view drives; view drive hp1; view drive hp2; fault pump hp1|hp2 <тип>. RUN учитывает PB.02; RESET частотника не ремонтирует насос; ремонт требует equipment repair <id> --confirm."),
     ("БАКИ", "tank list; tank <bo|bp|bso1|bso2> level <л|N%>; capacity <л>; tank bo fill-rate <л/мин>"),
-    ("НАСОСЫ И ПОВРЕЖДЕНИЯ", "view equipment; equipment list; equipment status <id>; equipment repair|replace <id> --confirm; equipment set <id> <параметр> <значение>. Сухой ход развивается автоматически; команда платы не изменяется."),
+    ("НАСОСЫ И ПОВРЕЖДЕНИЯ", "view equipment; equipment list; equipment status <id>; equipment repair|replace <id> --confirm; equipment set <id> <параметр> <значение> [--sync-wear]; equipment sync-wear <id>. failure_s — непрерывный сухой ход, wear_rate_per_s — необратимый накопительный износ. Команда платы не изменяется."),
     ("ДАТЧИКИ", "sensor list; sensor <id> threshold <л>; force on|off; auto. Порог MAX — положение датчика, а не физическая ёмкость бака."),
     ("ДАВЛЕНИЕ", "pressure target <бар>; range <мин> <макс>; rise-time <с>; fall-time <с>; pipe status|repair"),
     ("ЗАСОР И ПРОТЕЧКИ", "fault list — внутренние отказы модели; fault leak on|off|rate — протечка; fault blockage on|off|severity — засор после HIGH; fault pump hp1|hp2 <тип> — механический отказ без дополнительного сигнала плате; alarm list; alarm reset all"),
@@ -117,7 +123,6 @@ SETTING_LABELS = {
     "hp1_pump_load_coefficient":("HP1: коэффициент нагрузки насоса","×"), "hp1_jam_current_multiplier":("HP1: ток при заклинивании","×"),
     "hp1_overload_trip_s":("HP1: выдержка перегрузки (модель)","с"), "hp1_overload_protection_enabled":("HP1 Pi.16: защита перегрузки",""),
     "hp1_overload_threshold_multiplier":("HP1: порог перегрузки","×Iном"), "hp1_protection_behavior":("HP1: поведение защиты",""),
-    "hp1_mechanical_failure":("HP1: тип механической поломки",""), "hp1_mechanical_damage":("HP1: накопленное повреждение","доля"),
     "hp2_ramp_up_s":("HP2: время разгона","с"), "hp2_ramp_down_s":("HP2: время торможения","с"),
     "hp2_pb00":("HP2 PB.00: локальная частота","0.1 Гц"),
     "hp2_pb01":("HP2 Pb01: источник частоты","RAW"), "hp2_pb02":("HP2 Pb02: источник RUN","RAW"),
@@ -128,7 +133,6 @@ SETTING_LABELS = {
     "hp2_pump_load_coefficient":("HP2: коэффициент нагрузки насоса","×"), "hp2_jam_current_multiplier":("HP2: ток при заклинивании","×"),
     "hp2_overload_trip_s":("HP2: выдержка перегрузки (модель)","с"), "hp2_overload_protection_enabled":("HP2 Pi.16: защита перегрузки",""),
     "hp2_overload_threshold_multiplier":("HP2: порог перегрузки","×Iном"), "hp2_protection_behavior":("HP2: поведение защиты",""),
-    "hp2_mechanical_failure":("HP2: тип механической поломки",""), "hp2_mechanical_damage":("HP2: накопленное повреждение","доля"),
     "simulation_speed":("Скорость симуляции","×"),
 }
 
@@ -154,6 +158,18 @@ EQUIPMENT_SETTING_NAMES = {
     "bso2-to-bp": "Насос БСО2 → БП: время до физического отказа",
     "hp1": "Насос высокого давления HP1: время до физического отказа",
     "hp2": "Насос высокого давления HP2: время до физического отказа",
+}
+EQUIPMENT_FIELD_LABELS = {
+    "dry_run_warning_s": ("порог предупреждения сухого хода", "с"),
+    "overheat_s": ("порог перегрева", "с"),
+    "degrade_s": ("порог деградации", "с"),
+    "failure_s": ("время до физического отказа", "с"),
+    "heating_rate_per_s": ("скорость нагрева", "1/с"),
+    "cooling_rate_per_s": ("скорость охлаждения", "1/с"),
+    "wear_rate_per_s": ("скорость необратимого износа", "1/с"),
+    "wear_flow_reduction": ("снижение расхода от износа", "доля"),
+    "initial_state": ("начальное состояние", ""),
+    "failure_type": ("тип физического отказа", ""),
 }
 
 @dataclass(frozen=True)
@@ -198,9 +214,9 @@ def _ports(s:BionicSettings,width:int)->list[str]:
 def _technical(section:str,name:str)->str:
     return {"bo_capacity_l":"tanks.bo.capacity_l","bp_capacity_l":"tanks.bp.capacity_l","bso1_capacity_l":"tanks.bso1.capacity_l","bso2_capacity_l":"tanks.bso2.capacity_l"}.get(name,f"{section}.{name}")
 
-def setting_rows(settings:BionicSettings,draft:BionicSettings,saved:BionicSettings,width:int)->tuple[list[str],list[str|None]]:
+def setting_rows(model:BionicModel,settings:BionicSettings,draft:BionicSettings,saved:BionicSettings,width:int)->tuple[list[str],list[str|None]]:
     sw=3; tw=max(12,min(34,width*30//100)); vw=max(8,min(20,width*18//100)); lw=max(8,width-tw-sw-vw-9)
-    grouped:dict[str,list[tuple[str,str,str,str,str]]]={}
+    grouped:dict[str,list[tuple[str,str,str,str,str|None]]]={}
     for name,(section,_kind) in OPTION_SPECS.items():
         if name in {"light_profile", "equipment_profile"}:
             continue
@@ -212,15 +228,34 @@ def setting_rows(settings:BionicSettings,draft:BionicSettings,saved:BionicSettin
     draft_equipment=parse_equipment_profile(draft.equipment_profile)
     saved_equipment=parse_equipment_profile(saved.equipment_profile)
     for equipment_id in EQUIPMENT_IDS:
-        draft_value=draft_equipment[equipment_id].failure_s
-        state=("A" if draft_value==applied_equipment[equipment_id].failure_s else "-")+"/"+("S" if draft_value==saved_equipment[equipment_id].failure_s else "-")
-        grouped.setdefault("equipment",[]).append((
-            f"equipment.{equipment_id}.failure_s",
-            EQUIPMENT_SETTING_NAMES[equipment_id],
-            f"{draft_value:g} с (расчётное)",
-            state,
-            f"equipment:{equipment_id}:failure_s",
-        ))
+        draft_profile=draft_equipment[equipment_id]
+        applied_profile=applied_equipment[equipment_id]
+        saved_profile=saved_equipment[equipment_id]
+        rows=grouped.setdefault("equipment",[])
+        equipment_name=EQUIPMENT_SETTING_NAMES[equipment_id].split(": время",1)[0]
+        for field_name,(field_label,unit) in EQUIPMENT_FIELD_LABELS.items():
+            draft_value=getattr(draft_profile,field_name)
+            state=("A" if draft_value==getattr(applied_profile,field_name) else "-")+"/"+("S" if draft_value==getattr(saved_profile,field_name) else "-")
+            rendered=(f"{draft_value:.9g}" if isinstance(draft_value,float) else str(draft_value))
+            value_text=(
+                f"{rendered} с (расчётное) (ДЕМО)"
+                if field_name=="failure_s" else
+                f"{rendered} {unit} (ДЕМО)".replace("  "," ").strip()
+            )
+            rows.append((
+                f"equipment.{equipment_id}.{field_name}",
+                f"{equipment_name}: {field_label}",
+                value_text, state,
+                f"equipment:{equipment_id}:{field_name}",
+            ))
+        lifetime=lifetime_for_new_equipment(draft_profile)
+        wear_time="∞" if lifetime.wear_s == float("inf") else f"{lifetime.wear_s:g} с"
+        rows += [
+            (f"equipment.{equipment_id}.effective_lifetime",f"{EQUIPMENT_SETTING_NAMES[equipment_id]}: эффективный ресурс нового насоса",f"{lifetime.effective_s:g} с; {lifetime.limiting_mechanism} (ДЕМО)","-",None),
+            (f"equipment.{equipment_id}.wear_lifetime",f"{EQUIPMENT_SETTING_NAMES[equipment_id]}: отказ нового насоса по износу",f"{wear_time} (ДЕМО)","-",None),
+            (f"state.{equipment_id}.damage",f"{EQUIPMENT_SETTING_NAMES[equipment_id]}: текущий необратимый износ",f"{model.equipment_health(equipment_id).damage*100:.1f}% (состояние)","-",None),
+            (f"state.{equipment_id}.remaining",f"{EQUIPMENT_SETTING_NAMES[equipment_id]}: осталось при непрерывном сухом ходе",f"{remaining_dry_run_s(model.equipment_health(equipment_id)):g} с (ДЕМО)","-",None),
+        ]
     lines=[ellipsize("A — применено, S — сохранено. Параметры демонстрационной модели не являются измеренными характеристиками.",width)]
     keys: list[str | None]=[None]
     ordered_sections=[*SETTINGS_GROUP_ORDER,*sorted(set(grouped)-set(SETTINGS_GROUP_ORDER))]
@@ -301,7 +336,7 @@ def _sensor_setting_rows(model:BionicModel,settings:BionicSettings,width:int)->t
 
 def _settings(model:BionicModel,settings:BionicSettings,draft:BionicSettings,saved:BionicSettings,state:SensorRelayState|None,width:int)->tuple[list[str],list[str|None]]:
     sensor_lines,sensor_keys=_sensor_setting_rows(model,draft,width)
-    generic_lines,generic_keys=setting_rows(settings,draft,saved,width)
+    generic_lines,generic_keys=setting_rows(model,settings,draft,saved,width)
     mapping=parse_sensor_relay_map(draft.sensor_relay_map)
     last=(state.last_success_at[:19].replace("T"," ")) if state and state.last_success_at else "нет"
     module=[
@@ -422,7 +457,7 @@ def _water(model:BionicModel,width:int)->list[str]:
         lines.append(_row([(tank.id,4),(TANK_NAMES[tank.id],10),(f"{tank.volume_l:.1f}/{tank.capacity_l:.1f}",15),(f"{tank.ec_ms_cm:.3f}",10),(f"{tank.ph:.2f}",5),(f"{tank.temperature_c:.1f}",9),(f"{tank.nutrients_consumed:.3f}",10)],width))
     lines += ["","ТЕКУЩИЕ ПОТОКИ"]
     lines += [ellipsize(f"{PUMP_NAMES[p.id]}: {p.actual_flow_lpm:.2f} л/мин",width) for p in model.pumps.values()]
-    lines += [f"Входящая вода осмоса: EC {model.osmosis_profile['ec']:.2f}, pH {model.osmosis_profile['ph']:.2f}, {model.osmosis_profile['temperature']:.1f} °C",f"Потери полива: {model.total_irrigation_loss_l:.2f} л | протечки: {model.total_leak_l:.2f} л",f"PonicPilot дозировал в БП: {sum(model.ponics.dosing_totals.values()):.1f} мл"]
+    lines += [f"Входящая вода осмоса: EC {model.osmosis_profile['ec']:.2f}, pH {model.osmosis_profile['ph']:.2f}, {model.osmosis_profile['temperature']:.1f} °C",f"Водопровод (справочно, подтверждённого пути нет): EC {model.tap_profile['ec']:.2f}, pH {model.tap_profile['ph']:.2f}, {model.tap_profile['temperature']:.1f} °C",f"Потери полива: {model.total_irrigation_loss_l:.2f} л | протечки: {model.total_leak_l:.2f} л",f"PonicPilot дозировал в БП: {sum(model.ponics.dosing_totals.values()):.1f} мл"]
     return [ellipsize(line,width) for line in lines]
 
 def _light(model:BionicModel,width:int)->list[str]:
@@ -478,8 +513,10 @@ def _light_settings(settings:BionicSettings,draft:BionicSettings,saved:BionicSet
                 keys.append(None)
     return [ellipsize(line,width) for line in lines],keys
 
-def _equipment(model:BionicModel,settings:BionicSettings,width:int)->list[str]:
+def _equipment(model:BionicModel,settings:BionicSettings,draft:BionicSettings,saved:BionicSettings,width:int)->list[str]:
     profiles=parse_equipment_profile(settings.equipment_profile)
+    draft_profiles=parse_equipment_profile(draft.equipment_profile)
+    saved_profiles=parse_equipment_profile(saved.equipment_profile)
     lines=[
         "АВТОМАТИЧЕСКОЕ РАЗВИТИЕ ПОВРЕЖДЕНИЙ",
         "Внутренняя диагностика имитатора: отдельные аварийные сигналы контроллеру не передаются.",
@@ -517,10 +554,26 @@ def _equipment(model:BionicModel,settings:BionicSettings,width:int)->list[str]:
             f"деградация {profile.degrade_s:g}; отказ {profile.failure_s:g}; тип отказа {profile.failure_type}",
             width,
         ))
+        lifetime=lifetime_for_new_equipment(profile)
+        wear_time="∞" if lifetime.wear_s == float("inf") else f"{lifetime.wear_s:g} с"
+        failure_state=("A" if draft_profiles[equipment_id].failure_s==profile.failure_s else "-")+"/"+("S" if draft_profiles[equipment_id].failure_s==saved_profiles[equipment_id].failure_s else "-")
+        wear_state=("A" if draft_profiles[equipment_id].wear_rate_per_s==profile.wear_rate_per_s else "-")+"/"+("S" if draft_profiles[equipment_id].wear_rate_per_s==saved_profiles[equipment_id].wear_rate_per_s else "-")
+        lines.append(ellipsize(
+            f"  failure_s {profile.failure_s:g} с [{failure_state}] — непрерывный сухой ход; "
+            f"wear_rate_per_s {profile.wear_rate_per_s:.9g} 1/с [{wear_state}] — необратимый износ",
+            width,
+        ))
+        lines.append(ellipsize(
+            f"  ДЕМО: новый насос — по износу {wear_time}, эффективно {lifetime.effective_s:g} с "
+            f"({lifetime.limiting_mechanism}); текущий износ {health.damage*100:.1f}%; "
+            f"осталось при непрерывном сухом ходе {remaining_dry_run_s(health):g} с",
+            width,
+        ))
     lines += [
         "",
-        "Настройка черновика: equipment set <id> dry_run_warning_s|overheat_s|degrade_s|failure_s <значение>",
+        "Настройка: equipment set <id> failure_s <с> [--sync-wear]; equipment sync-wear <id>.",
         "Дополнительно: heating_rate_per_s, cooling_rate_per_s, wear_rate_per_s, wear_flow_reduction, initial_state, failure_type.",
+        "failure_s не является STOP платы: имитатор меняет физику насоса, но сохраняет команду контроллера.",
         "Применение/сохранение: settings apply / settings save. initial_state применяется при следующем сбросе модели.",
     ]
     return [ellipsize(line,width) for line in lines]
@@ -557,7 +610,7 @@ def render_page(name:str,model:BionicModel,journal:EventJournal,settings:BionicS
     elif name=="log": lines=_log(journal,log_filter,width)
     elif name=="tanks": lines=[f"{t.id} | {TANK_NAMES[t.id]} | {t.volume_l:.1f}/{t.capacity_l:.1f} л | MIN {model.sensors[f'{t.id}-min'].threshold_l:g} л | MAX {model.sensors[f'{t.id}-max'].threshold_l:g} л | перелив {t.overflow_l:.1f} л" for t in model.tanks.values()]
     elif name=="pumps": lines=[f"{p.id} | {PUMP_NAMES[p.id]} | {'RUN' if model.relay(p.relay) else 'STOP'} | {p.actual_flow_lpm:.1f} л/мин" for p in model.pumps.values()]
-    elif name=="equipment": lines=_equipment(model,settings,width)
+    elif name=="equipment": lines=_equipment(model,settings,draft,saved,width)
     elif name=="pressure": lines=_pressure(model,width)
     elif name=="irrigation": lines=[f"{t.id} | Стеллаж {t.rack}, ярус | do-{t.relay} | {t.actual_flow_lpm:.1f} л/мин" for t in model.tiers.values()]
     elif name=="light": lines=_light(model,width)

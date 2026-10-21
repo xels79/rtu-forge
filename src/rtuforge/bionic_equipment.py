@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from math import inf
 
 
 EQUIPMENT_IDS = ("bo-to-bp", "bso1-to-bp", "bso2-to-bp", "hp1", "hp2")
@@ -23,6 +24,57 @@ class EquipmentProfile:
     wear_flow_reduction: float
     initial_state: str
     failure_type: str
+
+
+@dataclass(frozen=True)
+class EquipmentLifetime:
+    """Explain the two independent dry-run failure mechanisms."""
+
+    threshold_s: float
+    wear_s: float
+    effective_s: float
+    limiting_mechanism: str
+
+
+def lifetime_for_new_equipment(profile: EquipmentProfile) -> EquipmentLifetime:
+    """Return dry-run lifetime for a new, undamaged pump.
+
+    Wear starts only after ``dry_run_warning_s`` in :meth:`EquipmentHealth.update`.
+    The direct ``failure_s`` timer and accumulated wear are independent.
+    """
+    wear_s = (
+        profile.dry_run_warning_s + 1.0 / profile.wear_rate_per_s
+        if profile.wear_rate_per_s > 0 else inf
+    )
+    effective = min(profile.failure_s, wear_s)
+    if profile.failure_s < wear_s:
+        mechanism = "failure_s"
+    elif wear_s < profile.failure_s:
+        mechanism = "wear_rate_per_s"
+    else:
+        mechanism = "одновременно"
+    return EquipmentLifetime(profile.failure_s, wear_s, effective, mechanism)
+
+
+def remaining_dry_run_s(health: EquipmentHealth) -> float:
+    """Return time to failure if the current dry run continues."""
+    if health.failed or health.damage >= 1.0:
+        return 0.0
+    direct = max(0.0, health.profile.failure_s - health.dry_run_s)
+    if health.profile.wear_rate_per_s <= 0:
+        wear = inf
+    else:
+        warning_wait = max(0.0, health.profile.dry_run_warning_s - health.dry_run_s)
+        wear = warning_wait + max(0.0, 1.0 - health.damage) / health.profile.wear_rate_per_s
+    return min(direct, wear)
+
+
+def synchronize_wear_rate(profile: EquipmentProfile) -> EquipmentProfile:
+    """Make wear reach 100% at ``failure_s`` for new equipment."""
+    accumulation_s = profile.failure_s - profile.dry_run_warning_s
+    if accumulation_s <= 0:
+        raise ValueError("failure_s должен быть больше dry_run_warning_s для синхронизации износа")
+    return replace(profile, wear_rate_per_s=1.0 / accumulation_s)
 
 
 def _profile(failure_type: str, *, hp: bool = False) -> EquipmentProfile:

@@ -50,8 +50,8 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
     elif len(completed) == 2 and completed[0] == "pump" and completed[1] in PUMPS:
         candidates = ["flow"]
     elif completed == ["equipment"]:
-        candidates = ["list", "status", "repair", "replace", "set"]
-    elif len(completed) == 2 and completed[0] == "equipment" and completed[1] in {"status", "repair", "replace", "set"}:
+        candidates = ["list", "status", "repair", "replace", "set", "sync-wear"]
+    elif len(completed) == 2 and completed[0] == "equipment" and completed[1] in {"status", "repair", "replace", "set", "sync-wear"}:
         candidates = list(EQUIPMENT_IDS)
     elif len(completed) == 3 and completed[:2] == ["equipment", "set"]:
         candidates = EQUIPMENT_FIELDS
@@ -61,6 +61,8 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
         candidates = ["healthy", "dry_running", "overheated", "degraded", "failed"]
     elif len(completed) == 4 and completed[:2] == ["equipment", "set"] and completed[3] == "failure_type":
         candidates = ["jammed", "impeller_damage", "motor_failure", "loss_of_prime"]
+    elif len(completed) == 5 and completed[:2] == ["equipment", "set"] and completed[3] == "failure_s":
+        candidates = ["--sync-wear"]
     elif completed == ["sensor"]:
         candidates = ["list", *SENSORS]
     elif len(completed) == 2 and completed[0] == "sensor" and completed[1] in SENSORS:
@@ -104,8 +106,12 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
     elif completed == ["alarm", "reset"]:
         candidates = ["all"]
     elif completed == ["sim"]:
-        candidates = ["start", "pause", "resume", "speed", "reset"]
+        candidates = ["start", "pause", "resume", "speed", "reset", "state"]
     elif completed == ["sim", "reset"]:
+        candidates = ["--confirm"]
+    elif completed == ["sim", "state"]:
+        candidates = ["save", "load", "list"]
+    elif len(completed) == 4 and completed[:3] == ["sim", "state", "load"]:
         candidates = ["--confirm"]
     elif completed == ["settings"]:
         candidates = ["list", "set", "apply", "save"]

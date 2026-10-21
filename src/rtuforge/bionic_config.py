@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import configparser
+import io
+import os
+import shutil
+import tempfile
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
@@ -141,8 +145,6 @@ class BionicSettings:
     hp1_overload_protection_enabled: bool = True
     hp1_overload_threshold_multiplier: float = 1.5
     hp1_protection_behavior: str = "latched_reset"
-    hp1_mechanical_failure: str = "none"
-    hp1_mechanical_damage: float = 0.0
     hp2_ramp_up_s: float = 5.0
     hp2_ramp_down_s: float = 5.0
     hp2_pb00: int = 290
@@ -162,8 +164,6 @@ class BionicSettings:
     hp2_overload_protection_enabled: bool = True
     hp2_overload_threshold_multiplier: float = 1.5
     hp2_protection_behavior: str = "latched_reset"
-    hp2_mechanical_failure: str = "none"
-    hp2_mechanical_damage: float = 0.0
     simulation_speed: float = 1.0
 
 
@@ -324,7 +324,6 @@ def validate_settings(settings: BionicSettings, *, validate_lights: bool = True)
         raise ValueError("Сумма поглощения и осаждения не должна превышать 1")
     if min(settings.hp1_ramp_up_s, settings.hp1_ramp_down_s, settings.hp2_ramp_up_s, settings.hp2_ramp_down_s) < 0:
         raise ValueError("Времена разгона и торможения частотников не могут быть отрицательными")
-    failures = {"none", "jammed", "impeller_damage", "motor_failure", "dry_run_wear", "loss_of_prime"}
     for prefix in ("hp1", "hp2"):
         drive_config = {
             100: getattr(settings, f"{prefix}_pb00"),
@@ -344,11 +343,8 @@ def validate_settings(settings: BionicSettings, *, validate_lights: bool = True)
         }
         for address, raw in drive_config.items():
             validate_idd_parameter(address, raw, drive_config)
-        if getattr(settings, f"{prefix}_mechanical_failure") not in failures:
-            raise ValueError("Тип отказа насоса: none, jammed, impeller_damage, motor_failure, dry_run_wear или loss_of_prime")
         if getattr(settings, f"{prefix}_protection_behavior") != "latched_reset":
             raise ValueError("Для IDD подтверждено только поведение защиты latched_reset")
-        damage = getattr(settings, f"{prefix}_mechanical_damage")
         positive = (
             getattr(settings, f"{prefix}_nominal_current_a"),
             getattr(settings, f"{prefix}_jam_current_multiplier"),
@@ -359,8 +355,8 @@ def validate_settings(settings: BionicSettings, *, validate_lights: bool = True)
             getattr(settings, f"{prefix}_pump_load_coefficient"),
             getattr(settings, f"{prefix}_overload_trip_s"),
         )
-        if not 0 <= damage <= 1 or any(value <= 0 for value in positive) or any(value < 0 for value in nonnegative_drive):
-            raise ValueError("Параметры тока, защиты и повреждения частотников вне допустимого диапазона")
+        if any(value <= 0 for value in positive) or any(value < 0 for value in nonnegative_drive):
+            raise ValueError("Параметры тока и защиты частотников вне допустимого диапазона")
         if getattr(settings, f"{prefix}_no_load_current_a") > getattr(settings, f"{prefix}_nominal_current_a"):
             raise ValueError("Ток холостого хода не может превышать номинальный ток")
 
@@ -394,26 +390,65 @@ def load_settings(path: Path) -> BionicSettings:
         validate_settings(result)
         return result
     parser = configparser.ConfigParser()
-    parser.read(path, encoding="utf-8")
+    try:
+        parser.read(path, encoding="utf-8")
+    except (configparser.Error, OSError) as exc:
+        raise ValueError(f"Не удалось прочитать конфигурацию {path}: {exc}") from None
     result = BionicSettings()
     updates: dict[str, object] = {}
     for name in OPTION_SPECS:
         for section in parser.sections():
             if parser.has_option(section, name):
-                updates[name] = _parse_value(getattr(result, name), parser.get(section, name))
+                try:
+                    updates[name] = _parse_value(getattr(result, name), parser.get(section, name))
+                except ValueError as exc:
+                    raise ValueError(f"Некорректный параметр [{section}] {name}: {exc}") from None
                 break
     result = replace(result, **updates)
-    validate_settings(result)
+    try:
+        validate_settings(result)
+    except ValueError as exc:
+        raise ValueError(f"Некорректная конфигурация {path}: {exc}") from None
     return result
+
+
+CONFIG_VERSION = 2
 
 
 def save_settings(path: Path, settings: BionicSettings) -> None:
     validate_settings(settings)
     parser = configparser.ConfigParser()
+    parser["meta"] = {"version": str(CONFIG_VERSION)}
     for name, (section, _kind) in OPTION_SPECS.items():
         if section not in parser:
             parser[section] = {}
         parser[section][name] = str(getattr(settings, name)).lower() if isinstance(getattr(settings, name), bool) else str(getattr(settings, name))
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8", newline="") as stream:
-        parser.write(stream)
+    if path.exists():
+        previous = configparser.ConfigParser()
+        try:
+            previous.read(path, encoding="utf-8")
+            old_version = previous.getint("meta", "version", fallback=1)
+        except (configparser.Error, OSError, ValueError):
+            old_version = 1
+        if old_version != CONFIG_VERSION:
+            backup = path.with_name(f"{path.name}.v{old_version}.bak")
+            if not backup.exists():
+                shutil.copy2(path, backup)
+    buffer = io.StringIO()
+    parser.write(buffer)
+    temp_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", newline="", delete=False,
+            dir=path.parent, prefix=f".{path.name}.", suffix=".tmp",
+        ) as stream:
+            temp_name = stream.name
+            stream.write(buffer.getvalue())
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, path)
+    except Exception:
+        if temp_name:
+            Path(temp_name).unlink(missing_ok=True)
+        raise

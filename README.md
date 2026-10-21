@@ -81,6 +81,9 @@ that tank only. Use
 `view <page>` or `F1`–`F6` to navigate, the mouse wheel or `PgUp`/`PgDn` to
 scroll, `Tab` for contextual completion, and `Up`/`Down` for persistent command
 history. See [BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md) for the complete key map.
+The step-by-step Russian installation, wiring, operation, test-scenario, command,
+and configuration reference is in
+[docs/BIONIC-IMMITATOR-USER-GUIDE.md](docs/BIONIC-IMMITATOR-USER-GUIDE.md).
 
 Lighting is configured independently per tier through `view light settings`.
 The mutable `light_profile` option stores the six `NONE`, `SINGLE`, or
@@ -114,9 +117,12 @@ actual operation, flow/pressure, damage, VFD fault, and repair requirement.
 These internal diagnostics add no controller inputs or private Modbus alarm
 registers; repair and replacement require an explicit `--confirm` command.
 The settings page groups parameters by subsystem and sorts each group by its
-Russian display name. It also exposes one estimated physical-failure time per
-pump (120 seconds for transfer pumps and 180 seconds for HP by default); these
-are explicitly labelled demonstration-model values rather than measurements.
+Russian display name. It exposes all five independent equipment profiles,
+including the direct dry-run threshold, cumulative wear rate, effective
+lifetime, current wear, and applied/saved state. `--sync-wear` aligns a new
+pump's wear lifetime with `failure_s` without repairing existing damage.
+Named `sim state` checkpoints persist physical test state separately from the
+INI and never restore controller-owned DO, AO, or RUN commands.
 
 It has its own configuration and event journal and does not modify
 `config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,

@@ -17,8 +17,8 @@ from .bionic_config import (
     validate_settings,
 )
 from .bionic_equipment import (
-    EQUIPMENT_IDS, EquipmentProfile, parse_equipment_profile,
-    serialize_equipment_profiles,
+    EQUIPMENT_IDS, EquipmentProfile, lifetime_for_new_equipment,
+    parse_equipment_profile, serialize_equipment_profiles, synchronize_wear_rate,
 )
 from .bionic_events import EventJournal
 from .bionic_lights import (
@@ -31,6 +31,7 @@ from .bionic_ponics import PONICS_OPTION_NAMES, PONICS_REGISTERS
 from .bionic_render import print_view
 from .bionic_sensor_bridge import SensorRelayBridge, SensorRelayState
 from .bionic_server import ModbusSlaveServer, SerialSlaveTransport
+from .bionic_state import list_states, load_state, save_state, state_path
 from .transport import SerialTransport
 
 
@@ -39,7 +40,8 @@ HELP = """Bionic Immitator — цифровая физическая устан�
 status | devices | ports | help
 tank list | tank <bo|bp|bso1|bso2> level <л|N%> | capacity <л> | fill-rate <л/мин>
 pump list | pump <bo-to-bp|bso1-to-bp|bso2-to-bp> flow <л/мин>
-equipment list | status <id> | repair|replace <id> --confirm | set <id> <параметр> <значение>
+equipment list | status <id> | repair|replace <id> --confirm | set <id> <параметр> <значение> [--sync-wear]
+equipment sync-wear <id>
 irrigation shelf <1|2> flow-per-tier <л/мин>
 pressure target <бар> | range <мин> <макс> | rise-time <с> | fall-time <с>
 pipe rupture-threshold <бар> | status | repair
@@ -47,7 +49,8 @@ sensor list | sensor <id> threshold <л> | force on|off | auto
 fault leak on|off | rate <л/мин> | fault pump hp1|hp2 <тип>
 fault blockage on|off | severity <0..100> | fault list | fault clear all
 alarm list | alarm reset all
-sim start | pause | resume | speed <1..100> | reset --confirm
+sim start | pause | resume | speed <0.1..100> | reset --confirm
+sim state save <имя> | load <имя> --confirm | list
 view main|settings|log|rs485|tanks|pumps|equipment|pressure|irrigation|light|sensors|water
 view light settings | light set <zone> <поле> ... | light apply|save|restore-defaults
 view ponics | view ponics settings | view ponics registers
@@ -135,6 +138,12 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
         "temperature": settings.osmosis_temperature_c,
         "buffer": settings.osmosis_buffer_per_l,
     }
+    model.tap_profile = {
+        "ec": settings.tap_ec_ms_cm,
+        "ph": settings.tap_ph,
+        "temperature": settings.tap_temperature_c,
+        "buffer": settings.tap_buffer_per_l,
+    }
     model.nutrient_absorption_fraction = settings.nutrient_absorption_fraction
     model.deposition_fraction = settings.deposition_fraction
     model.ph_drift_per_pass = settings.ph_drift_per_pass
@@ -208,11 +217,6 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
         drive.overload_protection_enabled = getattr(settings, f"{prefix}_overload_protection_enabled")
         drive.overload_threshold_multiplier = getattr(settings, f"{prefix}_overload_threshold_multiplier")
         drive.protection_behavior = getattr(settings, f"{prefix}_protection_behavior")
-        configured_failure = getattr(settings, f"{prefix}_mechanical_failure")
-        configured_damage = getattr(settings, f"{prefix}_mechanical_damage")
-        if configured_failure != "none" or configured_damage > 0:
-            drive.mechanical_failure = configured_failure
-            drive.mechanical_damage = configured_damage
     model.speed = settings.simulation_speed
     model.configure_lights(parse_light_profile(settings.light_profile))
 
@@ -244,6 +248,7 @@ def _bind_ponics_draft(ctx: BionicContext) -> None:
         else:
             value = raw
         ctx.draft = replace(ctx.draft, **{name: value})
+        ctx.settings = replace(ctx.settings, **{name: value})
 
     ctx.model.ponics.setting_changed = update
 
@@ -271,6 +276,7 @@ def _bind_drive_draft(ctx: BionicContext) -> None:
             else:
                 name, value = f"{prefix}_{names[address]}", raw
             ctx.draft = replace(ctx.draft, **{name: value})
+            ctx.settings = replace(ctx.settings, **{name: value})
 
         drive.configuration_changed = update
 
@@ -284,6 +290,12 @@ def _number(value: str, label: str, minimum: float = 0.0, maximum: float | None 
         suffix = f"..{maximum:g}" if maximum is not None else " или больше"
         raise ValueError(f"{label}: допустимо {minimum:g}{suffix}")
     return result
+
+
+def _record_applied_option(ctx: BionicContext, name: str, raw_value: str) -> None:
+    """Keep an immediately applied convenience command visible and saveable."""
+    ctx.draft = changed(ctx.draft, name, raw_value)
+    ctx.settings = changed(ctx.settings, name, raw_value)
 
 
 def _integer(value: str, label: str, minimum: int, maximum: int) -> int:
@@ -512,11 +524,12 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             if capacity < maximum:
                 raise ValueError(f"Ёмкость не может быть меньше порога MAX {maximum:g} л")
             option = f"{tank_id}_capacity_l"
-            ctx.draft = changed(ctx.draft, option, raw)
+            _record_applied_option(ctx, option, raw)
             model.tanks[tank_id].capacity_l = capacity
             ctx.event("ОПЕРАТОР", tank_id, f"ёмкость {capacity:g} л; абсолютные пороги датчиков не изменены")
         elif action == "fill-rate" and tank_id == "bo":
             model.fill_flow_lpm = _number(raw, "Расход наполнения")
+            _record_applied_option(ctx, "fill_flow_lpm", raw)
             ctx.event("ОПЕРАТОР", tank_id, f"расход наполнения {model.fill_flow_lpm:g} л/мин")
         else:
             raise ValueError("tank: допустимы level, capacity; fill-rate доступен для bo")
@@ -530,6 +543,12 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             return None
         if len(args) == 3 and args[0] in model.pumps and args[1] == "flow":
             model.pumps[args[0]].flow_lpm = _number(args[2], "Расход насоса")
+            option = {
+                "bo-to-bp": "bo_to_bp_flow_lpm",
+                "bso1-to-bp": "bso1_to_bp_flow_lpm",
+                "bso2-to-bp": "bso2_to_bp_flow_lpm",
+            }[args[0]]
+            _record_applied_option(ctx, option, args[2])
             ctx.event("ОПЕРАТОР", args[0], f"расход {model.pumps[args[0]].flow_lpm:g} л/мин")
             return None
         if len(args) >= 2 and args[0] in model.drives and args[1] == "repair":
@@ -557,7 +576,23 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
                 f"{args[1]}: {'заменено' if args[0] == 'replace' else 'отремонтировано'}; команда платы не изменена"
             )
             return None
-        if len(args) == 4 and args[0] == "set" and args[1] in EQUIPMENT_IDS:
+        if len(args) == 2 and args[0] == "sync-wear" and args[1] in EQUIPMENT_IDS:
+            profiles = parse_equipment_profile(ctx.draft.equipment_profile)
+            profiles[args[1]] = synchronize_wear_rate(profiles[args[1]])
+            ctx.draft = replace(
+                ctx.draft, equipment_profile=serialize_equipment_profiles(profiles),
+            )
+            lifetime = lifetime_for_new_equipment(profiles[args[1]])
+            ctx.notice = (
+                f"Черновик {args[1]}: wear_rate_per_s={profiles[args[1]].wear_rate_per_s:.9g}; "
+                f"новый насос откажет через {lifetime.effective_s:g} с; текущий износ не сброшен"
+            )
+            ctx.event("ОПЕРАТОР", "equipment-draft", ctx.notice)
+            return None
+        if len(args) in {4, 5} and args[0] == "set" and args[1] in EQUIPMENT_IDS:
+            sync_wear = len(args) == 5
+            if sync_wear and (args[4] != "--sync-wear" or args[2] != "failure_s"):
+                raise ValueError("--sync-wear допустим только при изменении failure_s")
             profiles = parse_equipment_profile(ctx.draft.equipment_profile)
             profile = profiles[args[1]]
             field_name = args[2]
@@ -569,15 +604,25 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
                 value = args[3].casefold()
             else:
                 value = _number(args[3], field_name)
-            profiles[args[1]] = replace(profile, **{field_name: value})
+            updated_profile = replace(profile, **{field_name: value})
+            if sync_wear:
+                updated_profile = synchronize_wear_rate(updated_profile)
+            profiles[args[1]] = updated_profile
             ctx.draft = replace(
                 ctx.draft,
                 equipment_profile=serialize_equipment_profiles(profiles),
             )
-            ctx.notice = f"Черновик оборудования: {args[1]} {field_name}={value}"
+            lifetime = lifetime_for_new_equipment(updated_profile)
+            wear_text = "∞" if lifetime.wear_s == float("inf") else f"{lifetime.wear_s:g} с"
+            ctx.notice = (
+                f"Черновик {args[1]}: {field_name}={value}; прямой порог "
+                f"{lifetime.threshold_s:g} с, накопительный износ {wear_text}, "
+                f"эффективно {lifetime.effective_s:g} с ({lifetime.limiting_mechanism})"
+                + ("; wear_rate синхронизирован, текущий износ не сброшен" if sync_wear else "")
+            )
             ctx.event("ОПЕРАТОР", "equipment-draft", ctx.notice)
             return None
-        raise ValueError("equipment list | status <id> | repair|replace <id> --confirm | set <id> <параметр> <значение>")
+        raise ValueError("equipment list | status <id> | repair|replace <id> --confirm | set <id> <параметр> <значение> [--sync-wear] | sync-wear <id>")
     if command == "irrigation":
         if len(args) == 4 and args[0] == "shelf" and args[2] == "flow-per-tier":
             rack = int(args[1])
@@ -587,6 +632,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             for tier in model.tiers.values():
                 if tier.rack == rack:
                     tier.flow_lpm = flow
+            _record_applied_option(ctx, f"rack{rack}_tier_flow_lpm", args[3])
             ctx.event("ОПЕРАТОР", f"rack-{rack}", f"расход яруса {flow:g} л/мин")
             return None
         raise ValueError("irrigation shelf <1|2> flow-per-tier <л/мин>")
@@ -599,10 +645,13 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             if low >= high:
                 raise ValueError("Минимальное давление должно быть меньше максимального")
             model.pressure_max_bar = high
+            _record_applied_option(ctx, "pressure_max_bar", args[2])
             ctx.event("ОПЕРАТОР", "pressure", f"диапазон {low:g}..{high:g} бар")
         elif len(args) == 2 and args[0] in {"rise-time", "fall-time"}:
             value = _number(args[1], "Время")
-            setattr(model, "pressure_rise_s" if args[0] == "rise-time" else "pressure_fall_s", value)
+            option = "pressure_rise_s" if args[0] == "rise-time" else "pressure_fall_s"
+            setattr(model, option, value)
+            _record_applied_option(ctx, option, args[1])
         else:
             raise ValueError("pressure: используйте target, range, rise-time или fall-time")
         return None
@@ -615,6 +664,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             model.repair_pipe()
         elif len(args) == 2 and args[0] == "rupture-threshold":
             model.rupture_threshold_bar = _number(args[1], "Порог разрушения", 1)
+            _record_applied_option(ctx, "rupture_threshold_bar", args[1])
             ctx.event("ОПЕРАТОР", "pipe", f"порог {model.rupture_threshold_bar:g} бар")
         else:
             raise ValueError("pipe: используйте status, repair или rupture-threshold <бар>")
@@ -639,6 +689,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             updated = replace(ctx.draft, **{option: threshold})
             validate_settings(updated, validate_lights=False)
             ctx.draft = updated
+            ctx.settings = replace(ctx.settings, **{option: threshold})
             sensor.threshold_l = threshold
             model.refresh_sensor(sensor_id)
             ctx.event("ОПЕРАТОР", sensor_id, f"порог {threshold:g} л; добавлен в черновик настроек")
@@ -667,11 +718,13 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             ctx.event("ОПЕРАТОР", "leak", args[1])
         elif len(args) == 3 and args[:2] == ["leak", "rate"]:
             model.leak_rate_lpm = _number(args[2], "Интенсивность протечки")
+            _record_applied_option(ctx, "leak_rate_lpm", args[2])
         elif len(args) == 2 and args[0] == "blockage":
             model.blockage_enabled = _on_off(args[1])
             ctx.event("ОПЕРАТОР", "blockage", args[1])
         elif len(args) == 3 and args[:2] == ["blockage", "severity"]:
             model.blockage_severity = _number(args[2], "Степень засора", 0, 100)
+            _record_applied_option(ctx, "blockage_severity", args[2])
         elif len(args) == 3 and args[0] == "pump" and args[1] in model.drives:
             failures = {"none", "jammed", "impeller_damage", "motor_failure", "dry_run_wear", "loss_of_prime"}
             if args[2] not in failures:
@@ -701,6 +754,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             model.paused = False
         elif len(args) == 2 and args[0] == "speed":
             model.speed = _number(args[1], "Скорость", 0.1, 100)
+            _record_applied_option(ctx, "simulation_speed", args[1])
         elif args == ["reset", "--confirm"]:
             ctx.model = BionicModel(ctx.event)
             apply_model_settings(ctx.settings, ctx.model, initial=True)
@@ -708,10 +762,40 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             _bind_drive_draft(ctx)
             ctx.event("ОПЕРАТОР", "simulation", "виртуальное состояние сброшено; физические выходы не изменялись")
             return "reconnect"
+        elif len(args) == 3 and args[:2] == ["state", "save"]:
+            path = state_path(ctx.home / "simulation-states", args[2])
+            save_state(path, model)
+            ctx.notice = f"Состояние сохранено: {args[2]}"
+            ctx.event("ОПЕРАТОР", "simulation-state", ctx.notice)
+            if not ctx.screen_mode:
+                ctx.console.print(ctx.notice)
+            return None
+        elif args == ["state", "list"]:
+            names = list_states(ctx.home / "simulation-states")
+            ctx.notice = "Состояния: " + (", ".join(names) if names else "нет")
+            if not ctx.screen_mode:
+                ctx.console.print(ctx.notice)
+            return None
+        elif len(args) == 4 and args[:2] == ["state", "load"] and args[3] == "--confirm":
+            controller_active = any(model.relays) or any(
+                drive.run_register for drive in model.drives.values()
+            )
+            load_state(state_path(ctx.home / "simulation-states", args[2]), model)
+            suffix = (
+                "; ВНИМАНИЕ: активные команды платы сохранены и могут сразу воздействовать на восстановленную модель"
+                if controller_active else "; команды платы не восстанавливались и не изменялись"
+            )
+            ctx.notice = f"Состояние загружено: {args[2]}{suffix}"
+            ctx.event("ОПЕРАТОР", "simulation-state", ctx.notice)
+            if not ctx.screen_mode:
+                ctx.console.print(ctx.notice)
+            return None
+        elif len(args) >= 3 and args[:2] == ["state", "load"]:
+            raise ValueError("sim state load требует подтверждения: sim state load <имя> --confirm")
         elif args and args[0] == "reset":
             raise ValueError("sim reset требует явного подтверждения: sim reset --confirm")
         else:
-            raise ValueError("sim start|pause|resume|speed <1..100>|reset --confirm")
+            raise ValueError("sim start|pause|resume|speed <0.1..100>|reset --confirm|state save|load|list")
         ctx.event("ОПЕРАТОР", "simulation", " ".join(args))
         return None
     if command == "log":
