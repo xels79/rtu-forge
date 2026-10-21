@@ -236,10 +236,10 @@ def test_status_dry_running_motor_stays_green_without_flow(tmp_path):
     pump.health.dry_running = True
     rendered = page(ctx, "status", 80)
     block = _pump_block(rendered, "БО→БП")
-    command_line, flow_line, dry_line = block[:3]
+    command_line, state_line = block[:2]
     assert ("running", "РАБОТАЕТ") in command_line
-    assert ("warning", "НЕТ") in flow_line
-    assert ("fault", "ДА") in dry_line
+    assert ("warning", "НЕТ") in state_line
+    assert ("fault", "ДА") in state_line
 
 
 @pytest.mark.parametrize(
@@ -257,7 +257,7 @@ def test_status_nonblocking_damage_does_not_fake_motor_stop(tmp_path, failure, l
     rendered = page(ctx, "status", 80)
     block = _pump_block(rendered, "БО→БП")
     assert ("running", "РАБОТАЕТ") in block[0]
-    assert ("fault", label.removeprefix("ОТКАЗ ")) in block[3]
+    assert any(("fault", label.removeprefix("ОТКАЗ ")) in line for line in block)
 
 
 def test_status_jammed_transfer_motor_is_stopped(tmp_path):
@@ -269,7 +269,10 @@ def test_status_jammed_transfer_motor_is_stopped(tmp_path):
     command_line = _pump_block(rendered, "БСО1→БП")[0]
     assert ("output_on", "ВКЛ") in command_line
     assert ("inactive", "СТОП") in command_line
-    assert ("fault", "ЗАКЛИНИВАНИЕ") in _pump_block(rendered, "БСО1→БП")[3]
+    assert any(
+        ("fault", "ЗАКЛИНИВАНИЕ") in line
+        for line in _pump_block(rendered, "БСО1→БП")
+    )
 
 
 def test_status_vfd_trip_keeps_board_run_but_stops_motor_and_flow(tmp_path):
@@ -375,11 +378,12 @@ def test_status_pump_fields_are_aligned_for_different_state_lengths(tmp_path, wi
     assert len({line[0].index("CMD") for line in before_blocks}) == 1
     assert len({line[0].index("МОТОР") for line in before_blocks}) == 1
     assert len({line[1].index("ПОДАЧА") for line in before_blocks}) == 1
-    assert len({line[2].index("СУХОЙ ХОД") for line in before_blocks}) == 1
-    assert len({line[3].index("ОТКАЗ") for line in before_blocks}) == 1
+    assert len({line[1].index("СУХОЙ ХОД") for line in before_blocks}) == 1
+    assert len({line[1].index("ОТКАЗ") for line in before_blocks}) == 1
+    assert all(line[0].index("CMD") == line[1].index("ПОДАЧА") for line in before_blocks)
     assert before_blocks[0][0].index("МОТОР") == after_block[0].index("МОТОР")
-    assert before_blocks[0][1].index("НЕТ") == after_block[1].index("ЕСТЬ")
-    assert before_blocks[0][2].index("НЕТ") == after_block[2].index("НЕТ")
+    assert before_blocks[0][1].index("СУХОЙ ХОД") == after_block[1].index("СУХОЙ ХОД")
+    assert before_blocks[0][1].index("ОТКАЗ") == after_block[1].index("ОТКАЗ")
 
 
 def test_status_relay_confirmation_mismatch_and_offline_are_visible(tmp_path):

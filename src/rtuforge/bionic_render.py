@@ -336,11 +336,7 @@ def _pump_status_lines(
         f"{name:<{name_width}} CMD ", command, command_padding,
         "  МОТОР ", motor, model_note,
     )
-    lines = [
-        first,
-        _styled(indent, f"{'ПОДАЧА':<12}", flow),
-        _styled(indent, f"{'СУХОЙ ХОД':<12}", dry),
-    ]
+    failure_cells: list[StyledLine] = []
     for style, failure in failure_parts:
         if failure.startswith("ОТКАЗ "):
             label, value = "ОТКАЗ", failure.removeprefix("ОТКАЗ ")
@@ -348,9 +344,35 @@ def _pump_status_lines(
             label, value = "АВАРИЯ", failure.removeprefix("АВАРИЯ ")
         else:
             label, value = "ОТКАЗ", failure
-        lines.append(_styled(indent, f"{label:<12}", (style, value)))
-    if any(cell_len(_plain(line)) > width for line in lines):
-        return [_fit_fragments(line, width) for line in lines]
+        failure_cells.append(_styled(f"{label} ", (style, value)))
+
+    available = max(1, width - cell_len(indent))
+    if available >= 56:
+        column_widths = (23, 14, available - 37)
+    elif available >= 50:
+        column_widths = (21, 14, available - 35)
+    else:
+        column_widths = (16, 14, max(1, available - 30))
+    cells = [
+        _styled("ПОДАЧА ", flow),
+        _styled("СУХОЙ ХОД ", dry),
+        failure_cells[0],
+    ]
+    row_parts: list[tuple[str, object] | object] = [indent]
+    overflow: list[StyledLine] = []
+    for index, (cell, column_width) in enumerate(zip(cells, column_widths)):
+        if cell_len(_plain(cell)) <= column_width:
+            row_parts.extend(_fit_fragments(cell, column_width, pad=index < 2))
+        else:
+            label = (
+                ("ПОДАЧА", "СУХОЙ ХОД")[index]
+                if index < 2 else cell[0][1].strip()
+            )
+            marker = _styled(label + " ", (cell[-1][0], "↴"))
+            row_parts.extend(_fit_fragments(marker, column_width, pad=index < 2))
+            overflow.append(_styled(indent, *cell))
+    lines = [first, _styled(*row_parts), *overflow]
+    lines.extend(_styled(indent, *cell) for cell in failure_cells[1:])
     return lines
 
 
