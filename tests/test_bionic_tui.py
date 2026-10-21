@@ -6,6 +6,7 @@ from rtuforge.bionic_cli import execute_command, make_context
 from rtuforge.bionic_completion import completion_candidates
 from rtuforge.bionic_history import CommandHistory
 from rtuforge.bionic_render import VIEW_NAMES, render_page, visible_lines
+from rtuforge.bionic_sensor_bridge import SensorRelayState
 from rtuforge.bionic_tui import clamp_scroll
 
 
@@ -113,3 +114,70 @@ def test_screen_mode_commands_navigate_without_printing_dump(tmp_path):
     execute_command(ctx, "settings list")
     assert ctx.view == "settings"
     assert console.export_text() == ""
+
+
+def test_sensor_page_shows_russian_mapping_signal_and_confirmation(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.settings = ctx.draft = type(ctx.settings)(hardware_mode=True)
+    ctx.model.force_sensor("bo-min", True)
+    state = SensorRelayState(desired=1, confirmed=1, online=True, last_success_at="2026-10-21T12:00:00+00:00")
+    sensor_page = render_page(
+        "sensors", ctx.model, ctx.journal, ctx.settings, ctx.draft,
+        ctx.saved or ctx.settings, width=140, relay_state=state,
+    )
+    text = "\n".join(sensor_page.lines)
+    assert sensor_page.title == "ДАТЧИКИ УРОВНЯ"
+    assert "CH1" in text and "bo-min" in text and "Осмос: минимум" in text
+    assert "Сигнал" in text and "Треб." in text and "Подтв." in text
+    assert "ПОДКЛЮЧЕНО" in text and "FC01" in text
+
+
+def test_sensor_page_reports_no_link_instead_of_stale_relay_value(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.settings = ctx.draft = type(ctx.settings)(hardware_mode=True)
+    state = SensorRelayState(desired=1, confirmed=1, online=False, error="нет ответа")
+    text = "\n".join(render_page(
+        "sensors", ctx.model, ctx.journal, ctx.settings, ctx.draft,
+        ctx.saved or ctx.settings, width=140, relay_state=state,
+    ).lines)
+    assert "НЕТ СВЯЗИ" in text
+    bo_row = next(line for line in text.splitlines() if "bo-min" in line)
+    assert "НЕТ СВЯЗИ" in bo_row
+
+
+def test_settings_page_contains_sensor_installation_section(tmp_path):
+    ctx, _ = context(tmp_path)
+    settings_page = page(ctx, "settings", 160)
+    text = "\n".join(settings_page.lines)
+    assert "ДАТЧИКИ УРОВНЯ" in text
+    assert "МОДУЛЬ РЕЛЕ ДАТЧИКОВ" in text
+    assert "контакт: NO" in text
+    assert "sensor:bo-min" in settings_page.row_keys
+
+
+def test_ponics_pages_are_separate_and_keep_fixed_bp_demo_banner(tmp_path):
+    ctx, _ = context(tmp_path)
+    pages = [page(ctx, name, 180) for name in ("ponics", "ponics-settings", "ponics-registers")]
+    for rendered in pages:
+        text = "\n".join(rendered.lines)
+        assert "Бак: БП (Бульон)" in rendered.title
+        assert "ДЕМО: показания рассчитаны имитатором" in rendered.title
+        assert "Бак: БП (Бульон)" in text
+        assert "ДЕМО: показания рассчитаны имитатором" in text
+    assert "Запросы / ответы" in "\n".join(pages[0].lines)
+    assert "WEB | PDU" in "\n".join(pages[1].lines)
+    assert sum("0x" in line for line in pages[2].lines) >= 42
+
+
+def test_water_page_shows_independent_composition_for_all_tanks(tmp_path):
+    ctx, _ = context(tmp_path)
+    text = "\n".join(page(ctx, "water", 160).lines)
+    assert all(name in text for name in ("Осмос", "Бульон", "Дренаж 1", "Дренаж 2"))
+    assert "EC, мСм/см" in text and "Поглощено" in text
+
+
+def test_drive_pages_show_verified_read_only_configuration(tmp_path):
+    ctx, _ = context(tmp_path)
+    assert "do-19" in "\n".join(page(ctx, "drives", 160).lines)
+    hp1 = "\n".join(page(ctx, "drive-hp1", 160).lines)
+    assert "Pb01" in hp1 and "PH02" in hp1 and "Запись не реализована" in hp1

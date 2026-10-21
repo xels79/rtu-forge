@@ -20,14 +20,16 @@ class BionicSettings:
     sensor_relay_id: int = 1
     sensor_relay_channels: int = 8
     sensor_relay_active_low: bool = False
+    sensor_relay_contact: str = "NO"
     sensor_relay_map: str = "bo-min:1,bo-max:2,bp-min:3,bp-max:4,bso1-min:5,bso1-max:6,bso2-min:7,bso2-max:8"
-    sensor_relay_loss_behavior: str = "hold"
+    sensor_relay_loss_behavior: str = "unknown"
     hardware_mode: bool = False
     relay_address: int = 1
     ao1_address: int = 2
     ao2_address: int = 3
     ao3_address: int = 4
     ai_address: int = 6
+    ponics_address: int = 5
     hp1_address: int = 7
     hp2_address: int = 8
     model_interval_ms: int = 50
@@ -49,8 +51,8 @@ class BionicSettings:
     rack2_tier_flow_lpm: float = 2.0
     return_fraction: float = 0.8
     return_delay_s: float = 5.0
-    sensor_hysteresis_l: float = 5.0
-    sensor_delay_s: float = 0.5
+    sensor_hysteresis_l: float = 0.0
+    sensor_delay_s: float = 0.0
     boost_pressure_bar: float = 2.0
     boost_rise_s: float = 2.0
     boost_fall_s: float = 2.0
@@ -62,12 +64,75 @@ class BionicSettings:
     leak_rate_lpm: float = 12.0
     leak_pressure_factor: float = 0.25
     blockage_severity: float = 70.0
+    ponics_irrigation_on_s: int = 60
+    ponics_irrigation_pause_s: int = 300
+    ponics_mode: int = 0
+    ponics_ph_enabled: bool = False
+    ponics_ph_dosing_pause_s: int = 60
+    ponics_ph_low: float = 5.5
+    ponics_ph_high: float = 6.5
+    ponics_ec_enabled: bool = False
+    ponics_ec_protection_enabled: bool = False
+    ponics_ec_dosing_pause_s: int = 60
+    ponics_ec_program: int = 0
+    ponics_ec_target_ms_cm: float = 2.0
+    ponics_fertilizer_a_share: int = 33
+    ponics_fertilizer_b_share: int = 33
+    ponics_fertilizer_c_share: int = 34
+    ponics_thermostat_enabled: bool = False
+    ponics_temperature_low_c: int = 18
+    ponics_temperature_high_c: int = 24
+    tap_ec_ms_cm: float = 0.5
+    tap_ph: float = 7.2
+    tap_temperature_c: float = 18.0
+    tap_buffer_per_l: float = 0.8
+    osmosis_ec_ms_cm: float = 0.1
+    osmosis_ph: float = 6.8
+    osmosis_temperature_c: float = 20.0
+    osmosis_buffer_per_l: float = 0.3
+    broth_initial_ec_ms_cm: float = 2.0
+    broth_initial_ph: float = 6.0
+    broth_initial_temperature_c: float = 20.0
+    broth_buffer_per_l: float = 1.0
+    drain_initial_ec_ms_cm: float = 1.8
+    drain_initial_ph: float = 6.1
+    drain_initial_temperature_c: float = 20.0
+    drain_buffer_per_l: float = 0.8
+    nutrient_absorption_fraction: float = 0.05
+    deposition_fraction: float = 0.01
+    ph_drift_per_pass: float = 0.02
+    fertilizer_ec_per_ml_at_100l: float = 0.01
+    ph_reagent_delta_per_ml_at_100l: float = 0.02
+    hp1_ramp_up_s: float = 5.0
+    hp1_ramp_down_s: float = 5.0
+    hp1_pb01: int = 5
+    hp1_pb02: int = 2
+    hp1_ph00: int = 1
+    hp1_ph01: int = 3
+    hp2_ramp_up_s: float = 5.0
+    hp2_ramp_down_s: float = 5.0
+    hp2_pb01: int = 5
+    hp2_pb02: int = 2
+    hp2_ph00: int = 1
+    hp2_ph01: int = 3
     simulation_speed: float = 1.0
 
 
 def _section(name: str) -> str:
+    if name in {"hp1_address", "hp2_address"}:
+        return "devices"
+    if name.startswith("hp1_"):
+        return "drive_hp1"
+    if name.startswith("hp2_"):
+        return "drive_hp2"
     if any(token in name for token in ("port", "baudrate", "parity", "stopbits")):
         return "serial"
+    if name == "ponics_address":
+        return "ponics"
+    if name.startswith("ponics_"):
+        return "ponics"
+    if name.startswith(("tap_", "osmosis_", "broth_", "drain_", "nutrient_", "deposition_", "ph_drift_", "fertilizer_", "ph_reagent_")):
+        return "ponics_chemistry"
     if name.endswith("_address") or name.startswith("sensor_relay"):
         return "devices"
     if name.startswith(("bo_", "bp_", "bso1_", "bso2_", "fill_")):
@@ -89,10 +154,22 @@ OPTION_SPECS: dict[str, tuple[str, str]] = {
 }
 
 
+def parse_sensor_relay_map(value: str) -> dict[str, int]:
+    """Parse the configured sensor-to-physical-channel mapping."""
+    try:
+        return {
+            sensor.strip(): int(channel)
+            for item in value.split(",")
+            for sensor, channel in [item.split(":", 1)]
+        }
+    except (ValueError, TypeError):
+        raise ValueError("Карта реле должна иметь вид sensor:channel,sensor:channel") from None
+
+
 def validate_settings(settings: BionicSettings) -> None:
     addresses = {
         name: getattr(settings, name)
-        for name in ("relay_address", "ao1_address", "ao2_address", "ao3_address", "ai_address", "hp1_address", "hp2_address")
+        for name in ("relay_address", "ao1_address", "ao2_address", "ao3_address", "ponics_address", "ai_address", "hp1_address", "hp2_address")
     }
     if any(not 1 <= value <= 247 for value in addresses.values()):
         raise ValueError("Адреса виртуальных Modbus-устройств должны быть в диапазоне 1..247")
@@ -104,17 +181,12 @@ def validate_settings(settings: BionicSettings) -> None:
         raise ValueError("Физическое реле должно иметь 8 или 16 каналов")
     if settings.sensor_relay_loss_behavior not in {"hold", "unknown"}:
         raise ValueError("Поведение при потере связи должно быть hold или unknown")
-    try:
-        mapping = {
-            sensor.strip(): int(channel)
-            for item in settings.sensor_relay_map.split(",")
-            for sensor, channel in [item.split(":", 1)]
-        }
-    except (ValueError, TypeError):
-        raise ValueError("Карта реле должна иметь вид sensor:channel,sensor:channel") from None
+    if settings.sensor_relay_contact not in {"NO", "NC"}:
+        raise ValueError("Контакт физического реле должен быть NO или NC")
+    mapping = parse_sensor_relay_map(settings.sensor_relay_map)
     expected = {"bo-min", "bo-max", "bp-min", "bp-max", "bso1-min", "bso1-max", "bso2-min", "bso2-max"}
     if set(mapping) != expected or len(set(mapping.values())) != len(mapping) or any(not 1 <= value <= settings.sensor_relay_channels for value in mapping.values()):
-        raise ValueError("Карта реле должна один раз назначать все 8 датчиков допустимым каналам")
+        raise ValueError("Карта реле должна назначать все 8 датчиков уникальным допустимым каналам")
     if settings.controller_port.casefold() == settings.sensor_relay_port.casefold():
         raise ValueError("USB №1 и USB №2 не могут использовать один COM-порт")
     if settings.model_interval_ms <= 0 or settings.ui_interval_ms <= 0:
@@ -147,6 +219,40 @@ def validate_settings(settings: BionicSettings) -> None:
         raise ValueError("Степень засора должна быть в диапазоне 0..100")
     if not 0.1 <= settings.simulation_speed <= 100:
         raise ValueError("Скорость симуляции должна быть в диапазоне 0.1..100")
+    if settings.ponics_mode not in {0, 2, 3, 4, 5}:
+        raise ValueError("Режим PonicPilot должен быть 0, 2, 3, 4 или 5")
+    if not 0 <= settings.ponics_ph_low <= settings.ponics_ph_high <= 14:
+        raise ValueError("Диапазон pH PonicPilot должен быть упорядочен внутри 0..14")
+    if not 0 <= settings.ponics_ec_target_ms_cm <= 20:
+        raise ValueError("Целевая EC PonicPilot должна быть в диапазоне 0..20 мСм/см")
+    if settings.ponics_ec_program not in range(5):
+        raise ValueError("Программа EC PonicPilot должна быть в диапазоне 0..4")
+    shares = (
+        settings.ponics_fertilizer_a_share,
+        settings.ponics_fertilizer_b_share,
+        settings.ponics_fertilizer_c_share,
+    )
+    if any(not 0 <= value <= 99 for value in shares) or sum(shares) <= 0:
+        raise ValueError("Доли удобрений PonicPilot должны быть 0..99 и иметь ненулевую сумму")
+    if not 0 <= settings.ponics_temperature_low_c <= settings.ponics_temperature_high_c <= 100:
+        raise ValueError("Температурный диапазон PonicPilot должен быть упорядочен внутри 0..100 °C")
+    chemistry_nonnegative = (
+        settings.tap_ec_ms_cm, settings.tap_buffer_per_l, settings.osmosis_ec_ms_cm,
+        settings.osmosis_buffer_per_l, settings.broth_initial_ec_ms_cm,
+        settings.broth_buffer_per_l, settings.drain_initial_ec_ms_cm,
+        settings.drain_buffer_per_l, settings.ph_drift_per_pass,
+        settings.fertilizer_ec_per_ml_at_100l, settings.ph_reagent_delta_per_ml_at_100l,
+    )
+    if any(value < 0 for value in chemistry_nonnegative):
+        raise ValueError("Параметры демонстрационной химии не могут быть отрицательными")
+    if any(not 0 <= value <= 14 for value in (settings.tap_ph, settings.osmosis_ph, settings.broth_initial_ph, settings.drain_initial_ph)):
+        raise ValueError("Начальные значения pH должны быть в диапазоне 0..14")
+    if any(not 0 <= value <= 1 for value in (settings.nutrient_absorption_fraction, settings.deposition_fraction)):
+        raise ValueError("Доли поглощения и осаждения должны быть в диапазоне 0..1")
+    if settings.nutrient_absorption_fraction + settings.deposition_fraction > 1:
+        raise ValueError("Сумма поглощения и осаждения не должна превышать 1")
+    if min(settings.hp1_ramp_up_s, settings.hp1_ramp_down_s, settings.hp2_ramp_up_s, settings.hp2_ramp_down_s) < 0:
+        raise ValueError("Времена разгона и торможения частотников не могут быть отрицательными")
 
 
 def _parse_value(current: object, value: str) -> object:

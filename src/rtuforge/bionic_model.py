@@ -13,6 +13,8 @@ from enum import Enum
 from math import sqrt
 from typing import Callable
 
+from .bionic_ponics import PonicsPilot
+
 
 class AlarmState(str, Enum):
     ACTIVE = "ACTIVE"
@@ -30,6 +32,25 @@ class Alarm:
 
 
 @dataclass
+class SolutionParcel:
+    volume_l: float
+    solute_mass: float
+    acidity_units: float
+    buffer_units: float
+    heat_c_l: float
+
+    def scaled(self, fraction: float) -> SolutionParcel:
+        fraction = min(max(fraction, 0.0), 1.0)
+        return SolutionParcel(
+            self.volume_l * fraction,
+            self.solute_mass * fraction,
+            self.acidity_units * fraction,
+            self.buffer_units * fraction,
+            self.heat_c_l * fraction,
+        )
+
+
+@dataclass
 class Tank:
     id: str
     name: str
@@ -40,24 +61,84 @@ class Tank:
     outflow_lpm: float = 0.0
     total_loss_l: float = 0.0
     overflow_l: float = 0.0
+    solute_mass: float = 0.0
+    acidity_units: float = 0.0
+    buffer_units: float = 0.0
+    heat_c_l: float = 0.0
+    nutrients_consumed: float = 0.0
 
     @property
     def percent(self) -> float:
         return 100.0 * self.volume_l / self.capacity_l if self.capacity_l else 0.0
 
     def add(self, litres: float) -> float:
-        """Add water and return the overflow volume."""
-        accepted = min(max(litres, 0.0), self.capacity_l - self.volume_l)
+        """Add liquid with the tank's current composition."""
+        parcel = self.sample(max(litres, 0.0))
+        return self.add_solution(parcel)
+
+    def initialize_solution(
+        self, *, ec_ms_cm: float, ph: float, temperature_c: float,
+        buffer_per_l: float,
+    ) -> None:
+        self.solute_mass = max(0.0, ec_ms_cm) * self.volume_l
+        self.buffer_units = max(1e-9, buffer_per_l * self.volume_l)
+        self.acidity_units = (7.0 - ph) * self.buffer_units
+        self.heat_c_l = temperature_c * self.volume_l
+
+    @property
+    def ec_ms_cm(self) -> float:
+        return self.solute_mass / self.volume_l if self.volume_l > 1e-12 else 0.0
+
+    @property
+    def ph(self) -> float:
+        if self.buffer_units <= 1e-12:
+            return 7.0
+        return min(14.0, max(0.0, 7.0 - self.acidity_units / self.buffer_units))
+
+    @property
+    def temperature_c(self) -> float:
+        return self.heat_c_l / self.volume_l if self.volume_l > 1e-12 else 0.0
+
+    def sample(self, litres: float) -> SolutionParcel:
+        """Return a parcel with this concentration without changing the tank."""
+        if self.volume_l <= 1e-12 or litres <= 0:
+            return SolutionParcel(max(0.0, litres), 0.0, 0.0, 0.0, 0.0)
+        fraction = litres / self.volume_l
+        return SolutionParcel(
+            litres,
+            self.solute_mass * fraction,
+            self.acidity_units * fraction,
+            self.buffer_units * fraction,
+            self.heat_c_l * fraction,
+        )
+
+    def add_solution(self, parcel: SolutionParcel) -> float:
+        accepted = min(max(parcel.volume_l, 0.0), self.capacity_l - self.volume_l)
+        fraction = accepted / parcel.volume_l if parcel.volume_l > 1e-12 else 0.0
         self.volume_l += accepted
-        overflow = max(0.0, litres - accepted)
+        self.solute_mass += parcel.solute_mass * fraction
+        self.acidity_units += parcel.acidity_units * fraction
+        self.buffer_units += parcel.buffer_units * fraction
+        self.heat_c_l += parcel.heat_c_l * fraction
+        overflow = max(0.0, parcel.volume_l - accepted)
         self.overflow_l += overflow
         self.total_loss_l += overflow
         return overflow
 
     def take(self, litres: float) -> float:
+        return self.take_solution(litres).volume_l
+
+    def take_solution(self, litres: float) -> SolutionParcel:
         actual = min(max(litres, 0.0), self.volume_l)
+        parcel = self.sample(actual)
         self.volume_l -= actual
-        return actual
+        self.solute_mass -= parcel.solute_mass
+        self.acidity_units -= parcel.acidity_units
+        self.buffer_units -= parcel.buffer_units
+        self.heat_c_l -= parcel.heat_c_l
+        if self.volume_l <= 1e-12:
+            self.solute_mass = self.acidity_units = self.buffer_units = self.heat_c_l = 0.0
+        return parcel
 
 
 @dataclass
@@ -66,8 +147,8 @@ class LevelSensor:
     tank_id: str
     kind: str
     threshold_l: float
-    hysteresis_l: float = 5.0
-    delay_s: float = 0.5
+    hysteresis_l: float = 0.0
+    delay_s: float = 0.0
     polarity: bool = True
     forced: bool | None = None
     automatic: bool = False
@@ -143,7 +224,7 @@ class Tier:
     actual_flow_lpm: float = 0.0
     total_l: float = 0.0
     loss_l: float = 0.0
-    _returns: deque[tuple[float, float]] = field(default_factory=deque)
+    _returns: deque[tuple[float, SolutionParcel]] = field(default_factory=deque)
 
 
 @dataclass
@@ -160,6 +241,11 @@ class Drive:
     motor_hours: float = 0.0
     fault: int = 0
     online: bool = True
+    configuration: dict[int, int] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.configuration:
+            self.configuration = {101: 5, 102: 2, 700: 1, 701: 3, 702: self.address}
 
     def update(self, external_run: bool, selected: bool, dt_s: float) -> None:
         running = self.online and not self.fault and selected and (external_run or self.run_register)
@@ -211,6 +297,7 @@ class BionicModel:
 
     def __init__(self, event: Callable[[str, str, str], None] | None = None) -> None:
         self.event = event or (lambda _kind, _subject, _message: None)
+        self.sensor_change: Callable[[], None] = lambda: None
         self.outputs = dict(DEFAULT_OUTPUTS)
         self.relays = [False] * 32
         self.tanks = {
@@ -219,6 +306,10 @@ class BionicModel:
             "bso1": Tank("bso1", "Дренаж 1", 200.0, 20.0),
             "bso2": Tank("bso2", "Дренаж 2", 200.0, 20.0),
         }
+        self.tanks["bo"].initialize_solution(ec_ms_cm=0.1, ph=6.8, temperature_c=20.0, buffer_per_l=0.3)
+        self.tanks["bp"].initialize_solution(ec_ms_cm=2.0, ph=6.0, temperature_c=20.0, buffer_per_l=1.0)
+        self.tanks["bso1"].initialize_solution(ec_ms_cm=1.8, ph=6.1, temperature_c=20.0, buffer_per_l=0.8)
+        self.tanks["bso2"].initialize_solution(ec_ms_cm=1.8, ph=6.1, temperature_c=20.0, buffer_per_l=0.8)
         self.sensors: dict[str, LevelSensor] = {}
         for tank_id, tank in self.tanks.items():
             self.sensors[f"{tank_id}-min"] = LevelSensor(
@@ -275,6 +366,12 @@ class BionicModel:
         self.blockage_severity = 70.0
         self.total_leak_l = 0.0
         self.total_irrigation_loss_l = 0.0
+        self.osmosis_profile = {"ec": 0.1, "ph": 6.8, "temperature": 20.0, "buffer": 0.3}
+        self.nutrient_absorption_fraction = 0.05
+        self.deposition_fraction = 0.01
+        self.ph_drift_per_pass = 0.02
+        self.fertilizer_ec_per_ml_at_100l = 0.01
+        self.ph_reagent_delta_per_ml_at_100l = 0.02
         self.alarms: dict[tuple[str, str], Alarm] = {}
         self.paused = False
         self.speed = 1.0
@@ -282,6 +379,7 @@ class BionicModel:
         self.operation_hint: str | None = None
         self.hydraulic_uncertainty = False
         self._overflowing: set[str] = set()
+        self.ponics = PonicsPilot(self, lambda kind, subject, message: self.event(kind, subject, message))
 
     def relay(self, channel: int) -> bool:
         return self.relays[channel - 1]
@@ -308,9 +406,40 @@ class BionicModel:
 
     def force_sensor(self, sensor_id: str, value: bool | None) -> None:
         sensor = self.sensors[sensor_id]
+        previous = sensor.value
         sensor.forced = value
         mode = "AUTO" if value is None else f"FORCE {'ON' if value else 'OFF'}"
         self.event("ОПЕРАТОР", sensor_id, mode)
+        self._sensor_changed(sensor, previous)
+
+    def _sensor_changed(self, sensor: LevelSensor, previous: bool, *, notify: bool = True) -> bool:
+        if sensor.value == previous:
+            return False
+        self.event(
+            "ДАТЧИК", sensor.id,
+            f"{'ВКЛ' if previous else 'ВЫКЛ'} -> {'ВКЛ' if sensor.value else 'ВЫКЛ'}",
+        )
+        if notify:
+            self.sensor_change()
+        return True
+
+    def refresh_sensor(self, sensor_id: str, elapsed_s: float = 0.0) -> None:
+        """Recalculate one level sensor and notify the physical bridge on an edge."""
+        self.refresh_sensors(elapsed_s, (sensor_id,))
+
+    def refresh_sensors(
+        self, elapsed_s: float = 0.0,
+        sensor_ids: tuple[str, ...] | None = None,
+    ) -> None:
+        """Recalculate sensors as one image and emit one bridge notification."""
+        changed = False
+        for sensor_id in sensor_ids or tuple(self.sensors):
+            sensor = self.sensors[sensor_id]
+            previous = sensor.value
+            sensor.update(self.tanks[sensor.tank_id].volume_l, elapsed_s)
+            changed |= self._sensor_changed(sensor, previous, notify=False)
+        if changed:
+            self.sensor_change()
 
     def set_tank_level(self, tank_id: str, value: float, *, percent: bool = False) -> None:
         tank = self.tanks[tank_id]
@@ -318,11 +447,13 @@ class BionicModel:
         if not 0 <= litres <= tank.capacity_l:
             raise ValueError(f"Уровень должен быть в диапазоне 0..{tank.capacity_l:g} л")
         old = tank.volume_l
-        tank.volume_l = litres
+        if litres < old:
+            tank.take_solution(old - litres)
+        elif litres > old:
+            tank.add_solution(tank.sample(litres - old))
         self.event("ОПЕРАТОР", tank_id, f"уровень {old:.2f} -> {litres:.2f} л")
-        for sensor in self.sensors.values():
-            if sensor.tank_id == tank_id:
-                sensor.update(litres, max(sensor.delay_s, 0.0))
+        sensor_ids = tuple(sensor_id for sensor_id, sensor in self.sensors.items() if sensor.tank_id == tank_id)
+        self.refresh_sensors(sensor_ids=sensor_ids)
 
     def _alarm(self, code: str, subject: str, active: bool) -> None:
         key = (code, subject)
@@ -346,24 +477,44 @@ class BionicModel:
         self._alarm("PIPE_RUPTURE", "pipe", False)
         self.event("ОПЕРАТОР", "pipe", "виртуальный трубопровод отремонтирован")
 
-    def _add(self, tank_id: str, litres: float) -> None:
-        overflow = self.tanks[tank_id].add(litres)
+    def _add_solution(self, tank_id: str, parcel: SolutionParcel) -> None:
+        overflow = self.tanks[tank_id].add_solution(parcel)
         if overflow > 1e-12:
             self._overflowing.add(tank_id)
         self._alarm("TANK_OVERFLOW", tank_id, overflow > 1e-12)
 
+    def _add(self, tank_id: str, litres: float) -> None:
+        self._add_solution(tank_id, self.tanks[tank_id].sample(litres))
+
     def _transfer(self, pump: TransferPump, dt_s: float) -> None:
         flow = pump.update(self.relay(pump.relay), dt_s)
         requested = flow * dt_s / 60.0
-        actual = self.tanks[pump.source].take(requested)
+        parcel = self.tanks[pump.source].take_solution(requested)
+        actual = parcel.volume_l
         self.tanks[pump.source].outflow_lpm += actual * 60.0 / max(dt_s, 1e-9)
         self.tanks[pump.destination].inflow_lpm += actual * 60.0 / max(dt_s, 1e-9)
         pump.total_l += actual
-        self._add(pump.destination, actual)
+        self._add_solution(pump.destination, parcel)
         if requested > 0 and actual <= 1e-12:
             self._alarm("WATER_SHORTAGE", pump.source, True)
         elif self.tanks[pump.source].volume_l > 0:
             self._alarm("WATER_SHORTAGE", pump.source, False)
+
+    def apply_ponics_dose(self, reagent: str, millilitres: float) -> None:
+        """Apply a PonicPilot dose exclusively to the shared BP solution."""
+        tank = self.tanks["bp"]
+        if millilitres <= 0:
+            return
+        effective_volume = max(tank.volume_l, 1e-9)
+        if reagent in {"a", "b", "c"}:
+            ec_delta = self.fertilizer_ec_per_ml_at_100l * millilitres * 100.0 / effective_volume
+            tank.solute_mass += ec_delta * effective_volume
+        elif reagent in {"ph_plus", "ph_minus"}:
+            direction = 1.0 if reagent == "ph_plus" else -1.0
+            ph_delta = direction * self.ph_reagent_delta_per_ml_at_100l * millilitres * 100.0 / effective_volume
+            tank.acidity_units -= ph_delta * max(tank.buffer_units, 1e-9)
+        else:
+            raise ValueError("Неизвестный реагент PonicPilot")
 
     def _pressure_target(self, open_tiers: int) -> float:
         drive = max(self.drives.values(), key=lambda item: item.actual_hz)
@@ -401,7 +552,14 @@ class BionicModel:
         filled = fill_flow * dt_s / 60.0
         self.water_meter.total_l += filled
         self.tanks["bo"].inflow_lpm += fill_flow
-        self._add("bo", filled)
+        buffer_units = self.osmosis_profile["buffer"] * filled
+        self._add_solution("bo", SolutionParcel(
+            filled,
+            self.osmosis_profile["ec"] * filled,
+            (7.0 - self.osmosis_profile["ph"]) * buffer_units,
+            buffer_units,
+            self.osmosis_profile["temperature"] * filled,
+        ))
 
         for pump in self.pumps.values():
             self._transfer(pump, dt_s)
@@ -445,11 +603,17 @@ class BionicModel:
         if source_bp:
             shares.append("bp")
         delivered = 0.0
+        delivered_solution = SolutionParcel(0.0, 0.0, 0.0, 0.0, 0.0)
         if shares and max((d.actual_hz for d in self.drives.values()), default=0.0) > 0.1:
             for tank_id in shares:
-                taken = self.tanks[tank_id].take(requested_l / len(shares))
-                delivered += taken
-                self.tanks[tank_id].outflow_lpm += taken * 60.0 / max(dt_s, 1e-9)
+                parcel = self.tanks[tank_id].take_solution(requested_l / len(shares))
+                delivered += parcel.volume_l
+                delivered_solution.volume_l += parcel.volume_l
+                delivered_solution.solute_mass += parcel.solute_mass
+                delivered_solution.acidity_units += parcel.acidity_units
+                delivered_solution.buffer_units += parcel.buffer_units
+                delivered_solution.heat_c_l += parcel.heat_c_l
+                self.tanks[tank_id].outflow_lpm += parcel.volume_l * 60.0 / max(dt_s, 1e-9)
         ratio = delivered / requested_l if requested_l else 0.0
         for tier in self.tiers.values():
             tier.actual_flow_lpm = tier.flow_lpm * scale * ratio if tier in active_tiers else 0.0
@@ -459,16 +623,30 @@ class BionicModel:
             loss = amount - returned
             tier.loss_l += loss
             self.total_irrigation_loss_l += loss
-            if returned:
-                tier._returns.append((tier.return_delay_s, returned))
-            pending: deque[tuple[float, float]] = deque()
+            if returned and delivered > 1e-12:
+                incoming = delivered_solution.scaled(amount / delivered)
+                return_fraction = returned / max(amount, 1e-12)
+                nutrient_loss_fraction = min(
+                    1.0, self.nutrient_absorption_fraction + self.deposition_fraction
+                )
+                returned_solution = incoming.scaled(return_fraction)
+                # Evaporated water concentrates the non-consumed nutrients in
+                # the returning fraction; uptake and deposition are separate.
+                returned_solution.solute_mass = incoming.solute_mass * (1.0 - nutrient_loss_fraction)
+                consumed = incoming.solute_mass * self.nutrient_absorption_fraction
+                self.tanks[tier.drain_tank].nutrients_consumed += consumed
+                returned_solution.acidity_units -= (
+                    self.ph_drift_per_pass * returned_solution.buffer_units
+                )
+                tier._returns.append((tier.return_delay_s, returned_solution))
+            pending: deque[tuple[float, SolutionParcel]] = deque()
             while tier._returns:
-                delay, volume = tier._returns.popleft()
+                delay, parcel = tier._returns.popleft()
                 if delay <= dt_s:
-                    self._add(tier.drain_tank, volume)
-                    self.tanks[tier.drain_tank].inflow_lpm += volume * 60.0 / max(dt_s, 1e-9)
+                    self._add_solution(tier.drain_tank, parcel)
+                    self.tanks[tier.drain_tank].inflow_lpm += parcel.volume_l * 60.0 / max(dt_s, 1e-9)
                 else:
-                    pending.append((delay - dt_s, volume))
+                    pending.append((delay - dt_s, parcel))
             tier._returns = pending
 
         leak_flow = self.leak_rate_lpm if self.leak_enabled and self.high_pressure_bar > 0.1 else 0.0
@@ -478,13 +656,12 @@ class BionicModel:
         if shares and leak_l:
             actual_leak = 0.0
             for tank_id in shares:
-                taken = self.tanks[tank_id].take(leak_l / len(shares))
-                actual_leak += taken
-                self.tanks[tank_id].outflow_lpm += taken * 60.0 / max(dt_s, 1e-9)
+                parcel = self.tanks[tank_id].take_solution(leak_l / len(shares))
+                actual_leak += parcel.volume_l
+                self.tanks[tank_id].outflow_lpm += parcel.volume_l * 60.0 / max(dt_s, 1e-9)
             self.total_leak_l += actual_leak
 
-        for sensor in self.sensors.values():
-            sensor.update(self.tanks[sensor.tank_id].volume_l, dt_s)
+        self.refresh_sensors(dt_s)
         for tank_id, tank in self.tanks.items():
             self._alarm("TANK_OVERFLOW", tank_id, tank_id in self._overflowing)
         self._alarm("LEAK", "pipe", self.leak_enabled)

@@ -10,14 +10,14 @@ from .bionic_render import VIEW_NAMES
 
 COMMANDS = sorted({
     "alarm", "devices", "exit", "fault", "help", "irrigation", "log",
-    "pipe", "ports", "pressure", "pump", "quit", "relay", "sensor",
+    "pipe", "ponics", "ports", "pressure", "pump", "quit", "relay", "sensor",
     "settings", "sim", "status", "tank", "view",
 })
 
 TANKS = ["bo", "bp", "bso1", "bso2"]
 PUMPS = ["bo-to-bp", "bso1-to-bp", "bso2-to-bp"]
 SENSORS = [f"{tank}-{kind}" for tank in TANKS for kind in ("min", "max")]
-DEVICES = ["relay-32ch", "ao-1", "ao-2", "ao-3", "ai-pressure", "hp1", "hp2", "sensor-relay"]
+DEVICES = ["relay-32ch", "ao-1", "ao-2", "ao-3", "ponics", "ai-pressure", "hp1", "hp2", "sensor-relay"]
 
 
 def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
@@ -28,7 +28,11 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
     if not completed:
         candidates = COMMANDS if test_mode else [item for item in COMMANDS if item != "relay"]
     elif completed == ["view"]:
-        candidates = [*VIEW_NAMES, "main"]
+        candidates = [*VIEW_NAMES, "main", "drive"]
+    elif completed == ["view", "ponics"]:
+        candidates = ["settings", "registers"]
+    elif completed == ["view", "drive"]:
+        candidates = ["hp1", "hp2"]
     elif completed == ["help"]:
         candidates = ["search"]
     elif completed == ["devices"]:
@@ -75,6 +79,14 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
         candidates = ["list", "set", "apply", "save"]
     elif completed == ["settings", "set"]:
         candidates = sorted(OPTION_SPECS)
+    elif completed == ["ponics"]:
+        candidates = ["dose", "set", "fault"]
+    elif completed == ["ponics", "dose"]:
+        candidates = ["a", "b", "c", "ph_plus", "ph_minus"]
+    elif completed == ["ponics", "fault"]:
+        candidates = ["offline", "ph", "ec", "temperature", "a", "b", "c", "ph_plus", "ph_minus"]
+    elif len(completed) == 3 and completed[:2] == ["ponics", "fault"]:
+        candidates = ["on", "off"]
     elif completed == ["log"]:
         candidates = ["last", "filter", "export"]
     elif completed == ["log", "filter"]:

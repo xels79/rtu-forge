@@ -8,16 +8,17 @@ import shlex
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rich.console import Console
-from .bionic_config import BionicSettings, changed, load_settings, save_settings
+from .bionic_config import BionicSettings, changed, load_settings, parse_sensor_relay_map, save_settings
 from .bionic_events import EventJournal
 from .bionic_model import BionicModel
 from .bionic_modbus import build_default_bus
+from .bionic_ponics import PONICS_OPTION_NAMES, PONICS_REGISTERS
 from .bionic_render import print_view
-from .bionic_sensor_bridge import SensorRelayBridge
+from .bionic_sensor_bridge import SensorRelayBridge, SensorRelayState
 from .bionic_server import ModbusSlaveServer, SerialSlaveTransport
 from .transport import SerialTransport
 
@@ -35,7 +36,10 @@ fault leak on|off | rate <л/мин>
 fault blockage on|off | severity <0..100> | fault list | fault clear all
 alarm list | alarm reset all
 sim start | pause | resume | speed <1..100> | reset --confirm
-view main|settings|log|rs485|tanks|pumps|pressure|irrigation|light|sensors
+view main|settings|log|rs485|tanks|pumps|pressure|irrigation|light|sensors|water
+view ponics | view ponics settings | view ponics registers
+view drives | view drive hp1 | view drive hp2
+ponics dose <a|b|c|ph_plus|ph_minus> <мл> | set <PDU> <RAW>
 log last <N> | filter alarms|rs485|tanks|pumps|all | export <файл.csv>
 settings list | set <имя> <значение> | apply | save
 exit | quit
@@ -61,6 +65,7 @@ class BionicContext:
     help_query: str = ""
     notice: str = ""
     saved: BionicSettings | None = None
+    sensor_relay_state: SensorRelayState | None = None
 
     def event(self, kind: str, subject: str, message: str) -> None:
         self.journal.add(kind, subject, message)
@@ -93,6 +98,7 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
         sensor.hysteresis_l = settings.sensor_hysteresis_l
         sensor.delay_s = settings.sensor_delay_s
         sensor.threshold_l = model.tanks[sensor.tank_id].capacity_l * (0.2 if sensor.kind == "min" else 0.8)
+    model.refresh_sensors()
     model.boost_pressure_bar = settings.boost_pressure_bar
     model.boost_rise_s = settings.boost_rise_s
     model.boost_fall_s = settings.boost_fall_s
@@ -104,6 +110,66 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
     model.leak_rate_lpm = settings.leak_rate_lpm
     model.leak_pressure_factor = settings.leak_pressure_factor
     model.blockage_severity = settings.blockage_severity
+    model.osmosis_profile = {
+        "ec": settings.osmosis_ec_ms_cm,
+        "ph": settings.osmosis_ph,
+        "temperature": settings.osmosis_temperature_c,
+        "buffer": settings.osmosis_buffer_per_l,
+    }
+    model.nutrient_absorption_fraction = settings.nutrient_absorption_fraction
+    model.deposition_fraction = settings.deposition_fraction
+    model.ph_drift_per_pass = settings.ph_drift_per_pass
+    model.fertilizer_ec_per_ml_at_100l = settings.fertilizer_ec_per_ml_at_100l
+    model.ph_reagent_delta_per_ml_at_100l = settings.ph_reagent_delta_per_ml_at_100l
+    if initial:
+        model.tanks["bo"].initialize_solution(
+            ec_ms_cm=settings.osmosis_ec_ms_cm, ph=settings.osmosis_ph,
+            temperature_c=settings.osmosis_temperature_c,
+            buffer_per_l=settings.osmosis_buffer_per_l,
+        )
+        model.tanks["bp"].initialize_solution(
+            ec_ms_cm=settings.broth_initial_ec_ms_cm, ph=settings.broth_initial_ph,
+            temperature_c=settings.broth_initial_temperature_c,
+            buffer_per_l=settings.broth_buffer_per_l,
+        )
+        for tank_id in ("bso1", "bso2"):
+            model.tanks[tank_id].initialize_solution(
+                ec_ms_cm=settings.drain_initial_ec_ms_cm, ph=settings.drain_initial_ph,
+                temperature_c=settings.drain_initial_temperature_c,
+                buffer_per_l=settings.drain_buffer_per_l,
+            )
+    model.ponics.configure({
+        8: settings.ponics_irrigation_on_s,
+        9: settings.ponics_irrigation_pause_s,
+        23: settings.ponics_mode,
+        24: int(settings.ponics_ph_enabled),
+        26: settings.ponics_ph_dosing_pause_s,
+        27: round(settings.ponics_ph_low * 10),
+        28: round(settings.ponics_ph_high * 10),
+        29: int(settings.ponics_ec_enabled),
+        30: int(settings.ponics_ec_protection_enabled),
+        31: settings.ponics_ec_dosing_pause_s,
+        32: settings.ponics_ec_program,
+        33: round(settings.ponics_ec_target_ms_cm * 100),
+        34: settings.ponics_fertilizer_a_share,
+        35: settings.ponics_fertilizer_b_share,
+        36: settings.ponics_fertilizer_c_share,
+        37: int(settings.ponics_thermostat_enabled),
+        38: settings.ponics_temperature_low_c,
+        39: settings.ponics_temperature_high_c,
+    })
+    for drive_id, address, ramp_up, ramp_down, values in (
+        ("hp1", settings.hp1_address, settings.hp1_ramp_up_s, settings.hp1_ramp_down_s,
+         (settings.hp1_pb01, settings.hp1_pb02, settings.hp1_ph00, settings.hp1_ph01)),
+        ("hp2", settings.hp2_address, settings.hp2_ramp_up_s, settings.hp2_ramp_down_s,
+         (settings.hp2_pb01, settings.hp2_pb02, settings.hp2_ph00, settings.hp2_ph01)),
+    ):
+        drive = model.drives[drive_id]
+        drive.address = address
+        drive.ramp_up_s = ramp_up
+        drive.ramp_down_s = ramp_down
+        drive.configuration.update(dict(zip((101, 102, 700, 701), values)))
+        drive.configuration[702] = address
     model.speed = settings.simulation_speed
 
 
@@ -115,8 +181,26 @@ def make_context(home: Path, config_path: Path | None = None, *, console: Consol
     apply_model_settings(settings, model, initial=True)
     ctx = BionicContext(home, path, settings, settings, model, journal, console or Console(), test_mode=test_mode)
     ctx.saved = settings
+    ctx.sensor_relay_state = SensorRelayState()
     ctx.model.event = ctx.event
+    _bind_ponics_draft(ctx)
     return ctx
+
+
+def _bind_ponics_draft(ctx: BionicContext) -> None:
+    """Keep externally written nonvolatile registers available to Save."""
+    def update(index: int, raw: int) -> None:
+        name = PONICS_OPTION_NAMES[index]
+        current = getattr(ctx.draft, name)
+        if isinstance(current, bool):
+            value: object = bool(raw)
+        elif isinstance(current, float):
+            value = raw * PONICS_REGISTERS[index].scale
+        else:
+            value = raw
+        ctx.draft = replace(ctx.draft, **{name: value})
+
+    ctx.model.ponics.setting_changed = update
 
 
 def _number(value: str, label: str, minimum: float = 0.0, maximum: float | None = None) -> float:
@@ -175,25 +259,56 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
     if command == "status":
         ctx.view = "status"
         if not ctx.screen_mode:
-            print_view(ctx.console, "status", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
+            print_view(ctx.console, "status", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
         return None
     if command == "view":
-        allowed = {"main", "status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "pressure", "irrigation", "light", "sensors"}
-        if len(args) != 1 or args[0] not in allowed:
-            raise ValueError("view: укажите status, devices, ports, settings, help, log, rs485, tanks, pumps, pressure, irrigation, light или sensors")
-        ctx.view = "status" if args[0] == "main" else args[0]
+        nested = {
+            ("ponics",): "ponics", ("ponics", "settings"): "ponics-settings",
+            ("ponics", "registers"): "ponics-registers", ("drives",): "drives",
+            ("drive", "hp1"): "drive-hp1", ("drive", "hp2"): "drive-hp2",
+        }
+        allowed = {"main", "status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "pressure", "irrigation", "light", "sensors", "water"}
+        target = nested.get(tuple(args))
+        if target is None and len(args) == 1 and args[0] in allowed:
+            target = "status" if args[0] == "main" else args[0]
+        if target is None:
+            raise ValueError("view: укажите страницу, включая ponics [settings|registers], drives или drive hp1|hp2")
+        ctx.view = target
         if not ctx.screen_mode:
-            print_view(ctx.console, ctx.view, model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
+            print_view(ctx.console, ctx.view, model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
+        return None
+    if command == "ponics":
+        if len(args) == 3 and args[0] == "dose":
+            amount = _number(args[2], "Доза", 0, 6553.5)
+            model.ponics.dose(args[1].casefold(), amount)
+        elif len(args) == 3 and args[0] == "set":
+            register = int(args[1], 0)
+            value = int(args[2], 0)
+            model.ponics.write(register, value, source="оператор TUI")
+        elif len(args) == 3 and args[0] == "fault":
+            subject = args[1].casefold()
+            enabled = _on_off(args[2])
+            if subject == "offline":
+                model.ponics.respond = not enabled
+            elif subject in model.ponics.sensor_faults:
+                model.ponics.sensor_faults[subject] = enabled
+            elif subject in model.ponics.doser_faults:
+                model.ponics.doser_faults[subject] = enabled
+            else:
+                raise ValueError("Неисправность: offline, ph, ec, temperature, a, b, c, ph_plus или ph_minus")
+            ctx.event("ОПЕРАТОР", f"ponics-{subject}", f"неисправность {'включена' if enabled else 'выключена'}")
+        else:
+            raise ValueError("ponics dose <a|b|c|ph_plus|ph_minus> <мл> | set <PDU> <RAW> | fault <имя> on|off")
         return None
     if command == "ports":
         ctx.view = "ports"
         if not ctx.screen_mode:
-            print_view(ctx.console, "ports", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
+            print_view(ctx.console, "ports", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
         return None
     if command == "devices":
         ctx.view = "devices"
         if not ctx.screen_mode:
-            print_view(ctx.console, "devices", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
+            print_view(ctx.console, "devices", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
         return None
     if command == "tank":
         if args == ["list"]:
@@ -274,9 +389,8 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
     if command == "sensor":
         if args == ["list"]:
             ctx.view = "sensors"
-            if ctx.screen_mode: return None
-            for sensor in model.sensors.values():
-                ctx.console.print(f"{sensor.id}: {'ON' if sensor.value else 'OFF'}; {'AUTO' if sensor.forced is None else 'FORCE'}; порог {sensor.threshold_l:g} л")
+            if not ctx.screen_mode:
+                print_view(ctx.console, "sensors", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
             return None
         if not args or args[0] not in model.sensors:
             raise ValueError("sensor: неизвестный датчик; используйте sensor list")
@@ -287,6 +401,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             model.force_sensor(sensor_id, _on_off(args[2]))
         elif len(args) == 3 and args[1] == "threshold":
             model.sensors[sensor_id].threshold_l = _number(args[2], "Порог", 0, model.tanks[model.sensors[sensor_id].tank_id].capacity_l)
+            model.refresh_sensor(sensor_id)
             ctx.event("ОПЕРАТОР", sensor_id, f"порог {model.sensors[sensor_id].threshold_l:g} л")
         else:
             raise ValueError("sensor <id> threshold <л> | force on|off | auto")
@@ -335,6 +450,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         elif args == ["reset", "--confirm"]:
             ctx.model = BionicModel(ctx.event)
             apply_model_settings(ctx.settings, ctx.model, initial=True)
+            _bind_ponics_draft(ctx)
             ctx.event("ОПЕРАТОР", "simulation", "виртуальное состояние сброшено; физические выходы не изменялись")
             return "reconnect"
         elif args and args[0] == "reset":
@@ -365,7 +481,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
     if command == "settings":
         if args == ["list"]:
             ctx.view = "settings"
-            if not ctx.screen_mode: print_view(ctx.console, "settings", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
+            if not ctx.screen_mode: print_view(ctx.console, "settings", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
         elif len(args) == 3 and args[0] == "set":
             ctx.draft = changed(ctx.draft, args[1], args[2])
             ctx.notice = f"Черновик: {args[1]}={getattr(ctx.draft, args[1])}"
@@ -373,7 +489,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         elif args == ["apply"]:
             reconnect = any(getattr(ctx.settings, name) != getattr(ctx.draft, name) for name in (
                 "controller_port", "controller_baudrate", "controller_parity", "controller_stopbits",
-                "relay_address", "ao1_address", "ao2_address", "ao3_address", "ai_address", "hp1_address", "hp2_address",
+                "relay_address", "ao1_address", "ao2_address", "ao3_address", "ponics_address", "ai_address", "hp1_address", "hp2_address",
                 "sensor_relay_port", "sensor_relay_baudrate", "sensor_relay_parity", "sensor_relay_stopbits",
                 "sensor_relay_id", "sensor_relay_channels", "sensor_relay_active_low", "sensor_relay_map",
                 "sensor_relay_loss_behavior", "hardware_mode",
@@ -425,6 +541,7 @@ class BridgeRunner:
     def __init__(self, ctx: BionicContext) -> None:
         self.ctx = ctx
         self.stop_event = threading.Event()
+        self.wake_event = threading.Event()
         parser = configparser.ConfigParser()
         parser["connection"] = {
             "port": ctx.settings.sensor_relay_port,
@@ -439,37 +556,61 @@ class BridgeRunner:
             "max_response_bytes": "256", "post_write_delay_ms": "0",
         }
         self.transport = SerialTransport(parser)
-        mapping = {
-            sensor.strip(): int(channel)
-            for item in ctx.settings.sensor_relay_map.split(",")
-            for sensor, channel in [item.split(":", 1)]
-        }
+        mapping = parse_sensor_relay_map(ctx.settings.sensor_relay_map)
         self.bridge = SensorRelayBridge(
             self.transport, ctx.settings.sensor_relay_id, ctx.settings.sensor_relay_channels,
             active_low=ctx.settings.sensor_relay_active_low, mapping=mapping,
             loss_behavior=ctx.settings.sensor_relay_loss_behavior,
         )
         self.bridge.enabled = True
+        self.ctx.sensor_relay_state = self.bridge.state
+        self.ctx.model.sensor_change = self.wake_event.set
         self.last_error: str | None = None
         self.thread = threading.Thread(target=self._run, name="bionic-sensor-relay", daemon=True)
 
     def start(self) -> None:
         self.transport.connect()
+        self._sync(force_read=True)
         self.thread.start()
         self.ctx.event("АППАРАТУРА", "USB2", "аппаратный режим физического реле включён")
 
     def _run(self) -> None:
-        while not self.stop_event.wait(0.5):
-            state = self.bridge.sync(self.ctx.model)
-            if not state.online and state.error and state.error != self.last_error:
-                self.ctx.event("RS485", "USB2", state.error)
-            self.last_error = state.error
+        next_health = time.monotonic() + 0.5
+        while not self.stop_event.is_set():
+            self.wake_event.wait(0.2)
+            self.wake_event.clear()
+            if self.stop_event.is_set():
+                break
+            now = time.monotonic()
+            force_read = now >= next_health
+            self._sync(force_read=force_read, now=now)
+            if force_read:
+                next_health = now + 0.5
+
+    def _sync(self, *, force_read: bool = False, now: float | None = None) -> None:
+        previous_desired = self.bridge.state.desired
+        previous_confirmed = self.bridge.state.confirmed
+        previous_online = self.bridge.state.online
+        state = self.bridge.sync(self.ctx.model, force_read=force_read, now=now)
+        if state.desired != previous_desired:
+            self.ctx.event("RS485", "USB2", f"требуемое состояние 0x{state.desired:04X}")
+        if state.online and (
+            state.confirmed != previous_confirmed or not previous_online
+        ):
+            self.ctx.event("RS485", "USB2", f"FC01 подтверждено 0x{state.confirmed or 0:04X}")
+        if state.error and state.error != self.last_error:
+            self.ctx.event("RS485", "USB2", state.error)
+        self.last_error = state.error
 
     def stop(self) -> None:
         self.stop_event.set()
+        self.wake_event.set()
         if self.thread.is_alive():
             self.thread.join(timeout=1)
         self.transport.disconnect()
+        self.bridge.state.online = False
+        self.bridge.state.confirmed = None
+        self.ctx.model.sensor_change = lambda: None
 
 
 def _start_bridge(ctx: BionicContext) -> BridgeRunner | None:
@@ -533,7 +674,7 @@ def main() -> int:
             from .bionic_tui import run_tui
             run_tui(ctx, reconnect_hardware)
         else:
-            print_view(ctx.console, ctx.view, ctx.model, ctx.journal, ctx.settings, ctx.draft)
+            print_view(ctx.console, ctx.view, ctx.model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
             while True:
                 try:
                     line = input("bionic-immitator> ")

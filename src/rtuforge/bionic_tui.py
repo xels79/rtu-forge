@@ -17,7 +17,6 @@ from prompt_toolkit.widgets import TextArea
 
 from .bionic_cli import BionicContext, execute_command
 from .bionic_completion import BionicCompleter
-from .bionic_config import OPTION_SPECS
 from .bionic_history import CommandHistory
 from .bionic_render import ScreenPage, render_page
 
@@ -31,7 +30,7 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
     previous_view = ["status"]
     status = ["F1 справка · F2 настройки · F3 статус · F4 устройства · F5 порты · F6 журнал"]
     scroll_offsets: dict[str, int] = {}
-    selected_setting = [next(iter(OPTION_SPECS))]
+    selected_setting = ["sensor:bo-min"]
     history = CommandHistory(ctx.home / ".bionic-immitator-history")
     history_index = [len(history.entries)]
     history_scratch = [""]
@@ -46,7 +45,7 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
         page = render_page(
             ctx.view, ctx.model, ctx.journal, ctx.settings, ctx.draft,
             ctx.saved or ctx.settings, width=width, log_filter=ctx.log_filter,
-            help_query=ctx.help_query,
+            help_query=ctx.help_query, relay_state=ctx.sensor_relay_state,
         )
         scroll = clamp_scroll(scroll_offsets.get(ctx.view, 0), 0, len(page.lines), height)
         scroll_offsets[ctx.view] = scroll
@@ -59,7 +58,7 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
                 scroll_offsets[ctx.view] = clamp_scroll(scroll, -3, len(page.lines), height)
             elif mouse_event.event_type == MouseEventType.SCROLL_DOWN:
                 scroll_offsets[ctx.view] = clamp_scroll(scroll, 3, len(page.lines), height)
-            elif mouse_event.event_type == MouseEventType.MOUSE_UP and ctx.view == "settings":
+            elif mouse_event.event_type == MouseEventType.MOUSE_UP and ctx.view in {"settings", "ponics-settings"}:
                 if absolute_row < len(page.row_keys) and page.row_keys[absolute_row]:
                     selected_setting[0] = page.row_keys[absolute_row] or selected_setting[0]
             app.invalidate()
@@ -73,7 +72,7 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
         for local_row, line in enumerate(visible):
             absolute_row = scroll + local_row
             style = ""
-            if ctx.view == "settings" and absolute_row < len(page.row_keys):
+            if ctx.view in {"settings", "ponics-settings"} and absolute_row < len(page.row_keys):
                 if page.row_keys[absolute_row] == selected_setting[0]:
                     style = "class:selected"
             suffix = "\n" if local_row < height - 1 else ""
@@ -106,16 +105,16 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
         app.invalidate()
 
     def move_setting(delta: int) -> None:
-        names = list(OPTION_SPECS)
+        page, _, height = current_page()
+        names = [name for name in page.row_keys if name]
         index = names.index(selected_setting[0]) if selected_setting[0] in names else 0
         selected_setting[0] = names[min(max(0, index + delta), len(names) - 1)]
-        page, _, height = current_page()
         row = page.row_keys.index(selected_setting[0])
-        current = scroll_offsets.get("settings", 0)
+        current = scroll_offsets.get(ctx.view, 0)
         if row < current:
-            scroll_offsets["settings"] = row
+            scroll_offsets[ctx.view] = row
         elif row >= current + height:
-            scroll_offsets["settings"] = row - height + 1
+            scroll_offsets[ctx.view] = row - height + 1
         app.invalidate()
 
     def run_line(line: str) -> None:
@@ -140,8 +139,12 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
     @bindings.add("enter")
     def _enter(event) -> None:
         line = command.text.strip()
-        if not line and ctx.view == "settings":
-            set_command(f"settings set {selected_setting[0]} ")
+        if not line and ctx.view in {"settings", "ponics-settings"}:
+            if selected_setting[0].startswith("sensor:"):
+                sensor_id = selected_setting[0].split(":", 1)[1]
+                set_command(f"sensor {sensor_id} threshold ")
+            else:
+                set_command(f"settings set {selected_setting[0]} ")
             return
         set_command("")
         run_line(line)
@@ -174,12 +177,12 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
 
     @bindings.add("escape", "k")
     def _setting_up(event) -> None:
-        if ctx.view == "settings":
+        if ctx.view in {"settings", "ponics-settings"}:
             move_setting(-1)
 
     @bindings.add("escape", "j")
     def _setting_down(event) -> None:
-        if ctx.view == "settings":
+        if ctx.view in {"settings", "ponics-settings"}:
             move_setting(1)
 
     @bindings.add("f1")
@@ -200,7 +203,10 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
 
     @bindings.add("f5")
     def _ports(event) -> None:
-        switch_view("ports")
+        if ctx.view in {"settings", "ponics-settings"}:
+            run_line("settings apply")
+        else:
+            switch_view("ports")
 
     @bindings.add("f6")
     def _log(event) -> None:

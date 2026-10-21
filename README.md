@@ -67,10 +67,19 @@ uv run bionic-immitator --home .\bionic-data --no-controller
 ```
 
 Its full-screen interface uses separate status, device, port, settings, help,
-log, RS-485, tank, pump, pressure, irrigation, light, and sensor pages. Use
+log, RS-485, tank, water-composition, pump, pressure, irrigation, light,
+sensor, PonicPilot, and drive pages. PonicPilot ID 5 is permanently bound to
+the shared BP (broth) tank; all of its calculated measurements and doses use
+that tank only. Use
 `view <page>` or `F1`–`F6` to navigate, the mouse wheel or `PgUp`/`PgDn` to
 scroll, `Tab` for contextual completion, and `Up`/`Down` for persistent command
 history. See [BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md) for the complete key map.
+
+The Bionic level sensors drive a separately connected physical Waveshare Relay
+8/16CH on USB/RS-485 №2; they are not exposed as extra virtual devices on USB
+№1. The default CH1..CH8 map, configurable NO/NC installation contact, relay
+polarity, edge-triggered FC0F writes, and separate FC01 confirmation are
+documented in the Bionic guide.
 
 It has its own configuration and event journal and does not modify
 `config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,

@@ -185,3 +185,58 @@ def test_pause_and_speed_only_affect_physics():
     model.speed = 5
     model.tick(60)
     assert model.tanks["bo"].volume_l == pytest.approx(265)
+
+
+def test_transfer_carries_solution_and_dilutes_bp():
+    model = running_model()
+    model.pumps["bo-to-bp"].start_s = 0
+    before = model.tanks["bp"].ec_ms_cm
+    model.set_relay(2, True)
+    model.tick(60)
+    assert model.tanks["bp"].ec_ms_cm < before
+    assert model.tanks["bo"].ec_ms_cm == pytest.approx(0.1)
+
+
+def test_every_ponics_reagent_changes_only_bp():
+    for reagent in ("a", "b", "c", "ph_plus", "ph_minus"):
+        model = BionicModel()
+        untouched = {
+            tank_id: (tank.volume_l, tank.solute_mass, tank.acidity_units, tank.buffer_units, tank.heat_c_l)
+            for tank_id, tank in model.tanks.items() if tank_id != "bp"
+        }
+        before_ec = model.tanks["bp"].ec_ms_cm
+        before_ph = model.tanks["bp"].ph
+        model.ponics.dose(reagent, 10)
+        if reagent in {"a", "b", "c"}:
+            assert model.tanks["bp"].ec_ms_cm > before_ec
+        elif reagent == "ph_plus":
+            assert model.tanks["bp"].ph > before_ph
+        else:
+            assert model.tanks["bp"].ph < before_ph
+        assert {
+            tank_id: (tank.volume_l, tank.solute_mass, tank.acidity_units, tank.buffer_units, tank.heat_c_l)
+            for tank_id, tank in model.tanks.items() if tank_id != "bp"
+        } == untouched
+
+
+def test_ponics_measurements_are_always_bp_even_when_other_tanks_change():
+    model = BionicModel()
+    initial = model.ponics.registers()[4:7]
+    model.tanks["bo"].initialize_solution(ec_ms_cm=8, ph=10, temperature_c=50, buffer_per_l=1)
+    assert model.ponics.registers()[4:7] == initial
+    model.tanks["bp"].initialize_solution(ec_ms_cm=3.21, ph=5.7, temperature_c=22.4, buffer_per_l=1)
+    assert model.ponics.registers()[4:7] == [570, 321, 224]
+
+
+def test_solution_is_stable_without_flows_or_dosing():
+    model = running_model()
+    before = {
+        tank_id: (tank.ec_ms_cm, tank.ph, tank.temperature_c)
+        for tank_id, tank in model.tanks.items()
+    }
+    model.tick(3600)
+    after = {
+        tank_id: (tank.ec_ms_cm, tank.ph, tank.temperature_c)
+        for tank_id, tank in model.tanks.items()
+    }
+    assert after == before

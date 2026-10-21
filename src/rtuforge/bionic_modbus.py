@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from .bionic_model import BionicModel
+from .bionic_ponics import PONICS_DOSING_REGISTERS, PONICS_REGISTER_COUNT, PONICS_WRITABLE_SETTINGS
 from .crc import append_crc, has_valid_crc
 
 
@@ -147,6 +148,75 @@ class AnalogInputDevice(ModbusDevice):
         return bytes((len(payload),)) + payload
 
 
+class PonicsDevice(ModbusDevice):
+    """Ponics Pilot 32 holding registers at PDU addresses 0..41."""
+
+    def __init__(self, address: int, model: BionicModel) -> None:
+        super().__init__(address)
+        self.model = model
+
+    def handle_pdu(self, function: int, data: bytes) -> bytes | int:
+        ponics = self.model.ponics
+        if function == 3:
+            if len(data) != 4:
+                ponics.note_error()
+                return ILLEGAL_VALUE
+            start, count = _u16(data, 0), _u16(data, 2)
+            if count < 1 or start + count > PONICS_REGISTER_COUNT:
+                ponics.note_error(address=True)
+                return ILLEGAL_ADDRESS
+            values = ponics.registers()[start : start + count]
+            payload = b"".join(value.to_bytes(2, "big") for value in values)
+            ponics.note_read(start, count)
+            return bytes((len(payload),)) + payload
+        if function == 6:
+            if len(data) != 4:
+                ponics.note_error()
+                return ILLEGAL_VALUE
+            register, value = _u16(data, 0), _u16(data, 2)
+            if register not in PONICS_WRITABLE_SETTINGS and register not in PONICS_DOSING_REGISTERS:
+                ponics.note_error(address=True)
+                return ILLEGAL_ADDRESS
+            try:
+                ponics.write(register, value)
+            except (ValueError, RuntimeError):
+                ponics.note_error()
+                return ILLEGAL_VALUE
+            ponics.requests += 1
+            ponics.responses += 1
+            return data
+        if function == 16:
+            if len(data) < 5:
+                ponics.note_error()
+                return ILLEGAL_VALUE
+            start, count, byte_count = _u16(data, 0), _u16(data, 2), data[4]
+            if count < 1 or byte_count != count * 2 or len(data) != 5 + byte_count:
+                ponics.note_error()
+                return ILLEGAL_VALUE
+            writable = PONICS_WRITABLE_SETTINGS | frozenset(PONICS_DOSING_REGISTERS)
+            if start + count > PONICS_REGISTER_COUNT or any(
+                address not in writable for address in range(start, start + count)
+            ):
+                ponics.note_error(address=True)
+                return ILLEGAL_ADDRESS
+            values = [_u16(data, 5 + index * 2) for index in range(count)]
+            try:
+                for address, value in zip(range(start, start + count), values):
+                    ponics._validate(address, value)
+                    if address in PONICS_DOSING_REGISTERS and ponics.doser_faults[PONICS_DOSING_REGISTERS[address]]:
+                        raise RuntimeError("doser fault")
+                for address, value in zip(range(start, start + count), values):
+                    ponics.write(address, value, source="Modbus FC10")
+            except (ValueError, RuntimeError):
+                ponics.note_error()
+                return ILLEGAL_VALUE
+            ponics.requests += 1
+            ponics.responses += 1
+            return data[:4]
+        ponics.note_error()
+        return ILLEGAL_FUNCTION
+
+
 class IddDevice(ModbusDevice):
     """Register subset used by the firmware's IDD222M21E driver."""
 
@@ -154,7 +224,7 @@ class IddDevice(ModbusDevice):
         super().__init__(address)
         self.model = model
         self.drive_id = drive_id
-        self.configuration = {101: 5, 102: 2, 700: 1, 701: 3, 702: address}
+        self.configuration = self.model.drives[drive_id].configuration
 
     def _register(self, address: int) -> int | None:
         drive = self.model.drives[self.drive_id]
@@ -215,11 +285,19 @@ class ModbusBus:
         self.devices[device.address] = device
 
     def handle(self, frame: bytes) -> bytes:
-        if len(frame) < 4 or not has_valid_crc(frame):
+        if len(frame) < 4:
+            return b""
+        if not has_valid_crc(frame):
+            device = self.devices.get(frame[0])
+            if isinstance(device, PonicsDevice):
+                device.model.ponics.requests += 1
+                device.model.ponics.crc_errors += 1
             return b""
         slave, function = frame[0], frame[1]
         device = self.devices.get(slave)
-        if device is None or not device.online:
+        if device is None or not device.online or (
+            isinstance(device, PonicsDevice) and not device.model.ponics.respond
+        ):
             return b""
         result = device.handle_pdu(function, frame[2:-2])
         if isinstance(result, int):
@@ -244,6 +322,7 @@ def build_default_bus(model: BionicModel, addresses: object) -> ModbusBus:
     bus.add(AnalogOutputDevice(addresses.ao1_address, lambda channel, value: model.set_analog_output(addresses.ao1_address, channel, value)))
     bus.add(AnalogOutputDevice(addresses.ao2_address, lambda channel, value: model.set_analog_output(addresses.ao2_address, channel, value)))
     bus.add(AnalogOutputDevice(addresses.ao3_address, lambda channel, value: model.set_analog_output(addresses.ao3_address, channel, value)))
+    bus.add(PonicsDevice(addresses.ponics_address, model))
     bus.add(AnalogInputDevice(addresses.ai_address, model))
     bus.add(IddDevice(addresses.hp1_address, model, "hp1"))
     bus.add(IddDevice(addresses.hp2_address, model, "hp2"))

@@ -127,3 +127,29 @@ def test_command_validation_is_explicit(tmp_path, command):
     ctx, _ = context(tmp_path)
     with pytest.raises(ValueError):
         execute_command(ctx, command)
+
+
+def test_nested_ponics_and_drive_views_and_bp_only_dosing(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.screen_mode = True
+    execute_command(ctx, "view ponics settings")
+    assert ctx.view == "ponics-settings"
+    execute_command(ctx, "view ponics registers")
+    assert ctx.view == "ponics-registers"
+    execute_command(ctx, "view drive hp2")
+    assert ctx.view == "drive-hp2"
+    other = {key: tank.solute_mass for key, tank in ctx.model.tanks.items() if key != "bp"}
+    execute_command(ctx, "ponics dose a 12.5")
+    assert ctx.model.ponics.dosing_totals["a"] == 12.5
+    assert {key: tank.solute_mass for key, tank in ctx.model.tanks.items() if key != "bp"} == other
+    assert not any(name in {"ponics_tank", "ponics_tank_id", "ponics_served_tank"} for name in ctx.settings.__dataclass_fields__)
+
+
+def test_ponics_register_write_can_be_explicitly_saved_as_start_profile(tmp_path):
+    ctx, _ = context(tmp_path)
+    execute_command(ctx, "ponics set 33 275")
+    assert ctx.model.ponics.settings[33] == 275
+    assert ctx.draft.ponics_ec_target_ms_cm == 2.75
+    execute_command(ctx, "settings save")
+    restored = make_context(tmp_path)
+    assert restored.model.ponics.settings[33] == 275
