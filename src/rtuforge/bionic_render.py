@@ -329,34 +329,28 @@ def _pump_status_lines(
     motor = (motor_style, motor_text)
     model_note = ("demo", " (МОДЕЛЬ)") if motor_is_modelled else ("", "")
     flow = (flow_style, flow_text)
-    flow_cell = _fit_fragments(_styled("ПОДАЧА ", flow), 25, pad=True)
-    dry = ("fault", "СУХОЙ ХОД") if dry_running else ("inactive", "СУХОЙ ХОД НЕТ")
+    dry = ("fault", "ДА") if dry_running else ("inactive", "НЕТ")
     failure_parts = tuple(("fault", failure) for failure in failures) or (("inactive", "ОТКАЗ НЕТ"),)
 
     first = _styled(
         f"{name:<{name_width}} CMD ", command, command_padding,
-        " | МОТОР ", motor, model_note,
+        "  МОТОР ", motor, model_note,
     )
-    second = _styled(indent, *flow_cell, " | ", dry)
-    third_parts: list[tuple[str, object] | object] = [indent]
-    for index, failure in enumerate(failure_parts):
-        if index:
-            third_parts.append(" | ")
-        third_parts.append(failure)
-    third = _styled(*third_parts)
-    compact = [first, second, third]
-    if all(cell_len(_plain(line)) <= width for line in compact):
-        return compact
-
-    # Widths 50–59 use one field per line. Every important state remains
-    # complete; only optional numeric/detail text is prepared by the caller.
     lines = [
-        _styled(f"{name:<{name_width}} CMD ", command),
-        _styled(indent, "МОТОР ", motor, model_note),
-        _styled(indent, "ПОДАЧА ", flow),
-        _styled(indent, dry),
+        first,
+        _styled(indent, f"{'ПОДАЧА':<12}", flow),
+        _styled(indent, f"{'СУХОЙ ХОД':<12}", dry),
     ]
-    lines.extend(_styled(indent, failure) for failure in failure_parts)
+    for style, failure in failure_parts:
+        if failure.startswith("ОТКАЗ "):
+            label, value = "ОТКАЗ", failure.removeprefix("ОТКАЗ ")
+        elif failure.startswith("АВАРИЯ "):
+            label, value = "АВАРИЯ", failure.removeprefix("АВАРИЯ ")
+        else:
+            label, value = "ОТКАЗ", failure
+        lines.append(_styled(indent, f"{label:<12}", (style, value)))
+    if any(cell_len(_plain(line)) > width for line in lines):
+        return [_fit_fragments(line, width) for line in lines]
     return lines
 
 
