@@ -12,8 +12,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from rich.console import Console
-from serial.tools import list_ports
-
 from .bionic_config import BionicSettings, changed, load_settings, save_settings
 from .bionic_events import EventJournal
 from .bionic_model import BionicModel
@@ -56,9 +54,13 @@ class BionicContext:
     model: BionicModel
     journal: EventJournal
     console: Console
-    view: str = "main"
+    view: str = "status"
     log_filter: str = "all"
     test_mode: bool = False
+    screen_mode: bool = False
+    help_query: str = ""
+    notice: str = ""
+    saved: BionicSettings | None = None
 
     def event(self, kind: str, subject: str, message: str) -> None:
         self.journal.add(kind, subject, message)
@@ -112,6 +114,7 @@ def make_context(home: Path, config_path: Path | None = None, *, console: Consol
     model = BionicModel()
     apply_model_settings(settings, model, initial=True)
     ctx = BionicContext(home, path, settings, settings, model, journal, console or Console(), test_mode=test_mode)
+    ctx.saved = settings
     ctx.model.event = ctx.event
     return ctx
 
@@ -161,38 +164,41 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
     if command in {"exit", "quit"}:
         return "exit"
     if command == "help":
-        ctx.console.print(HELP)
+        if len(args) >= 2 and args[0] == "search":
+            ctx.help_query = " ".join(args[1:])
+        elif args:
+            ctx.help_query = " ".join(args)
+        ctx.view = "help"
+        if not ctx.screen_mode:
+            ctx.console.print(HELP)
         return None
     if command == "status":
-        print_view(ctx.console, ctx.view, model, ctx.journal, ctx.settings, ctx.draft)
+        ctx.view = "status"
+        if not ctx.screen_mode:
+            print_view(ctx.console, "status", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
         return None
     if command == "view":
-        allowed = {"main", "settings", "log", "rs485", "tanks", "pumps", "pressure", "irrigation", "light", "sensors"}
+        allowed = {"main", "status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "pressure", "irrigation", "light", "sensors"}
         if len(args) != 1 or args[0] not in allowed:
-            raise ValueError("view: укажите main, settings, log, rs485, tanks, pumps, pressure, irrigation, light или sensors")
-        ctx.view = args[0]
-        print_view(ctx.console, ctx.view, model, ctx.journal, ctx.settings, ctx.draft)
+            raise ValueError("view: укажите status, devices, ports, settings, help, log, rs485, tanks, pumps, pressure, irrigation, light или sensors")
+        ctx.view = "status" if args[0] == "main" else args[0]
+        if not ctx.screen_mode:
+            print_view(ctx.console, ctx.view, model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
         return None
     if command == "ports":
-        ports = list(list_ports.comports())
-        ctx.console.print("\n".join(f"{port.device}: {port.description}" for port in ports) if ports else "Последовательные порты не найдены")
+        ctx.view = "ports"
+        if not ctx.screen_mode:
+            print_view(ctx.console, "ports", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
         return None
     if command == "devices":
-        rows = (
-            (ctx.settings.relay_address, "Waveshare Relay 32CH"),
-            (ctx.settings.ao1_address, "Waveshare AO 8CH №1"),
-            (ctx.settings.ao2_address, "Waveshare AO 8CH №2"),
-            (ctx.settings.ao3_address, "Waveshare AO 8CH №3"),
-            (ctx.settings.ai_address, "Waveshare AI"),
-            (ctx.settings.hp1_address, "Innovert IDD HP1"),
-            (ctx.settings.hp2_address, "Innovert IDD HP2"),
-        )
-        for address, name in rows:
-            ctx.console.print(f"{address:3d}  {name}")
+        ctx.view = "devices"
+        if not ctx.screen_mode:
+            print_view(ctx.console, "devices", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
         return None
     if command == "tank":
         if args == ["list"]:
-            _print_tanks(ctx)
+            ctx.view = "tanks"
+            if not ctx.screen_mode: _print_tanks(ctx)
             return None
         if len(args) != 3 or args[0] not in model.tanks:
             raise ValueError("tank: используйте list или tank <bo|bp|bso1|bso2> <level|capacity|fill-rate> <значение>")
@@ -214,6 +220,8 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         return None
     if command == "pump":
         if args == ["list"]:
+            ctx.view = "pumps"
+            if ctx.screen_mode: return None
             for pump in model.pumps.values():
                 ctx.console.print(f"{pump.id}: команда {'RUN' if model.relay(pump.relay) else 'STOP'}, {pump.actual_flow_lpm:.2f}/{pump.flow_lpm:.2f} л/мин")
             return None
@@ -252,7 +260,9 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         return None
     if command == "pipe":
         if args == ["status"]:
-            ctx.console.print(f"Трубопровод: {'РАЗРУШЕН' if model.pipe_ruptured else 'исправен'}, порог {model.rupture_threshold_bar:g} бар")
+            ctx.view = "pressure"
+            ctx.notice = f"Трубопровод: {'РАЗРУШЕН' if model.pipe_ruptured else 'исправен'}, порог {model.rupture_threshold_bar:g} бар"
+            if not ctx.screen_mode: ctx.console.print(ctx.notice)
         elif args == ["repair"]:
             model.repair_pipe()
         elif len(args) == 2 and args[0] == "rupture-threshold":
@@ -263,6 +273,8 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         return None
     if command == "sensor":
         if args == ["list"]:
+            ctx.view = "sensors"
+            if ctx.screen_mode: return None
             for sensor in model.sensors.values():
                 ctx.console.print(f"{sensor.id}: {'ON' if sensor.value else 'OFF'}; {'AUTO' if sensor.forced is None else 'FORCE'}; порог {sensor.threshold_l:g} л")
             return None
@@ -281,7 +293,9 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         return None
     if command == "fault":
         if args == ["list"]:
-            ctx.console.print(f"leak={'on' if model.leak_enabled else 'off'} rate={model.leak_rate_lpm:g}; blockage={'on' if model.blockage_enabled else 'off'} severity={model.blockage_severity:g}; pipe={'ruptured' if model.pipe_ruptured else 'ok'}")
+            ctx.view = "pressure"
+            ctx.notice = f"leak={'on' if model.leak_enabled else 'off'}; blockage={'on' if model.blockage_enabled else 'off'}; pipe={'ruptured' if model.pipe_ruptured else 'ok'}"
+            if not ctx.screen_mode: ctx.console.print(ctx.notice)
         elif args == ["clear", "all"]:
             model.leak_enabled = model.blockage_enabled = False
             ctx.event("ОПЕРАТОР", "faults", "протечка и засор отключены; труба не ремонтировалась")
@@ -300,7 +314,8 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         return None
     if command == "alarm":
         if args == ["list"]:
-            _print_alarms(ctx)
+            ctx.view = "status"
+            if not ctx.screen_mode: _print_alarms(ctx)
         elif args == ["reset", "all"]:
             model.reset_alarms()
         else:
@@ -330,26 +345,31 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         return None
     if command == "log":
         if len(args) == 2 and args[0] == "last":
+            ctx.view = "log"
             events = ctx.journal.filtered(ctx.log_filter, int(args[1]))
-            for event in events:
-                ctx.console.print(f"{event.at} {event.kind} {event.subject}: {event.message}")
+            if not ctx.screen_mode:
+                for event in events: ctx.console.print(f"{event.at} {event.kind} {event.subject}: {event.message}")
         elif len(args) == 2 and args[0] == "filter" and args[1] in {"alarms", "rs485", "tanks", "pumps", "all"}:
             ctx.log_filter = args[1]
+            ctx.view = "log"
         elif len(args) == 2 and args[0] == "export":
             path = Path(args[1])
             if not path.is_absolute():
                 path = ctx.home / path
             ctx.journal.export_csv(path, ctx.journal.filtered(ctx.log_filter))
-            ctx.console.print(f"Журнал экспортирован: {path}")
+            ctx.notice = f"Журнал экспортирован: {path}"
+            if not ctx.screen_mode: ctx.console.print(ctx.notice)
         else:
             raise ValueError("log last <N> | filter alarms|rs485|tanks|pumps|all | export <файл.csv>")
         return None
     if command == "settings":
         if args == ["list"]:
-            print_view(ctx.console, "settings", model, ctx.journal, ctx.settings, ctx.draft)
+            ctx.view = "settings"
+            if not ctx.screen_mode: print_view(ctx.console, "settings", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved)
         elif len(args) == 3 and args[0] == "set":
             ctx.draft = changed(ctx.draft, args[1], args[2])
-            ctx.console.print(f"Черновик: {args[1]}={getattr(ctx.draft, args[1])}; используйте settings apply или settings save")
+            ctx.notice = f"Черновик: {args[1]}={getattr(ctx.draft, args[1])}"
+            if not ctx.screen_mode: ctx.console.print(ctx.notice)
         elif args == ["apply"]:
             reconnect = any(getattr(ctx.settings, name) != getattr(ctx.draft, name) for name in (
                 "controller_port", "controller_baudrate", "controller_parity", "controller_stopbits",
@@ -364,6 +384,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             return "reconnect" if reconnect else None
         elif args == ["save"]:
             save_settings(ctx.config_path, ctx.draft)
+            ctx.saved = ctx.draft
             ctx.event("ОПЕРАТОР", "settings", f"черновик сохранён в {ctx.config_path}; рабочая модель не изменена")
         else:
             raise ValueError("settings list | set <имя> <значение> | apply | save")

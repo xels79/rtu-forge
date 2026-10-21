@@ -66,6 +66,12 @@ uv run bionic-immitator --home .\bionic-data
 uv run bionic-immitator --home .\bionic-data --no-controller
 ```
 
+Its full-screen interface uses separate status, device, port, settings, help,
+log, RS-485, tank, pump, pressure, irrigation, light, and sensor pages. Use
+`view <page>` or `F1`–`F6` to navigate, the mouse wheel or `PgUp`/`PgDn` to
+scroll, `Tab` for contextual completion, and `Up`/`Down` for persistent command
+history. See [BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md) for the complete key map.
+
 It has its own configuration and event journal and does not modify
 `config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,
 verified Stage 7 Modbus maps, USB safety rules, and hardware assumptions are in

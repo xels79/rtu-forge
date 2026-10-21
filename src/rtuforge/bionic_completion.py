@@ -5,6 +5,7 @@ from __future__ import annotations
 from prompt_toolkit.completion import Completer, Completion
 
 from .bionic_config import OPTION_SPECS
+from .bionic_render import VIEW_NAMES
 
 
 COMMANDS = sorted({
@@ -12,6 +13,11 @@ COMMANDS = sorted({
     "pipe", "ports", "pressure", "pump", "quit", "relay", "sensor",
     "settings", "sim", "status", "tank", "view",
 })
+
+TANKS = ["bo", "bp", "bso1", "bso2"]
+PUMPS = ["bo-to-bp", "bso1-to-bp", "bso2-to-bp"]
+SENSORS = [f"{tank}-{kind}" for tank in TANKS for kind in ("min", "max")]
+DEVICES = ["relay-32ch", "ao-1", "ao-2", "ao-3", "ai-pressure", "hp1", "hp2", "sensor-relay"]
 
 
 def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
@@ -22,19 +28,49 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
     if not completed:
         candidates = COMMANDS if test_mode else [item for item in COMMANDS if item != "relay"]
     elif completed == ["view"]:
-        candidates = ["main", "settings", "log", "rs485", "tanks", "pumps", "pressure", "irrigation", "light", "sensors"]
+        candidates = [*VIEW_NAMES, "main"]
+    elif completed == ["help"]:
+        candidates = ["search"]
+    elif completed == ["devices"]:
+        candidates = DEVICES
     elif completed == ["tank"]:
-        candidates = ["list", "bo", "bp", "bso1", "bso2"]
+        candidates = ["list", *TANKS]
+    elif len(completed) == 2 and completed[0] == "tank" and completed[1] in TANKS:
+        candidates = ["level", "capacity"] + (["fill-rate"] if completed[1] == "bo" else [])
     elif completed == ["pump"]:
-        candidates = ["list", "bo-to-bp", "bso1-to-bp", "bso2-to-bp"]
+        candidates = ["list", *PUMPS]
+    elif len(completed) == 2 and completed[0] == "pump" and completed[1] in PUMPS:
+        candidates = ["flow"]
     elif completed == ["sensor"]:
-        candidates = ["list", "bo-min", "bo-max", "bp-min", "bp-max", "bso1-min", "bso1-max", "bso2-min", "bso2-max"]
+        candidates = ["list", *SENSORS]
+    elif len(completed) == 2 and completed[0] == "sensor" and completed[1] in SENSORS:
+        candidates = ["threshold", "force", "auto"]
+    elif len(completed) == 3 and completed[0] == "sensor" and completed[2] == "force":
+        candidates = ["on", "off"]
+    elif completed == ["pressure"]:
+        candidates = ["target", "range", "rise-time", "fall-time"]
+    elif completed == ["pipe"]:
+        candidates = ["status", "repair", "rupture-threshold"]
+    elif completed == ["irrigation"]:
+        candidates = ["shelf"]
+    elif completed == ["irrigation", "shelf"]:
+        candidates = ["1", "2"]
+    elif len(completed) == 3 and completed[:2] == ["irrigation", "shelf"]:
+        candidates = ["flow-per-tier"]
     elif completed == ["fault"]:
         candidates = ["list", "clear", "leak", "blockage"]
+    elif completed == ["fault", "clear"]:
+        candidates = ["all"]
+    elif completed in (["fault", "leak"], ["fault", "blockage"]):
+        candidates = ["on", "off", "rate" if completed[-1] == "leak" else "severity"]
     elif completed == ["alarm"]:
         candidates = ["list", "reset"]
+    elif completed == ["alarm", "reset"]:
+        candidates = ["all"]
     elif completed == ["sim"]:
         candidates = ["start", "pause", "resume", "speed", "reset"]
+    elif completed == ["sim", "reset"]:
+        candidates = ["--confirm"]
     elif completed == ["settings"]:
         candidates = ["list", "set", "apply", "save"]
     elif completed == ["settings", "set"]:
@@ -43,7 +79,11 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
         candidates = ["last", "filter", "export"]
     elif completed == ["log", "filter"]:
         candidates = ["alarms", "rs485", "tanks", "pumps", "all"]
-    elif completed and completed[-1] in {"leak", "blockage", "force"}:
+    elif completed == ["relay"] and test_mode:
+        candidates = ["force"]
+    elif completed == ["relay", "force"] and test_mode:
+        candidates = [str(channel) for channel in range(1, 33)]
+    elif len(completed) == 3 and completed[:2] == ["relay", "force"] and test_mode:
         candidates = ["on", "off"]
     else:
         candidates = []
