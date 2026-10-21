@@ -142,6 +142,46 @@ def test_settings_show_draft_applied_and_saved_states(tmp_path):
     assert "A/S" in settings_page.lines[row]
 
 
+def test_settings_are_grouped_and_sorted_by_russian_labels(tmp_path):
+    ctx, _ = context(tmp_path)
+    settings_page = page(ctx, "settings", 180)
+    text = "\n".join(settings_page.lines)
+    for title in (
+        "ПОСЛЕДОВАТЕЛЬНЫЕ ПОРТЫ",
+        "БАКИ И ПЕРЕКАЧКА",
+        "ДАВЛЕНИЕ И ГИДРАВЛИКА",
+        "НАСОСЫ — ДЕМОНСТРАЦИОННАЯ ФИЗИЧЕСКАЯ МОДЕЛЬ",
+        "ЧАСТОТНИК HP1",
+    ):
+        assert title in text
+    capacity_keys = [
+        "bp_capacity_l", "bso1_capacity_l", "bso2_capacity_l", "bo_capacity_l",
+    ]
+    positions = [settings_page.row_keys.index(key) for key in capacity_keys]
+    assert positions == sorted(positions)
+
+
+def test_settings_show_editable_estimated_failure_time_for_every_pump(tmp_path):
+    ctx, _ = context(tmp_path)
+    settings_page = page(ctx, "settings", 190)
+    expected = {
+        "bo-to-bp": "120 с (расчётное)",
+        "bso1-to-bp": "120 с (расчётное)",
+        "bso2-to-bp": "120 с (расчётное)",
+        "hp1": "180 с (расчётное)",
+        "hp2": "180 с (расчётное)",
+    }
+    for equipment_id, value in expected.items():
+        key = f"equipment:{equipment_id}:failure_s"
+        row = settings_page.row_keys.index(key)
+        assert value in settings_page.lines[row]
+    execute_command(ctx, "equipment set hp1 failure_s 240")
+    updated = page(ctx, "settings", 190)
+    row = updated.row_keys.index("equipment:hp1:failure_s")
+    assert "240 с (расчётное)" in updated.lines[row]
+    assert "-/-" in updated.lines[row]
+
+
 def test_narrow_pages_are_clipped_without_wrapping(tmp_path):
     ctx, _ = context(tmp_path)
     narrow = page(ctx, "devices", 32)

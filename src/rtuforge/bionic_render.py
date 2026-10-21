@@ -132,6 +132,30 @@ SETTING_LABELS = {
     "simulation_speed":("Скорость симуляции","×"),
 }
 
+SETTINGS_GROUP_TITLES = {
+    "serial": "ПОСЛЕДОВАТЕЛЬНЫЕ ПОРТЫ",
+    "devices": "MODBUS-УСТРОЙСТВА И ФИЗИЧЕСКОЕ РЕЛЕ",
+    "simulation": "СИМУЛЯЦИЯ",
+    "tanks": "БАКИ И ПЕРЕКАЧКА",
+    "irrigation": "ПОЛИВ И ВОЗВРАТ",
+    "sensors": "ДАТЧИКИ УРОВНЯ",
+    "pressure": "ДАВЛЕНИЕ И ГИДРАВЛИКА",
+    "faults": "НЕИСПРАВНОСТИ ТРУБОПРОВОДА",
+    "equipment": "НАСОСЫ — ДЕМОНСТРАЦИОННАЯ ФИЗИЧЕСКАЯ МОДЕЛЬ",
+    "ponics": "PONICPILOT",
+    "ponics_chemistry": "PONICPILOT — ДЕМОНСТРАЦИОННАЯ ХИМИЯ",
+    "drive_hp1": "ЧАСТОТНИК HP1",
+    "drive_hp2": "ЧАСТОТНИК HP2",
+}
+SETTINGS_GROUP_ORDER = tuple(SETTINGS_GROUP_TITLES)
+EQUIPMENT_SETTING_NAMES = {
+    "bo-to-bp": "Насос БО → БП: время до физического отказа",
+    "bso1-to-bp": "Насос БСО1 → БП: время до физического отказа",
+    "bso2-to-bp": "Насос БСО2 → БП: время до физического отказа",
+    "hp1": "Насос высокого давления HP1: время до физического отказа",
+    "hp2": "Насос высокого давления HP2: время до физического отказа",
+}
+
 @dataclass(frozen=True)
 class ScreenPage:
     title: str
@@ -175,11 +199,40 @@ def _technical(section:str,name:str)->str:
     return {"bo_capacity_l":"tanks.bo.capacity_l","bp_capacity_l":"tanks.bp.capacity_l","bso1_capacity_l":"tanks.bso1.capacity_l","bso2_capacity_l":"tanks.bso2.capacity_l"}.get(name,f"{section}.{name}")
 
 def setting_rows(settings:BionicSettings,draft:BionicSettings,saved:BionicSettings,width:int)->tuple[list[str],list[str|None]]:
-    sw=3; tw=max(12,min(34,width*30//100)); vw=max(8,min(20,width*18//100)); lw=max(8,width-tw-sw-vw-9); lines=[ellipsize("A — применено, S — сохранено",width),"",_row([("Техническое имя",tw),("Русское название",lw),("Значение",vw),("A/S",sw)],width)]; keys: list[str | None]=[None,None,None]
+    sw=3; tw=max(12,min(34,width*30//100)); vw=max(8,min(20,width*18//100)); lw=max(8,width-tw-sw-vw-9)
+    grouped:dict[str,list[tuple[str,str,str,str,str]]]={}
     for name,(section,_kind) in OPTION_SPECS.items():
         if name in {"light_profile", "equipment_profile"}:
             continue
-        label,unit=SETTING_LABELS.get(name,(name.replace("_"," "),"")); value=f"{getattr(draft,name)} {unit}".rstrip(); state=("A" if getattr(draft,name)==getattr(settings,name) else "-")+"/"+("S" if getattr(draft,name)==getattr(saved,name) else "-"); lines.append(_row([(_technical(section,name),tw),(label,lw),(value,vw),(state,sw)],width)); keys.append(name)
+        label,unit=SETTING_LABELS.get(name,(name.replace("_"," "),""))
+        value=f"{getattr(draft,name)} {unit}".rstrip()
+        state=("A" if getattr(draft,name)==getattr(settings,name) else "-")+"/"+("S" if getattr(draft,name)==getattr(saved,name) else "-")
+        grouped.setdefault(section,[]).append((_technical(section,name),label,value,state,name))
+    applied_equipment=parse_equipment_profile(settings.equipment_profile)
+    draft_equipment=parse_equipment_profile(draft.equipment_profile)
+    saved_equipment=parse_equipment_profile(saved.equipment_profile)
+    for equipment_id in EQUIPMENT_IDS:
+        draft_value=draft_equipment[equipment_id].failure_s
+        state=("A" if draft_value==applied_equipment[equipment_id].failure_s else "-")+"/"+("S" if draft_value==saved_equipment[equipment_id].failure_s else "-")
+        grouped.setdefault("equipment",[]).append((
+            f"equipment.{equipment_id}.failure_s",
+            EQUIPMENT_SETTING_NAMES[equipment_id],
+            f"{draft_value:g} с (расчётное)",
+            state,
+            f"equipment:{equipment_id}:failure_s",
+        ))
+    lines=[ellipsize("A — применено, S — сохранено. Параметры демонстрационной модели не являются измеренными характеристиками.",width)]
+    keys: list[str | None]=[None]
+    ordered_sections=[*SETTINGS_GROUP_ORDER,*sorted(set(grouped)-set(SETTINGS_GROUP_ORDER))]
+    for section in ordered_sections:
+        rows=grouped.get(section,[])
+        if not rows:
+            continue
+        lines += ["",SETTINGS_GROUP_TITLES.get(section,section.upper()),_row([("Техническое имя",tw),("Русское название",lw),("Значение",vw),("A/S",sw)],width)]
+        keys += [None,None,None]
+        for technical,label,value,state,key in sorted(rows,key=lambda item:item[1].casefold()):
+            lines.append(_row([(technical,tw),(label,lw),(value,vw),(state,sw)],width))
+            keys.append(key)
     return lines,keys
 
 def _relay_link(settings:BionicSettings,state:SensorRelayState|None)->str:

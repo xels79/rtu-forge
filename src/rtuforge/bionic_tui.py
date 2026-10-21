@@ -150,6 +150,9 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
             if selected_setting[0].startswith("sensor:"):
                 sensor_id = selected_setting[0].split(":", 1)[1]
                 set_command(f"sensor {sensor_id} threshold ")
+            elif selected_setting[0].startswith("equipment:"):
+                _, equipment_id, field_name = selected_setting[0].split(":", 2)
+                set_command(f"equipment set {equipment_id} {field_name} ")
             else:
                 set_command(f"settings set {selected_setting[0]} ")
             return

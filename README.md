@@ -113,6 +113,10 @@ real fluid path is unavailable. `view equipment` separates controller command,
 actual operation, flow/pressure, damage, VFD fault, and repair requirement.
 These internal diagnostics add no controller inputs or private Modbus alarm
 registers; repair and replacement require an explicit `--confirm` command.
+The settings page groups parameters by subsystem and sorts each group by its
+Russian display name. It also exposes one estimated physical-failure time per
+pump (120 seconds for transfer pumps and 180 seconds for HP by default); these
+are explicitly labelled demonstration-model values rather than measurements.
 
 It has its own configuration and event journal and does not modify
 `config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,
