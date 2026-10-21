@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import floor
+from rich.cells import cell_len, set_cell_size
 from rich.console import Console
 from rich.text import Text
 from .bionic_config import BionicSettings, OPTION_SPECS, parse_sensor_relay_map
@@ -178,27 +180,325 @@ class ScreenPage:
     lines: list[str]
     row_keys: list[str | None]
     simulation_status: str = ""
+    styled_lines: list[tuple[tuple[str, str], ...]] | None = None
+    layout_mode: str = "single"
+    column_widths: tuple[int, int] | None = None
+
+
+StyledLine = tuple[tuple[str, str], ...]
+RICH_STYLES = {
+    "heading": "bold",
+    "sensor_on": "bold red",
+    "output_on": "bold red",
+    "running": "bold green",
+    "ok": "green",
+    "inactive": "grey62",
+    "warning": "bold yellow",
+    "fault": "bold red",
+    "demo": "dim",
+}
+
+
+def _plain(line: StyledLine) -> str:
+    return "".join(text for _style, text in line)
+
+
+def _styled(*parts: tuple[str, object] | object) -> StyledLine:
+    return tuple(
+        (part[0], str(part[1])) if isinstance(part, tuple) else ("", str(part))
+        for part in parts
+    )
+
+
+def _fit_fragments(line: StyledLine, width: int, *, pad: bool = False) -> StyledLine:
+    """Crop/pad styled text by terminal cells without counting style metadata."""
+    width = max(0, width)
+    if cell_len(_plain(line)) <= width:
+        if pad:
+            return (*line, ("", " " * (width - cell_len(_plain(line)))))
+        return line
+    if width <= 3:
+        return (("", "." * width),)
+    remaining = width - 3
+    result: list[tuple[str, str]] = []
+    for style, text in line:
+        if remaining <= 0:
+            break
+        fragment_width = cell_len(text)
+        if fragment_width <= remaining:
+            result.append((style, text))
+            remaining -= fragment_width
+        else:
+            result.append((style, set_cell_size(text, remaining).rstrip()))
+            remaining = 0
+    result.append(("", "..."))
+    return tuple(result)
 
 def ellipsize(value: object, width: int) -> str:
     text = str(value).replace("\n", " ")
     if width <= 0: return ""
-    if len(text) <= width: return text
-    return "." * width if width <= 3 else text[:width-3] + "..."
+    if cell_len(text) <= width: return text
+    return "." * width if width <= 3 else set_cell_size(text, width-3).rstrip() + "..."
 
 def _row(columns: list[tuple[object,int]], width: int) -> str:
     return ellipsize(" | ".join(ellipsize(v,w).ljust(w) for v,w in columns).rstrip(), width)
 
-def _status(model: BionicModel, journal: EventJournal, width: int) -> list[str]:
-    tanks=["БАКИ"]+[f"{t.id:<4} | {TANK_NAMES[t.id]:<9} | {t.volume_l:7.1f}/{t.capacity_l:7.1f} л | {t.percent:5.1f}%" for t in model.tanks.values()]
-    pumps=["НАСОСЫ"]+[f"{p.id} | {PUMP_NAMES[p.id]} | {'RUN' if model.relay(p.relay) else 'STOP'} | {p.actual_flow_lpm:5.1f} л/мин" for p in model.pumps.values()]
-    process=["ДАВЛЕНИЕ / ПОЛИВ",f"LOW Датчик низкого: {model.low_pressure_bar:.2f} бар | HIGH Датчик высокого: {model.high_pressure_bar:.2f} бар",f"Труба: {'РАЗРУШЕНА' if model.pipe_ruptured else 'исправна'} | Операция: {model.operation}","Ярусы: "+(", ".join(t.id for t in model.tiers.values() if model.relay(t.relay)) or "нет"),"ОСВЕЩЕНИЕ ВКЛ: "+(", ".join(light.name for light in model.lights.values() if model.light_state(light.id)[0]) or "нет"),"ДАТЧИКИ: "+" ".join(f"{s.id}({TANK_NAMES[s.tank_id]})={'ON' if s.value else 'OFF'}" for s in model.sensors.values())]
-    alarms=[a for a in model.alarms.values() if a.state != AlarmState.CLEARED]
-    process.append("АВАРИИ: "+(", ".join(f"{a.code}/{a.subject}" for a in alarms) or "нет"))
-    if width>=90:
-        split=(width-3)//2; left=tanks+[""]+pumps; right=process; count=max(len(left),len(right)); left += [""]*(count-len(left)); right += [""]*(count-len(right)); lines=[ellipsize(a,split).ljust(split)+" │ "+ellipsize(b,split) for a,b in zip(left,right)]
-    else: lines=tanks+[""]+pumps+[""]+process
-    recent=journal.events[-3:]; lines += ["","ПОСЛЕДНИЕ СОБЫТИЯ (3)"]+[f"{e.at[11:19]} {e.kind} {e.subject}: {e.message}" for e in recent]+[""]*(3-len(recent))
-    return [ellipsize(x,width) for x in lines]
+def _heading(value: str) -> StyledLine:
+    return _styled(("heading", value))
+
+
+def _state(value: bool, *, on_style: str = "output_on") -> tuple[str, str]:
+    return (on_style if value else "inactive", "ВКЛ" if value else "ВЫКЛ")
+
+
+def _status_tanks(model: BionicModel) -> list[StyledLine]:
+    names = {"bo": "БО", "bp": "БП", "bso1": "БСО1", "bso2": "БСО2"}
+    lines = [_heading("БАКИ")]
+    for tank_id in ("bo", "bp", "bso1", "bso2"):
+        tank = model.tanks[tank_id]
+        lines.append(_styled(f"{names[tank_id]:<4} {tank.volume_l:7.1f} / {tank.capacity_l:7.1f} л  {tank.percent:5.1f}%"))
+    return lines
+
+
+def _status_sensors(
+    model: BionicModel, settings: BionicSettings,
+    relay_state: SensorRelayState | None,
+) -> tuple[list[StyledLine], list[str]]:
+    names = {"bo": "БО", "bp": "БП", "bso1": "БСО1", "bso2": "БСО2"}
+    mapping = parse_sensor_relay_map(settings.sensor_relay_map)
+    desired = sum(
+        int(model.sensors[sensor_id].value ^ settings.sensor_relay_active_low) << (channel - 1)
+        for sensor_id, channel in mapping.items()
+    )
+    lines = [_heading("ДАТЧИКИ УРОВНЯ")]
+    if settings.hardware_mode:
+        lines.append(_styled(("demo", "MIN/MAX — расчёт; CH — выход реле, не контакт NO/NC")))
+    warnings: list[str] = []
+    if settings.hardware_mode and (relay_state is None or not relay_state.online or relay_state.confirmed is None):
+        warnings.append("USB №2: НЕТ СВЯЗИ, состояние выходов не подтверждено")
+    for tank_id in ("bo", "bp", "bso1", "bso2"):
+        parts: list[tuple[str, object] | object] = [f"{names[tank_id]:<4} "]
+        for kind, label in (("min", "MIN"), ("max", "MAX")):
+            sensor = model.sensors[f"{tank_id}-{kind}"]
+            parts += [f"{label} ", _state(sensor.value, on_style="sensor_on"), f" {sensor.threshold_l:g} л"]
+            if kind == "min":
+                parts.append(" | ")
+        lines.append(_styled(*parts))
+        if settings.hardware_mode:
+            relay_parts: list[tuple[str, object] | object] = ["     реле: "]
+            for kind, label in (("min", "MIN"), ("max", "MAX")):
+                sensor_id = f"{tank_id}-{kind}"
+                channel = mapping[sensor_id]
+                expected = bool(desired & (1 << (channel - 1)))
+                if relay_state is None or not relay_state.online or relay_state.confirmed is None:
+                    relay_parts += [f"{label} CH{channel} ", ("warning", "НЕТ СВЯЗИ")]
+                else:
+                    confirmed = bool(relay_state.confirmed & (1 << (channel - 1)))
+                    relay_parts += [f"{label} CH{channel} ", _state(confirmed)]
+                    if confirmed != expected:
+                        relay_parts += [("warning", " ≠ ТРЕБ.")]
+                        warnings.append(f"{sensor_id}/CH{channel}: треб. {'ВКЛ' if expected else 'ВЫКЛ'}, подтв. {'ВКЛ' if confirmed else 'ВЫКЛ'}")
+                if kind == "min":
+                    relay_parts.append(" | ")
+            lines.append(_styled(*relay_parts))
+    if not settings.hardware_mode:
+        lines.append(_styled(("inactive", "Физическое подтверждение USB №2 отключено")))
+    return lines, warnings
+
+
+def _status_pumps(model: BionicModel) -> list[StyledLine]:
+    lines = [_heading("НАСОСЫ")]
+    short_names = {"bo-to-bp": "БО → БП", "bso1-to-bp": "БСО1 → БП", "bso2-to-bp": "БСО2 → БП"}
+    for pump_id in ("bo-to-bp", "bso1-to-bp", "bso2-to-bp"):
+        pump = model.pumps[pump_id]
+        commanded = model.equipment_commanded(pump_id)
+        # A running motor and hydraulic flow are different observations: a
+        # dry-running pump may still rotate while its measured flow is zero.
+        actual = commanded and not pump.health.failed
+        actual_style = "running" if actual else ("fault" if pump.health.failed else ("warning" if commanded else "inactive"))
+        failure_style = "fault" if pump.health.failed else "inactive"
+        lines.append(_styled(
+            f"{short_names[pump_id]:<9} CMD ", _state(commanded), " | ФАКТ ",
+            (actual_style, "РАБОТАЕТ" if actual else "СТОП"), " | ",
+            (failure_style, PUMP_FAILURE_NAMES.get(pump.health.failure, pump.health.failure)),
+        ))
+        lines.append(_styled(f"          расход {pump.actual_flow_lpm:.2f} л/мин"))
+    for drive_id in ("hp1", "hp2"):
+        drive = model.drives[drive_id]
+        commanded = model.equipment_commanded(drive_id)
+        actual = drive.actual_hz > 0.1 and drive.hydraulic_factor > 0 and not drive.health.failed and not drive.fault
+        actual_style = "running" if actual else ("fault" if drive.health.failed or drive.fault else ("warning" if commanded else "inactive"))
+        failure = drive.health.failure if drive.health.failed else (f"IDD {drive.fault}" if drive.fault else "исправен")
+        lines.append(_styled(
+            f"{drive_id.upper():<9} CMD ", _state(commanded), " | ФАКТ ",
+            (actual_style, "РАБОТАЕТ" if actual else "СТОП"), " | ",
+            ("fault" if drive.health.failed or drive.fault else "inactive", failure),
+        ))
+        lines.append(_styled(f"          частота {drive.actual_hz:.1f} Гц | ток {drive.calculated_current_a:.1f} А"))
+    return lines
+
+
+def _output_parts(model: BionicModel, items: tuple[tuple[str, int], ...]) -> StyledLine:
+    parts: list[tuple[str, object] | object] = []
+    for index, (label, channel) in enumerate(items):
+        if index:
+            parts.append(" | ")
+        parts += [f"{label} DO{channel} ", _state(model.relay(channel))]
+    return _styled(*parts)
+
+
+def _status_outputs(model: BionicModel) -> list[StyledLine]:
+    return [
+        _heading("КЛАПАНЫ И ВЫХОДЫ"),
+        _output_parts(model, (("Наполнение", 22), ("Осмос", 21))),
+        _output_parts(model, (("Бульон", 23), ("Подпор", 1))),
+        _output_parts(model, (("БО→БП", 2), ("БСО1", 17))),
+        _output_parts(model, (("БСО2", 18),)),
+        _output_parts(model, tuple((f"Я{index}", 8 + index) for index in range(1, 4))),
+        _output_parts(model, tuple((f"Я{index}", 8 + index) for index in range(4, 7))),
+        _output_parts(model, (("Выбор HP1", 19), ("HP2", 20))),
+        _output_parts(model, (("RUN HP1", 32), ("HP2", 31))),
+    ]
+
+
+def _status_hydraulics(model: BionicModel) -> list[StyledLine]:
+    return [
+        _heading("ГИДРАВЛИКА"),
+        _styled(f"LOW {model.low_pressure_bar:.2f} бар | HIGH {model.high_pressure_bar:.2f} бар"),
+        _styled(f"Расход {model.calculated_flow_lpm:.2f} л/мин | цель {model.pressure_target_bar:.2f} бар"),
+        _styled("Трубопровод: ", ("fault" if model.pipe_ruptured else "ok", "РАЗРУШЕН" if model.pipe_ruptured else "ИСПРАВЕН")),
+    ]
+
+
+def _status_ponics(model: BionicModel) -> list[StyledLine]:
+    p = model.ponics
+    dose_total = sum(p.dosing_totals.values())
+    return [
+        _heading("PONICPILOT · БП"),
+        _styled(f"pH {p.tank.ph:.2f} | EC {p.tank.ec_ms_cm:.2f} мСм/см"),
+        _styled(f"Температура {p.tank.temperature_c:.1f} °C"),
+        _styled(f"Дозирование: {PONICS_STATE_LABELS.get(p.state, p.state)} | всего {dose_total:.1f} мл"),
+        _styled("Устройство ID5: ", ("ok" if p.respond else "fault", "ГОТОВО" if p.respond else "НЕТ ОТВЕТА")),
+        _styled(("demo", PONICS_DEMO_LABEL)),
+    ]
+
+
+def _status_drives(model: BionicModel) -> list[StyledLine]:
+    lines = [_heading("ЧАСТОТНИКИ")]
+    for drive_id in ("hp1", "hp2"):
+        drive = model.drives[drive_id]
+        command = model.drive_input_command(drive)
+        faulted = bool(drive.fault)
+        lines.append(_styled(
+            f"{drive_id.upper()} CMD ", _state(command), " | ",
+            ("fault" if faulted else "inactive", f"АВАРИЯ {drive.fault}" if faulted else "ошибок нет"),
+        ))
+        lines.append(_styled(
+            f"    задано {drive.target_hz():.1f} Гц | факт {drive.actual_hz:.1f} Гц | ток {drive.calculated_current_a:.1f} А",
+        ))
+    return lines
+
+
+def _status_lights(model: BionicModel) -> list[StyledLine]:
+    lines = [_heading("ОСВЕЩЕНИЕ")]
+    role_short = {"red": "R", "far_red": "FR", "blue": "B", "white": "W", "brightness": "BR"}
+    for rack in (1, 2):
+        parts: list[tuple[str, object] | object] = [f"Стеллаж {rack}: "]
+        rack_lights = sorted((light for light in model.lights.values() if light.rack == rack), key=lambda item: item.tier)
+        for index, light in enumerate(rack_lights):
+            if index:
+                parts.append(" | ")
+            powered = model.relay(light.power_relay)
+            active = [role_short.get(role, role) for role, state in model.light_channel_state(light.id).items() if state[3] > 0]
+            channels = f"[{','.join(active) or '—'}]" if light.light_type == LightType.SPECTRAL_4 else ""
+            parts += [f"Я{light.tier} ", _state(powered), channels]
+        lines.append(_styled(*parts))
+    return lines
+
+
+def _status_alarms(model: BionicModel, journal: EventJournal, relay_warnings: list[str]) -> list[StyledLine]:
+    alarms = [alarm for alarm in model.alarms.values() if alarm.state != AlarmState.CLEARED]
+    equipment_failures = [equipment_id for equipment_id in EQUIPMENT_IDS if model.equipment_health(equipment_id).failed]
+    count = len(alarms) + len(relay_warnings)
+    lines = [_heading("АВАРИИ"), _styled("Активных: ", ("fault" if count else "ok", str(count)))]
+    for alarm in alarms[-2:]:
+        lines.append(_styled(("fault", f"{alarm.code}/{alarm.subject}: {alarm.state.value}")))
+    if equipment_failures:
+        lines.append(_styled(("fault", "Отказы: " + ", ".join(equipment_failures))))
+    if model.pipe_ruptured and not any(alarm.code == "PIPE_RUPTURE" for alarm in alarms):
+        lines.append(_styled(("fault", "PIPE_RUPTURE/pipe")))
+    for warning in relay_warnings[:2]:
+        lines.append(_styled(("warning", "РЕЛЕ: " + warning)))
+    recent = journal.events[-3:]
+    lines += [_styled("События: нет")] if not recent else [
+        _styled(f"{event.at[11:19]} {event.kind} {event.subject}: {event.message}") for event in recent
+    ]
+    return lines
+
+
+def _status_link(settings: BionicSettings, relay_state: SensorRelayState | None) -> list[StyledLine]:
+    lines = [_heading("СВЯЗЬ")]
+    lines.append(_styled(f"USB №1 {settings.controller_port}: ", ("inactive", "НАСТРОЕНО (без readback порта)")))
+    if not settings.hardware_mode:
+        lines.append(_styled(f"USB №2 {settings.sensor_relay_port}: ", ("inactive", "ОТКЛЮЧЕНО")))
+    elif relay_state is not None and relay_state.online:
+        mismatch = relay_state.confirmed != relay_state.desired
+        lines.append(_styled(
+            f"USB №2 {settings.sensor_relay_port}: ",
+            ("warning" if mismatch else "ok", "РАСХОЖДЕНИЕ" if mismatch else "ПОДТВЕРЖДЕНО FC01"),
+        ))
+    else:
+        lines.append(_styled(f"USB №2 {settings.sensor_relay_port}: ", ("warning", "НЕТ СВЯЗИ")))
+    if relay_state is not None and relay_state.error:
+        lines.append(_styled(("fault" if not relay_state.online else "warning", "Ошибка: " + relay_state.error)))
+    return lines
+
+
+def _join_status_columns(
+    left: list[StyledLine], right: list[StyledLine], width: int,
+) -> tuple[list[StyledLine], tuple[int, int]]:
+    content_width = width - 5
+    left_width = floor(content_width * 0.56)
+    right_width = content_width - left_width
+    count = max(len(left), len(right))
+    left = [*left, *([tuple()] * (count - len(left)))]
+    right = [*right, *([tuple()] * (count - len(right)))]
+    return [
+        (("", " "), *_fit_fragments(left[index], left_width, pad=True), ("", " │ "),
+         *_fit_fragments(right[index], right_width, pad=True), ("", " "))
+        for index in range(count)
+    ], (left_width, right_width)
+
+
+def _status(
+    model: BionicModel, journal: EventJournal, settings: BionicSettings,
+    relay_state: SensorRelayState | None, width: int,
+) -> tuple[list[str], list[StyledLine], str, tuple[int, int] | None]:
+    sensors, relay_warnings = _status_sensors(model, settings, relay_state)
+    tanks = _status_tanks(model)
+    pumps = _status_pumps(model)
+    outputs = _status_outputs(model)
+    hydraulics = _status_hydraulics(model)
+    ponics = _status_ponics(model)
+    drives = _status_drives(model)
+    lights = _status_lights(model)
+    alarms = _status_alarms(model, journal, relay_warnings)
+    link = _status_link(settings, relay_state)
+    if width >= 110:
+        left = tanks + [tuple()] + sensors + [tuple()] + pumps + [tuple()] + outputs + [tuple()] + hydraulics
+        right = ponics + [tuple()] + drives + [tuple()] + lights + [tuple()] + alarms + [tuple()] + link
+        styled_lines, column_widths = _join_status_columns(left, right, width)
+        mode = "double"
+    else:
+        styled_lines = []
+        for block in (tanks, sensors, pumps, ponics, drives, hydraulics, outputs, lights, alarms, link):
+            if styled_lines:
+                styled_lines.append(tuple())
+            styled_lines.extend(_fit_fragments(line, width) for line in block)
+        column_widths = None
+        mode = "single"
+    lines = [_plain(line) for line in styled_lines]
+    return lines, styled_lines, mode, column_widths
 
 def _devices(s:BionicSettings,width:int)->list[str]:
     rows=[("relay-32ch","Релейный модуль Waveshare 32CH",s.relay_address,"виртуальный"),("ao-1","Аналоговый выход №1",s.ao1_address,"виртуальный"),("ao-2","Аналоговый выход №2",s.ao2_address,"виртуальный"),("ao-3","Аналоговый выход №3",s.ao3_address,"виртуальный"),("ponics","PonicPilot 32 — бак БП",s.ponics_address,"виртуальный"),("ai-pressure","Аналоговый вход давления",s.ai_address,"виртуальный"),("hp1","Частотник высокого давления 1",s.hp1_address,"виртуальный"),("hp2","Частотник высокого давления 2",s.hp2_address,"виртуальный"),("sensor-relay","Физическое реле датчиков уровня",s.sensor_relay_id,"физический/USB №2")]
@@ -602,7 +902,11 @@ def _drive(model:BionicModel,drive_id:str,width:int)->list[str]:
 
 def render_page(name:str,model:BionicModel,journal:EventJournal,settings:BionicSettings,draft:BionicSettings,saved:BionicSettings,*,width:int,log_filter:str="all",help_query:str="",relay_state:SensorRelayState|None=None)->ScreenPage:
     name="status" if name=="main" else name; keys:list[str|None]=[]
-    if name=="status": lines=_status(model,journal,width)
+    styled_lines: list[StyledLine] | None = None
+    layout_mode = "single"
+    column_widths: tuple[int, int] | None = None
+    if name=="status":
+        lines,styled_lines,layout_mode,column_widths=_status(model,journal,settings,relay_state,width)
     elif name=="devices": lines=_devices(settings,width)
     elif name=="ports": lines=_ports(settings,width)
     elif name=="settings": lines,keys=_settings(model,settings,draft,saved,relay_state,width)
@@ -631,11 +935,19 @@ def render_page(name:str,model:BionicModel,journal:EventJournal,settings:BionicS
         title=VIEW_TITLES.get(name,name.upper())
     return ScreenPage(
         title,[ellipsize(x,width) for x in lines],keys or [None]*len(lines),
-        simulation_status(model),
+        simulation_status(model),styled_lines,layout_mode,column_widths,
     )
 
 def visible_lines(page:ScreenPage,*,height:int,scroll:int=0)->list[str]:
     height=max(1,height); start=min(max(scroll,0),max(0,len(page.lines)-height)); lines=page.lines[start:start+height]; return lines+[""]*(height-len(lines))
 
 def print_view(console:Console,name:str,model:BionicModel,journal:EventJournal,settings:BionicSettings,draft:BionicSettings,saved:BionicSettings|None=None,relay_state:SensorRelayState|None=None)->None:
-    page=render_page(name,model,journal,settings,draft,saved or settings,width=console.width,relay_state=relay_state); console.print(Text("BIONIC IMMITATOR — "+page.simulation_status+" | "+page.title+"\n"+"\n".join(page.lines)))
+    page=render_page(name,model,journal,settings,draft,saved or settings,width=console.width,relay_state=relay_state)
+    output=Text("BIONIC IMMITATOR — "+page.simulation_status+" | "+page.title+"\n")
+    for index,line in enumerate(page.lines):
+        fragments=(page.styled_lines[index] if page.styled_lines is not None else (("",line),))
+        for style,text in fragments:
+            output.append(text,style=RICH_STYLES.get(style,""))
+        if index < len(page.lines)-1:
+            output.append("\n")
+    console.print(output)

@@ -1,7 +1,9 @@
 from pathlib import Path
 from dataclasses import replace
 
+import pytest
 from rich.console import Console
+from rich.cells import cell_len
 
 from rtuforge.bionic_cli import execute_command, make_context
 from rtuforge.bionic_completion import completion_candidates
@@ -20,7 +22,7 @@ def page(ctx, name: str, width: int = 120):
     return render_page(
         name, ctx.model, ctx.journal, ctx.settings, ctx.draft,
         ctx.saved or ctx.settings, width=width, log_filter=ctx.log_filter,
-        help_query=ctx.help_query,
+        help_query=ctx.help_query, relay_state=ctx.sensor_relay_state,
     )
 
 
@@ -33,7 +35,7 @@ def test_required_views_have_separate_content(tmp_path):
     ports = "\n".join(page(ctx, "ports").lines)
 
     assert set(VIEW_NAMES) >= {"status", "devices", "ports", "settings", "help", "log"}
-    assert "БАКИ" in status and "ПОСЛЕДНИЕ СОБЫТИЯ (3)" in status
+    assert "БАКИ" in status and "АВАРИИ" in status and "СВЯЗЬ" in status
     assert "ОБЩИЕ" not in status and "Техническое имя" not in status
     assert "ОБЩИЕ" in help_text and "БАКИ" in help_text and "Техническое имя" not in help_text
     assert "Техническое имя" in settings and "Время набора давления" in settings
@@ -110,13 +112,102 @@ def test_none_light_does_not_show_false_brightness(tmp_path):
     assert "70.0%" not in zone_text
 
 
-def test_main_page_lists_only_powered_light_tiers(tmp_path):
+def test_main_page_lists_all_light_tiers_and_marks_power(tmp_path):
     ctx, _ = context(tmp_path)
     ctx.model.set_relay(3, True)
     text = "\n".join(page(ctx, "status", 180).lines)
-    light_line = next(line for line in text.splitlines() if "ОСВЕЩЕНИЕ ВКЛ:" in line)
-    assert "Стеллаж 1, ярус 1" in light_line
-    assert "Стеллаж 1, ярус 2" not in light_line
+    rack_line = next(line for line in text.splitlines() if "Стеллаж 1:" in line)
+    assert "Я1 ВКЛ" in rack_line
+    assert "Я2 ВЫКЛ" in rack_line and "Я3 ВЫКЛ" in rack_line
+
+
+@pytest.mark.parametrize("width", [50, 59, 60, 79, 80, 109, 110, 120, 160])
+def test_status_layout_respects_terminal_cells_at_required_widths(tmp_path, width):
+    ctx, _ = context(tmp_path)
+    rendered = page(ctx, "status", width)
+    assert rendered.layout_mode == ("double" if width >= 110 else "single")
+    assert all(cell_len(line) <= width for line in rendered.lines)
+    text = "\n".join(rendered.lines)
+    assert text.count("MIN ") == 4 and text.count("MAX ") == 4
+    for pump in ("БО → БП", "БСО1 → БП", "БСО2 → БП", "HP1", "HP2"):
+        assert pump in text
+    for heading in (
+        "БАКИ", "ДАТЧИКИ УРОВНЯ", "НАСОСЫ", "PONICPILOT · БП",
+        "ЧАСТОТНИКИ", "ГИДРАВЛИКА", "КЛАПАНЫ И ВЫХОДЫ",
+        "ОСВЕЩЕНИЕ", "АВАРИИ", "СВЯЗЬ",
+    ):
+        assert heading in text
+
+
+def test_status_exact_column_boundary_and_120_geometry(tmp_path):
+    ctx, _ = context(tmp_path)
+    assert page(ctx, "status", 109).layout_mode == "single"
+    at_110 = page(ctx, "status", 110)
+    assert at_110.layout_mode == "double"
+    at_120 = page(ctx, "status", 120)
+    assert at_120.column_widths == (64, 51)
+    assert " │ " in at_120.lines[0]
+    assert at_120.lines[0].split(" │ ", 1)[1].lstrip().startswith("PONICPILOT · БП")
+    assert all(cell_len(line) == 120 for line in at_120.lines)
+
+
+def test_status_single_column_order_is_stable(tmp_path):
+    ctx, _ = context(tmp_path)
+    expected = (
+        "БАКИ", "ДАТЧИКИ УРОВНЯ", "НАСОСЫ", "PONICPILOT · БП",
+        "ЧАСТОТНИКИ", "ГИДРАВЛИКА", "КЛАПАНЫ И ВЫХОДЫ",
+        "ОСВЕЩЕНИЕ", "АВАРИИ", "СВЯЗЬ",
+    )
+    before = "\n".join(page(ctx, "status", 80).lines)
+    ctx.model.tanks["bo"].volume_l = 10
+    ctx.model.drives["hp1"].actual_hz = 42
+    after = "\n".join(page(ctx, "status", 80).lines)
+    assert [before.index(item) for item in expected] == sorted(before.index(item) for item in expected)
+    assert [after.index(item) for item in expected] == sorted(after.index(item) for item in expected)
+
+
+def test_status_semantic_colours_follow_fact_not_only_commands(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.model.set_relay(22, True)
+    ctx.model.set_relay(ctx.model.pumps["bo-to-bp"].relay, True)
+    pump = ctx.model.pumps["bo-to-bp"]
+    pump.actual_flow_lpm = 4.0
+    drive = ctx.model.drives["hp1"]
+    drive.actual_hz = 42.0
+    drive.fault = 10
+    rendered = page(ctx, "status", 120)
+    fragments = [fragment for line in rendered.styled_lines or [] for fragment in line]
+    assert ("sensor_on", "ВКЛ") in fragments
+    assert ("output_on", "ВКЛ") in fragments
+    assert ("running", "РАБОТАЕТ") in fragments
+    hp1_lines = [
+        line for line in rendered.styled_lines or []
+        if "HP1" in "".join(text for _style, text in line)
+    ]
+    assert hp1_lines
+    assert not any(style == "running" for line in hp1_lines for style, _text in line)
+    assert any(style == "fault" for line in hp1_lines for style, _text in line)
+    assert all("\x1b" not in line for line in rendered.lines)
+
+
+def test_status_relay_confirmation_mismatch_and_offline_are_visible(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.settings = ctx.draft = replace(ctx.settings, hardware_mode=True)
+    ctx.sensor_relay_state = SensorRelayState(desired=1, confirmed=0, online=True)
+    mismatch = page(ctx, "status", 120)
+    mismatch_text = "\n".join(mismatch.lines)
+    assert "≠ ТРЕБ." in mismatch_text and "РАСХОЖДЕНИЕ" in mismatch_text
+    assert any(
+        style == "warning" and "ТРЕБ" in text
+        for line in mismatch.styled_lines or [] for style, text in line
+    )
+    ctx.sensor_relay_state = SensorRelayState(desired=1, confirmed=None, online=False, error="нет ответа")
+    offline = page(ctx, "status", 120)
+    assert "НЕТ СВЯЗИ" in "\n".join(offline.lines)
+    assert any(
+        style == "warning" and text == "НЕТ СВЯЗИ"
+        for line in offline.styled_lines or [] for style, text in line
+    )
 
 
 def test_status_has_exactly_three_recent_event_slots(tmp_path):

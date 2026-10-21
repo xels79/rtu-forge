@@ -71,12 +71,22 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
         fragments = [("class:title", f"BIONIC IMMITATOR — {page.simulation_status} | {page.title}\n")]
         for local_row, line in enumerate(visible):
             absolute_row = scroll + local_row
-            style = ""
+            selected = False
             if ctx.view in {"settings", "sensors", "ponics-settings", "light-settings"} and absolute_row < len(page.row_keys):
                 if page.row_keys[absolute_row] == selected_setting[0]:
-                    style = "class:selected"
+                    selected = True
             suffix = "\n" if local_row < height - 1 else ""
-            fragments.append((style, line + suffix, mouse_handler(absolute_row)))
+            line_fragments = (
+                page.styled_lines[absolute_row]
+                if page.styled_lines is not None and absolute_row < len(page.styled_lines)
+                else (("", line),)
+            )
+            if not line_fragments:
+                line_fragments = (("", ""),)
+            for fragment_index, (semantic_style, text) in enumerate(line_fragments):
+                style = "class:selected" if selected else (f"class:{semantic_style}" if semantic_style else "")
+                tail = suffix if fragment_index == len(line_fragments) - 1 else ""
+                fragments.append((style, text + tail, mouse_handler(absolute_row)))
         return FormattedText(fragments)
 
     body = FormattedTextControl(screen_text, focusable=False)
@@ -249,7 +259,12 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
     app = Application(
         layout=Layout(root, focused_element=command), key_bindings=bindings,
         full_screen=True, mouse_support=True,
-        style=Style.from_dict({"title": "bold", "selected": "reverse", "status": "bg:#444444 #ffffff"}),
+        style=Style.from_dict({
+            "title": "bold", "selected": "reverse", "status": "bg:#444444 #ffffff",
+            "heading": "bold", "sensor_on": "bold #ff5f57", "output_on": "bold #ff5f57",
+            "running": "bold #00aa00", "ok": "#00aa00", "inactive": "#888888",
+            "warning": "bold #d7af00", "fault": "bold #ff0000", "demo": "#888888",
+        }),
     )
     stop = threading.Event()
     ctx.screen_mode = True
