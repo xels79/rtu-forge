@@ -13,6 +13,9 @@ from enum import Enum
 from math import sqrt
 from typing import Callable
 
+from .bionic_equipment import (
+    FACTORY_EQUIPMENT_PROFILES, EquipmentHealth, EquipmentProfile,
+)
 from .bionic_idd import IDD_FAULT_OVERLOAD_RUNNING, validate_idd_parameter
 from .bionic_lights import FACTORY_LIGHTS, LightConfig, LightType, brightness_percent
 from .bionic_ponics import PonicsPilot
@@ -199,12 +202,26 @@ class TransferPump:
     start_s: float = 1.0
     stop_s: float = 1.0
     coefficient: float = 1.0
-    failed: bool = False
     actual_flow_lpm: float = 0.0
     total_l: float = 0.0
+    health: EquipmentHealth = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.health = EquipmentHealth.create(FACTORY_EQUIPMENT_PROFILES[self.id])
+
+    @property
+    def failed(self) -> bool:
+        return self.health.failed
+
+    @property
+    def repair_required(self) -> bool:
+        return self.health.repair_required
 
     def update(self, commanded: bool, dt_s: float) -> float:
-        target = self.flow_lpm * self.coefficient if commanded and not self.failed else 0.0
+        target = (
+            self.flow_lpm * self.coefficient * self.health.performance_factor
+            if commanded else 0.0
+        )
         duration = self.start_s if target > self.actual_flow_lpm else self.stop_s
         step = self.flow_lpm * dt_s / max(duration, 1e-9)
         if self.actual_flow_lpm < target:
@@ -251,18 +268,18 @@ class Drive:
     overload_protection_enabled: bool = True
     overload_threshold_multiplier: float = 1.5
     protection_behavior: str = "latched_reset"
-    mechanical_failure: str = "none"
-    mechanical_damage: float = 0.0
     calculated_current_a: float = 0.0
     calculated_load: float = 0.0
     overload_elapsed_s: float = 0.0
     protection_state: str = "READY"
     configuration: dict[int, int] = field(default_factory=dict)
+    health: EquipmentHealth = field(init=False)
     configuration_changed: Callable[[int, int], None] = field(
         default=lambda _address, _value: None, repr=False, compare=False,
     )
 
     def __post_init__(self) -> None:
+        self.health = EquipmentHealth.create(FACTORY_EQUIPMENT_PROFILES[self.id])
         if not self.configuration:
             self.configuration = {
                 # Standalone model tests use the physical RUN terminals.  The
@@ -302,7 +319,11 @@ class Drive:
         self.configuration_changed(address, value)
 
     def commanded(self, terminal_run: bool, selected: bool) -> bool:
-        if not self.online or self.fault or not selected:
+        return self.input_command(terminal_run, selected) and self.online and not self.fault
+
+    def input_command(self, terminal_run: bool, selected: bool) -> bool:
+        """Return the physical controller command before internal VFD protection."""
+        if not selected:
             return False
         if self.control_source == "terminals":
             return terminal_run
@@ -312,24 +333,38 @@ class Drive:
 
     @property
     def repair_required(self) -> bool:
-        return self.mechanical_failure != "none" or self.mechanical_damage > 0
+        return self.health.repair_required
+
+    @property
+    def mechanical_failure(self) -> str:
+        return self.health.failure
+
+    @mechanical_failure.setter
+    def mechanical_failure(self, value: str) -> None:
+        self.health.failure = value
+        if value != "none":
+            self.health.state = "FAILED"
+        elif self.health.damage > 0:
+            self.health.state = "DEGRADED"
+        else:
+            self.health.state = "HEALTHY"
+
+    @property
+    def mechanical_damage(self) -> float:
+        return self.health.damage
+
+    @mechanical_damage.setter
+    def mechanical_damage(self, value: float) -> None:
+        self.health.damage = min(1.0, max(0.0, value))
+        if self.health.failure == "none":
+            self.health.state = "DEGRADED" if self.health.damage > 0 else "HEALTHY"
 
     @property
     def hydraulic_factor(self) -> float:
-        if self.mechanical_failure in {"jammed", "motor_failure"}:
-            return 0.0
-        if self.mechanical_failure == "impeller_damage":
-            return 0.2
-        if self.mechanical_failure == "loss_of_prime":
-            return 0.05
-        wear = self.mechanical_damage
-        if self.mechanical_failure == "dry_run_wear":
-            return max(0.0, 1.0 - min(1.0, wear))
-        return max(0.0, 1.0 - 0.8 * min(1.0, wear))
+        return self.health.performance_factor
 
     def repair(self) -> None:
-        self.mechanical_failure = "none"
-        self.mechanical_damage = 0.0
+        self.health.repair()
         self.overload_elapsed_s = 0.0
 
     def reset_fault(self) -> None:
@@ -357,8 +392,6 @@ class Drive:
 
     def update(self, external_run: bool, selected: bool, dt_s: float) -> None:
         running = self.commanded(external_run, selected)
-        if running and self.mechanical_failure == "dry_run_wear":
-            self.mechanical_damage = min(1.0, self.mechanical_damage + dt_s / 300.0)
         target = self.target_hz() if running else 0.0
         duration = self.ramp_up_s if target > self.actual_hz else self.ramp_down_s
         step = max(self.setpoint_hz, 1.0) * dt_s / max(duration, 1e-9)
@@ -378,7 +411,7 @@ class Drive:
         elif self.mechanical_failure == "motor_failure":
             self.calculated_load = 0.0
             self.calculated_current_a = 0.0
-        elif self.mechanical_failure in {"loss_of_prime", "dry_run_wear"}:
+        elif self.health.dry_running or self.mechanical_failure in {"loss_of_prime", "dry_run_wear"}:
             self.calculated_load = 0.1
             self.calculated_current_a = self.no_load_current_a * max(ratio, 0.2)
         else:
@@ -537,6 +570,15 @@ class BionicModel:
         """Apply a mapping without changing any controller-owned output."""
         self.lights = {light.id: light for light in profile}
 
+    def configure_equipment(
+        self, profiles: dict[str, EquipmentProfile], *, initial: bool = False,
+    ) -> None:
+        """Apply damage parameters without changing controller commands."""
+        for equipment_id, pump in self.pumps.items():
+            pump.health.configure(profiles[equipment_id], initial=initial)
+        for drive_id, drive in self.drives.items():
+            drive.health.configure(profiles[drive_id], initial=initial)
+
     def light_channel_state(self, zone_id: str) -> dict[str, tuple[int, int, float, float]]:
         """Return role -> (Modbus ID, AO, volts, requested brightness percent)."""
         light = self.lights[zone_id]
@@ -649,10 +691,14 @@ class BionicModel:
         self._add_solution(tank_id, self.tanks[tank_id].sample(litres))
 
     def _transfer(self, pump: TransferPump, dt_s: float) -> None:
-        flow = pump.update(self.relay(pump.relay), dt_s)
+        commanded = self.relay(pump.relay)
+        flow = pump.update(commanded, dt_s)
         requested = flow * dt_s / 60.0
         parcel = self.tanks[pump.source].take_solution(requested)
         actual = parcel.volume_l
+        water_available = not commanded or requested <= 1e-12 or actual + 1e-12 >= requested
+        self._update_equipment_health(pump.id, pump.health, commanded, water_available, dt_s)
+        pump.actual_flow_lpm = actual * 60.0 / max(dt_s, 1e-9)
         self.tanks[pump.source].outflow_lpm += actual * 60.0 / max(dt_s, 1e-9)
         self.tanks[pump.destination].inflow_lpm += actual * 60.0 / max(dt_s, 1e-9)
         pump.total_l += actual
@@ -661,6 +707,23 @@ class BionicModel:
             self._alarm("WATER_SHORTAGE", pump.source, True)
         elif self.tanks[pump.source].volume_l > 0:
             self._alarm("WATER_SHORTAGE", pump.source, False)
+
+    def _update_equipment_health(
+        self, equipment_id: str, health: EquipmentHealth, commanded: bool,
+        water_available: bool, dt_s: float,
+    ) -> None:
+        previous_state, previous_warning = health.update(commanded, water_available, dt_s)
+        if health.state != previous_state:
+            self.event(
+                "ОБОРУДОВАНИЕ", equipment_id,
+                f"{previous_state} -> {health.state}; износ {health.damage * 100:.1f}%",
+            )
+        if health.warning_active and not previous_warning:
+            self.event("АВАРИЯ", equipment_id, "достигнут порог сухого хода")
+        if health.state == "FAILED" and previous_state != "FAILED" and commanded:
+            self.event("ОБОРУДОВАНИЕ", equipment_id, "физический отказ; команда платы остаётся ВКЛ/RUN")
+        self._alarm("DRY_RUN", equipment_id, health.dry_running)
+        self._alarm("EQUIPMENT_FAILURE", equipment_id, health.failed)
 
     def apply_ponics_dose(self, reagent: str, millilitres: float) -> None:
         """Apply a PonicPilot dose exclusively to the shared BP solution."""
@@ -696,6 +759,40 @@ class BionicModel:
         return drive.commanded(
             self.relay(drive.run_relay), self.relay(drive.selector_relay),
         )
+
+    def drive_input_command(self, drive: Drive) -> bool:
+        """Return the selected controller command even when the VFD has tripped."""
+        return drive.input_command(
+            self.relay(drive.run_relay), self.relay(drive.selector_relay),
+        )
+
+    def equipment_health(self, equipment_id: str) -> EquipmentHealth:
+        if equipment_id in self.pumps:
+            return self.pumps[equipment_id].health
+        if equipment_id in self.drives:
+            return self.drives[equipment_id].health
+        raise ValueError(f"Неизвестное оборудование: {equipment_id}")
+
+    def equipment_commanded(self, equipment_id: str) -> bool:
+        if equipment_id in self.pumps:
+            return self.relay(self.pumps[equipment_id].relay)
+        if equipment_id in self.drives:
+            return self.drive_input_command(self.drives[equipment_id])
+        raise ValueError(f"Неизвестное оборудование: {equipment_id}")
+
+    def repair_equipment(self, equipment_id: str, *, replace: bool = False) -> bool:
+        commanded = self.equipment_commanded(equipment_id)
+        health = self.equipment_health(equipment_id)
+        if replace:
+            health.replace()
+            action = "заменено"
+        else:
+            health.repair()
+            action = "отремонтировано"
+        self._alarm("EQUIPMENT_FAILURE", equipment_id, False)
+        self._alarm("DRY_RUN", equipment_id, False)
+        self.event("ОПЕРАТОР", equipment_id, f"оборудование {action}; команда платы не изменена")
+        return commanded
 
     def _blockage_aperture(self) -> float:
         if not self.blockage_enabled:
@@ -791,6 +888,13 @@ class BionicModel:
         self.low_pressure_bar = self._smooth(
             self.low_pressure_bar, boost_target, self.boost_rise_s, self.boost_fall_s, dt_s
         )
+
+        hp_water_available = self.relay(self.outputs["boost"]) and boost_has_water
+        for drive in self.drives.values():
+            self._update_equipment_health(
+                drive.id, drive.health, drive.actual_hz > 0.1,
+                hp_water_available, dt_s,
+            )
 
         active_tiers = [tier for tier in self.tiers.values() if self.relay(tier.relay)]
         pressure_target = self._pressure_target(len(active_tiers))

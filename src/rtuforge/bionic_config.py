@@ -6,6 +6,7 @@ import configparser
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
+from .bionic_equipment import FACTORY_EQUIPMENT_PROFILE, parse_equipment_profile
 from .bionic_idd import validate_idd_parameter
 from .bionic_lights import FACTORY_LIGHT_PROFILE, parse_light_profile, validate_light_profile
 
@@ -46,6 +47,14 @@ class BionicSettings:
     bp_initial_l: float = 250.0
     bso1_initial_l: float = 20.0
     bso2_initial_l: float = 20.0
+    bo_min_threshold_l: float = 100.0
+    bo_max_threshold_l: float = 400.0
+    bp_min_threshold_l: float = 100.0
+    bp_max_threshold_l: float = 400.0
+    bso1_min_threshold_l: float = 40.0
+    bso1_max_threshold_l: float = 160.0
+    bso2_min_threshold_l: float = 40.0
+    bso2_max_threshold_l: float = 160.0
     fill_flow_lpm: float = 3.0
     bo_to_bp_flow_lpm: float = 10.0
     bso1_to_bp_flow_lpm: float = 8.0
@@ -73,6 +82,7 @@ class BionicSettings:
     leak_pressure_factor: float = 0.25
     blockage_severity: float = 70.0
     light_profile: str = FACTORY_LIGHT_PROFILE
+    equipment_profile: str = FACTORY_EQUIPMENT_PROFILE
     ponics_irrigation_on_s: int = 60
     ponics_irrigation_pause_s: int = 300
     ponics_mode: int = 0
@@ -174,12 +184,14 @@ def _section(name: str) -> str:
         return "ponics_chemistry"
     if name.endswith("_address") or name.startswith("sensor_relay"):
         return "devices"
+    if name.endswith("_threshold_l") or name.startswith("sensor_"):
+        return "sensors"
+    if name == "equipment_profile":
+        return "equipment"
     if name.startswith(("bo_", "bp_", "bso1_", "bso2_", "fill_")):
         return "tanks"
     if name.startswith(("rack", "return_")):
         return "irrigation"
-    if name.startswith("sensor_"):
-        return "sensors"
     if name.startswith(("boost_", "pressure_", "valve_pressure_", "transient_pressure_", "closed_head_", "rupture_")):
         return "pressure"
     if name.startswith(("leak_", "blockage_")):
@@ -246,6 +258,12 @@ def validate_settings(settings: BionicSettings, *, validate_lights: bool = True)
         raise ValueError("Ёмкости баков должны быть больше нуля")
     if any(initials[name] < 0 or initials[name] > capacity for name, capacity in capacities.items()):
         raise ValueError("Начальный объём каждого бака должен находиться между нулём и его ёмкостью")
+    for tank_id, capacity in capacities.items():
+        minimum = getattr(settings, f"{tank_id}_min_threshold_l")
+        maximum = getattr(settings, f"{tank_id}_max_threshold_l")
+        if not 0 <= minimum < maximum <= capacity:
+            raise ValueError(f"{tank_id}: требуется 0 ≤ MIN < MAX ≤ {capacity:g} л")
+    parse_equipment_profile(settings.equipment_profile)
     nonnegative = (
         settings.fill_flow_lpm, settings.bo_to_bp_flow_lpm, settings.bso1_to_bp_flow_lpm,
         settings.bso2_to_bp_flow_lpm, settings.rack1_tier_flow_lpm, settings.rack2_tier_flow_lpm,

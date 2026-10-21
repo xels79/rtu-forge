@@ -7,6 +7,7 @@ from rich.console import Console
 from rtuforge import bionic_cli
 from rtuforge.bionic_cli import execute_command, make_context
 from rtuforge.bionic_completion import completion_candidates
+from rtuforge.bionic_equipment import parse_equipment_profile
 from rtuforge.bionic_lights import FACTORY_LIGHT_PROFILE, LightType, parse_light_profile
 from rtuforge.crc import append_crc
 
@@ -53,8 +54,58 @@ def test_pump_failure_and_repair_are_physical_only(tmp_path):
     execute_command(ctx, "fault pump hp1 jammed")
     assert ctx.model.drives["hp1"].mechanical_failure == "jammed"
     assert not any(sensor.forced is not None for sensor in ctx.model.sensors.values())
-    execute_command(ctx, "pump hp1 repair")
+    with pytest.raises(ValueError, match="--confirm"):
+        execute_command(ctx, "equipment repair hp1")
+    execute_command(ctx, "equipment repair hp1 --confirm")
     assert ctx.model.drives["hp1"].mechanical_failure == "none"
+
+
+def test_sensor_thresholds_are_independent_persisted_and_capacity_does_not_move_them(tmp_path):
+    ctx, _ = context(tmp_path)
+    execute_command(ctx, "sensor bo-min threshold 75")
+    execute_command(ctx, "sensor bo-max threshold 410")
+    execute_command(ctx, "sensor bp-min threshold 90")
+    assert ctx.model.sensors["bo-min"].threshold_l == 75
+    assert ctx.model.sensors["bo-max"].threshold_l == 410
+    assert ctx.model.sensors["bp-min"].threshold_l == 90
+    execute_command(ctx, "tank bo capacity 600")
+    assert ctx.model.sensors["bo-min"].threshold_l == 75
+    assert ctx.model.sensors["bo-max"].threshold_l == 410
+    execute_command(ctx, "settings save")
+    restored = make_context(tmp_path)
+    assert restored.model.tanks["bo"].capacity_l == 600
+    assert restored.model.sensors["bo-min"].threshold_l == 75
+    assert restored.model.sensors["bo-max"].threshold_l == 410
+    assert restored.model.sensors["bp-min"].threshold_l == 90
+
+
+def test_sensor_threshold_order_and_capacity_are_validated(tmp_path):
+    ctx, _ = context(tmp_path)
+    with pytest.raises(ValueError, match="MIN < MAX"):
+        execute_command(ctx, "sensor bo-min threshold 450")
+    with pytest.raises(ValueError, match="порога MAX"):
+        execute_command(ctx, "tank bo capacity 350")
+
+
+def test_equipment_profiles_apply_save_reload_and_repair_only_one_device(tmp_path):
+    ctx, _ = context(tmp_path)
+    execute_command(ctx, "equipment set bo-to-bp overheat_s 12")
+    execute_command(ctx, "equipment set hp1 failure_type motor_failure")
+    execute_command(ctx, "settings apply")
+    assert ctx.model.pumps["bo-to-bp"].health.profile.overheat_s == 12
+    assert ctx.model.drives["hp1"].health.profile.failure_type == "motor_failure"
+    execute_command(ctx, "settings save")
+    restored = make_context(tmp_path)
+    profiles = parse_equipment_profile(restored.settings.equipment_profile)
+    assert profiles["bo-to-bp"].overheat_s == 12
+    assert profiles["hp1"].failure_type == "motor_failure"
+    restored.model.pumps["bo-to-bp"].health.failure = "motor_failure"
+    restored.model.pumps["bo-to-bp"].health.state = "FAILED"
+    restored.model.pumps["bso1-to-bp"].health.failure = "jammed"
+    restored.model.pumps["bso1-to-bp"].health.state = "FAILED"
+    execute_command(restored, "equipment repair bo-to-bp --confirm")
+    assert not restored.model.pumps["bo-to-bp"].failed
+    assert restored.model.pumps["bso1-to-bp"].failed
 
 
 def test_settings_save_and_apply_are_independent(tmp_path):
@@ -199,7 +250,9 @@ def test_completion_covers_pages_settings_and_protects_manual_outputs():
     assert "relay" not in completion_candidates("")
     assert "relay" in completion_candidates("", test_mode=True)
     assert "jammed" in completion_candidates("fault pump hp1 ")
-    assert completion_candidates("pump hp2 ") == ["repair"]
+    assert "equipment" in completion_candidates("")
+    assert completion_candidates("equipment repair hp2 ") == ["--confirm"]
+    assert "failure_s" in completion_candidates("equipment set hp1 ")
 
 
 @pytest.mark.parametrize("command", ["tank unknown level 1", "fault leak maybe", "view nowhere", "sim speed 0"])

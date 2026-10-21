@@ -58,7 +58,7 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
                 scroll_offsets[ctx.view] = clamp_scroll(scroll, -3, len(page.lines), height)
             elif mouse_event.event_type == MouseEventType.SCROLL_DOWN:
                 scroll_offsets[ctx.view] = clamp_scroll(scroll, 3, len(page.lines), height)
-            elif mouse_event.event_type == MouseEventType.MOUSE_UP and ctx.view in {"settings", "ponics-settings", "light-settings"}:
+            elif mouse_event.event_type == MouseEventType.MOUSE_UP and ctx.view in {"settings", "sensors", "ponics-settings", "light-settings"}:
                 if absolute_row < len(page.row_keys) and page.row_keys[absolute_row]:
                     selected_setting[0] = page.row_keys[absolute_row] or selected_setting[0]
             app.invalidate()
@@ -72,7 +72,7 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
         for local_row, line in enumerate(visible):
             absolute_row = scroll + local_row
             style = ""
-            if ctx.view in {"settings", "ponics-settings", "light-settings"} and absolute_row < len(page.row_keys):
+            if ctx.view in {"settings", "sensors", "ponics-settings", "light-settings"} and absolute_row < len(page.row_keys):
                 if page.row_keys[absolute_row] == selected_setting[0]:
                     style = "class:selected"
             suffix = "\n" if local_row < height - 1 else ""
@@ -139,7 +139,7 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
     @bindings.add("enter")
     def _enter(event) -> None:
         line = command.text.strip()
-        if not line and ctx.view in {"settings", "ponics-settings", "light-settings"}:
+        if not line and ctx.view in {"settings", "sensors", "ponics-settings", "light-settings"}:
             if ctx.view == "light-settings":
                 page, _, _ = current_page()
                 light_keys = [key for key in page.row_keys if key and key.startswith("light:")]
@@ -184,12 +184,12 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
 
     @bindings.add("escape", "k")
     def _setting_up(event) -> None:
-        if ctx.view in {"settings", "ponics-settings", "light-settings"}:
+        if ctx.view in {"settings", "sensors", "ponics-settings", "light-settings"}:
             move_setting(-1)
 
     @bindings.add("escape", "j")
     def _setting_down(event) -> None:
-        if ctx.view in {"settings", "ponics-settings", "light-settings"}:
+        if ctx.view in {"settings", "sensors", "ponics-settings", "light-settings"}:
             move_setting(1)
 
     @bindings.add("f1")
@@ -210,7 +210,7 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
 
     @bindings.add("f5")
     def _ports(event) -> None:
-        if ctx.view in {"settings", "ponics-settings", "light-settings"}:
+        if ctx.view in {"settings", "sensors", "ponics-settings", "light-settings"}:
             run_line("light apply" if ctx.view == "light-settings" else "settings apply")
         else:
             switch_view("ports")

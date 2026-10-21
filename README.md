@@ -74,7 +74,7 @@ uv run bionic-immitator --home .\bionic-data --no-controller
 ```
 
 Its full-screen interface uses separate status, device, port, settings, help,
-log, RS-485, tank, water-composition, pump, pressure, irrigation, light,
+log, RS-485, tank, water-composition, pump, equipment-health, pressure, irrigation, light,
 sensor, PonicPilot, and drive pages. PonicPilot ID 5 is permanently bound to
 the shared BP (broth) tank; all of its calculated measurements and doses use
 that tank only. Use
@@ -104,7 +104,15 @@ The Bionic level sensors drive a separately connected physical Waveshare Relay
 8/16CH on USB/RS-485 №2; they are not exposed as extra virtual devices on USB
 №1. The default CH1..CH8 map, configurable NO/NC installation contact, relay
 polarity, edge-triggered FC0F writes, and separate FC01 confirmation are
-documented in the Bionic guide.
+documented in the Bionic guide. Every MIN/MAX sensor has its own persisted
+absolute threshold; MAX is independent of physical tank capacity and never
+stops filling by itself.
+
+Transfer pumps and HP1/HP2 accumulate heat and wear automatically when their
+real fluid path is unavailable. `view equipment` separates controller command,
+actual operation, flow/pressure, damage, VFD fault, and repair requirement.
+These internal diagnostics add no controller inputs or private Modbus alarm
+registers; repair and replacement require an explicit `--confirm` command.
 
 It has its own configuration and event journal and does not modify
 `config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,

@@ -1,4 +1,5 @@
 from pathlib import Path
+from dataclasses import replace
 
 from rich.console import Console
 
@@ -213,6 +214,31 @@ def test_sensor_page_shows_russian_mapping_signal_and_confirmation(tmp_path):
     assert "CH1" in text and "bo-min" in text and "Осмос: минимум" in text
     assert "Сигнал" in text and "Треб." in text and "Подтв." in text
     assert "ПОДКЛЮЧЕНО" in text and "FC01" in text
+
+
+def test_sensor_pages_show_absolute_threshold_and_capacity_percentage(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.model.sensors["bo-min"].threshold_l = 75
+    sensors = page(ctx, "sensors", 140)
+    assert any("75 л/15.0%" in line for line in sensors.lines)
+    draft = replace(ctx.draft, bo_min_threshold_l=75)
+    settings = render_page(
+        "settings", ctx.model, ctx.journal, ctx.settings, draft,
+        ctx.saved or ctx.settings, width=160,
+    )
+    assert any("75 л / 15.0%" in line for line in settings.lines)
+
+
+def test_equipment_page_separates_board_command_fact_and_internal_damage(tmp_path):
+    ctx, _ = context(tmp_path)
+    drive = ctx.model.drives["hp1"]
+    ctx.model.set_relay(drive.selector_relay, True)
+    drive.run_register = True
+    drive.health.failure = "jammed"
+    drive.health.state = "FAILED"
+    text = "\n".join(page(ctx, "equipment", 170).lines)
+    assert "hp1" in text and "RUN" in text and "ОТКАЗ" in text
+    assert "отдельные аварийные сигналы контроллеру не передаются" in text
 
 
 def test_sensor_page_reports_no_link_instead_of_stale_relay_value(tmp_path):

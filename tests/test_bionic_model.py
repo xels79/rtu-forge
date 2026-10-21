@@ -1,5 +1,6 @@
 import pytest
 
+from rtuforge.bionic_equipment import EquipmentProfile
 from rtuforge.bionic_model import AlarmState, BionicModel
 
 
@@ -30,6 +31,21 @@ def test_osmosis_fill_obeys_do22_and_never_closes_it_on_overflow():
     assert model.tanks["bo"].volume_l == model.tanks["bo"].capacity_l
     assert model.tanks["bo"].overflow_l == pytest.approx(3)
     assert model.alarms[("TANK_OVERFLOW", "bo")].state == AlarmState.ACTIVE
+
+
+def test_max_sensor_below_capacity_does_not_stop_fill_or_mean_overflow():
+    model = running_model()
+    model.sensors["bo-max"].threshold_l = 400
+    model.set_tank_level("bo", 399)
+    model.set_relay(22, True)
+    model.tick(60)
+    assert model.sensors["bo-max"].value
+    assert model.tanks["bo"].volume_l == pytest.approx(402)
+    assert model.tanks["bo"].overflow_l == 0
+    assert model.relay(22)
+    model.tick(2000)
+    assert model.tanks["bo"].volume_l == 500
+    assert model.tanks["bo"].overflow_l > 0
 
 
 def test_stuck_fill_valve_is_explicit_fault_effect():
@@ -74,8 +90,91 @@ def test_empty_source_does_not_rewrite_controller_run_command():
     model.set_relay(17, True)
     model.tick(60)
     assert model.relay(17)
-    assert model.pumps["bso1-to-bp"].actual_flow_lpm == 8
+    assert model.pumps["bso1-to-bp"].actual_flow_lpm == 0
+    assert model.pumps["bso1-to-bp"].health.dry_running
     assert ("WATER_SHORTAGE", "bso1") in model.alarms
+
+
+def fast_failure_profile(failure_type: str = "motor_failure") -> EquipmentProfile:
+    return EquipmentProfile(
+        dry_run_warning_s=0.1,
+        overheat_s=0.2,
+        degrade_s=0.3,
+        failure_s=0.4,
+        heating_rate_per_s=1.0,
+        cooling_rate_per_s=1.0,
+        wear_rate_per_s=1.0,
+        wear_flow_reduction=0.8,
+        initial_state="HEALTHY",
+        failure_type=failure_type,
+    )
+
+
+def test_transfer_dry_run_progresses_to_failure_without_changing_board_output():
+    events = []
+    model = BionicModel(lambda kind, subject, message: events.append((kind, subject, message)))
+    model.running = True
+    pump = model.pumps["bo-to-bp"]
+    pump.start_s = 0
+    pump.health.configure(fast_failure_profile())
+    model.tanks["bo"].take_solution(model.tanks["bo"].volume_l)
+    model.set_relay(pump.relay, True)
+    states = []
+    for _ in range(4):
+        model.tick(0.1)
+        states.append(pump.health.state)
+    assert states == ["DRY_RUNNING", "OVERHEATED", "DEGRADED", "FAILED"]
+    assert pump.actual_flow_lpm == 0
+    assert model.relay(pump.relay)
+    assert pump.repair_required
+    assert any("команда платы остаётся" in message for _, _, message in events)
+
+
+def test_water_return_and_stop_end_dry_run_but_preserve_accumulated_wear():
+    model = running_model()
+    pump = model.pumps["bo-to-bp"]
+    pump.start_s = 0
+    pump.health.configure(fast_failure_profile())
+    model.tanks["bo"].take_solution(model.tanks["bo"].volume_l)
+    model.set_relay(pump.relay, True)
+    model.tick(0.2)
+    damage = pump.health.damage
+    model.set_tank_level("bo", 10)
+    model.tick(0.1)
+    assert not pump.health.dry_running
+    assert pump.health.damage == pytest.approx(damage)
+    model.set_relay(pump.relay, False)
+    model.tick(1)
+    assert pump.health.damage == pytest.approx(damage)
+
+
+def test_failure_type_controls_remaining_transfer_performance_without_self_repair():
+    model = running_model()
+    pump = model.pumps["bso2-to-bp"]
+    pump.start_s = 0
+    pump.health.failure = "impeller_damage"
+    pump.health.state = "FAILED"
+    model.set_relay(pump.relay, True)
+    model.tick(60)
+    assert pump.actual_flow_lpm == pytest.approx(pump.flow_lpm * 0.2)
+    assert pump.health.state == "FAILED"
+    assert pump.repair_required
+
+
+def test_hp_dry_run_uses_real_path_and_fails_without_clearing_run_command():
+    model = running_model()
+    drive = model.drives["hp1"]
+    drive.ramp_up_s = 0
+    drive.health.configure(fast_failure_profile("impeller_damage"))
+    model.set_relay(drive.selector_relay, True)
+    model.set_relay(drive.run_relay, True)
+    for _ in range(4):
+        model.tick(0.1)
+    assert drive.health.state == "FAILED"
+    assert drive.health.failure == "impeller_damage"
+    assert model.drive_input_command(drive)
+    assert model.relay(drive.run_relay)
+    assert model.high_pressure_bar == 0
 
 
 @pytest.mark.parametrize("tank_relay,tank_id", [(21, "bo"), (23, "bp")])
@@ -325,6 +424,8 @@ def test_jammed_pump_has_no_pressure_trips_protection_and_keeps_run_command():
     assert drive.fault == 10
     assert drive.run_register is False
     assert model.relay(drive.run_relay)
+    assert model.drive_input_command(drive)
+    assert not model.drive_commanded(drive)
     assert model.high_pressure_bar == 0
     assert model.calculated_flow_lpm == 0
 

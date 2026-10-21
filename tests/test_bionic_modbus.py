@@ -123,9 +123,14 @@ def test_idd_overload_uses_only_standard_telemetry_and_preserves_run_command():
     assert request(bus, "07 06 20 00 00 02") == bytes.fromhex("07 06 20 00 00 02")
     model.tick(0.2)
     assert drive.run_register
+    assert model.drive_input_command(drive)
     assert request(bus, "07 03 00 1B 00 01") == bytes.fromhex("07 03 02 00 0A")
     assert request(bus, "07 03 00 03 00 01") == bytes.fromhex("07 03 02 01 40")
     assert request(bus, "07 03 00 1D 00 01") == bytes.fromhex("07 83 02")
+    model.tick(5)
+    assert drive.actual_hz == 0
+    assert drive.run_register
+    assert model.drive_input_command(drive)
 
 
 def test_ponics_reads_full_map_scales_bp_measurements_and_writes_only_confirmed_registers():
@@ -187,6 +192,26 @@ def test_settings_roundtrip_validation_and_no_implicit_file(tmp_path: Path):
         changed(settings, "rupture_residual_bar", "3.1")
     with pytest.raises(ValueError, match="Modbus ID 5"):
         changed(settings, "ponics_address", "15")
+
+
+def test_all_eight_sensor_thresholds_roundtrip_independently(tmp_path: Path):
+    path = tmp_path / "bionic-immitator.ini"
+    settings = BionicSettings()
+    values = {
+        "bo_min_threshold_l": 71,
+        "bo_max_threshold_l": 411,
+        "bp_min_threshold_l": 72,
+        "bp_max_threshold_l": 412,
+        "bso1_min_threshold_l": 31,
+        "bso1_max_threshold_l": 171,
+        "bso2_min_threshold_l": 32,
+        "bso2_max_threshold_l": 172,
+    }
+    for name, value in values.items():
+        settings = changed(settings, name, str(value))
+    save_settings(path, settings)
+    restored = load_settings(path)
+    assert {name: getattr(restored, name) for name in values} == values
 
 
 class FakeTransport:

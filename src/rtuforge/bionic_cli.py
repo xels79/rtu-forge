@@ -16,6 +16,10 @@ from .bionic_config import (
     BionicSettings, changed, load_settings, parse_sensor_relay_map, save_settings,
     validate_settings,
 )
+from .bionic_equipment import (
+    EQUIPMENT_IDS, EquipmentProfile, parse_equipment_profile,
+    serialize_equipment_profiles,
+)
 from .bionic_events import EventJournal
 from .bionic_lights import (
     FACTORY_LIGHT_PROFILE, LightChannel, LightType, change_light_type,
@@ -34,7 +38,8 @@ HELP = """Bionic Immitator — цифровая физическая устан�
 
 status | devices | ports | help
 tank list | tank <bo|bp|bso1|bso2> level <л|N%> | capacity <л> | fill-rate <л/мин>
-pump list | pump <bo-to-bp|bso1-to-bp|bso2-to-bp> flow <л/мин> | pump hp1|hp2 repair
+pump list | pump <bo-to-bp|bso1-to-bp|bso2-to-bp> flow <л/мин>
+equipment list | status <id> | repair|replace <id> --confirm | set <id> <параметр> <значение>
 irrigation shelf <1|2> flow-per-tier <л/мин>
 pressure target <бар> | range <мин> <макс> | rise-time <с> | fall-time <с>
 pipe rupture-threshold <бар> | status | repair
@@ -43,7 +48,7 @@ fault leak on|off | rate <л/мин> | fault pump hp1|hp2 <тип>
 fault blockage on|off | severity <0..100> | fault list | fault clear all
 alarm list | alarm reset all
 sim start | pause | resume | speed <1..100> | reset --confirm
-view main|settings|log|rs485|tanks|pumps|pressure|irrigation|light|sensors|water
+view main|settings|log|rs485|tanks|pumps|equipment|pressure|irrigation|light|sensors|water
 view light settings | light set <zone> <поле> ... | light apply|save|restore-defaults
 view ponics | view ponics settings | view ponics registers
 view drives | view drive hp1 | view drive hp2
@@ -105,8 +110,9 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
     for sensor in model.sensors.values():
         sensor.hysteresis_l = settings.sensor_hysteresis_l
         sensor.delay_s = settings.sensor_delay_s
-        sensor.threshold_l = model.tanks[sensor.tank_id].capacity_l * (0.2 if sensor.kind == "min" else 0.8)
+        sensor.threshold_l = getattr(settings, f"{sensor.id.replace('-', '_')}_threshold_l")
     model.refresh_sensors()
+    model.configure_equipment(parse_equipment_profile(settings.equipment_profile), initial=initial)
     model.boost_pressure_bar = settings.boost_pressure_bar
     model.boost_rise_s = settings.boost_rise_s
     model.boost_fall_s = settings.boost_fall_s
@@ -202,8 +208,11 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
         drive.overload_protection_enabled = getattr(settings, f"{prefix}_overload_protection_enabled")
         drive.overload_threshold_multiplier = getattr(settings, f"{prefix}_overload_threshold_multiplier")
         drive.protection_behavior = getattr(settings, f"{prefix}_protection_behavior")
-        drive.mechanical_failure = getattr(settings, f"{prefix}_mechanical_failure")
-        drive.mechanical_damage = getattr(settings, f"{prefix}_mechanical_damage")
+        configured_failure = getattr(settings, f"{prefix}_mechanical_failure")
+        configured_damage = getattr(settings, f"{prefix}_mechanical_damage")
+        if configured_failure != "none" or configured_damage > 0:
+            drive.mechanical_failure = configured_failure
+            drive.mechanical_damage = configured_damage
     model.speed = settings.simulation_speed
     model.configure_lights(parse_light_profile(settings.light_profile))
 
@@ -323,6 +332,21 @@ def _print_alarms(ctx: BionicContext) -> None:
         ctx.console.print(f"{alarm.state.value:<7} {alarm.code} {alarm.subject} {alarm.first_at.isoformat()}")
 
 
+def _equipment_description(model: BionicModel, equipment_id: str) -> str:
+    health = model.equipment_health(equipment_id)
+    command = "RUN" if model.equipment_commanded(equipment_id) else "STOP"
+    flow = (
+        model.pumps[equipment_id].actual_flow_lpm
+        if equipment_id in model.pumps else model.calculated_flow_lpm
+    )
+    return (
+        f"{equipment_id}: команда {command}; состояние {health.state}; "
+        f"расход {flow:.2f} л/мин; сухой ход {health.dry_run_s:.1f} с; "
+        f"нагрев {health.heat * 100:.1f}%; износ {health.damage * 100:.1f}%; "
+        f"отказ {health.failure}; ремонт {'нужен' if health.repair_required else 'не нужен'}"
+    )
+
+
 def execute_command(ctx: BionicContext, line: str) -> str | None:
     try:
         parts = shlex.split(line)
@@ -356,7 +380,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             ("drive", "hp1"): "drive-hp1", ("drive", "hp2"): "drive-hp2",
             ("light", "settings"): "light-settings",
         }
-        allowed = {"main", "status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "pressure", "irrigation", "light", "light-settings", "sensors", "water"}
+        allowed = {"main", "status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "equipment", "pressure", "irrigation", "light", "light-settings", "sensors", "water"}
         target = nested.get(tuple(args))
         if target is None and len(args) == 1 and args[0] in allowed:
             target = "status" if args[0] == "main" else args[0]
@@ -484,8 +508,13 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             capacity = _number(raw, "Ёмкость", 0.001)
             if capacity < model.tanks[tank_id].volume_l:
                 raise ValueError("Ёмкость не может быть меньше текущего объёма")
+            maximum = model.sensors[f"{tank_id}-max"].threshold_l
+            if capacity < maximum:
+                raise ValueError(f"Ёмкость не может быть меньше порога MAX {maximum:g} л")
+            option = f"{tank_id}_capacity_l"
+            ctx.draft = changed(ctx.draft, option, raw)
             model.tanks[tank_id].capacity_l = capacity
-            ctx.event("ОПЕРАТОР", tank_id, f"ёмкость {capacity:g} л")
+            ctx.event("ОПЕРАТОР", tank_id, f"ёмкость {capacity:g} л; абсолютные пороги датчиков не изменены")
         elif action == "fill-rate" and tank_id == "bo":
             model.fill_flow_lpm = _number(raw, "Расход наполнения")
             ctx.event("ОПЕРАТОР", tank_id, f"расход наполнения {model.fill_flow_lpm:g} л/мин")
@@ -503,11 +532,52 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             model.pumps[args[0]].flow_lpm = _number(args[2], "Расход насоса")
             ctx.event("ОПЕРАТОР", args[0], f"расход {model.pumps[args[0]].flow_lpm:g} л/мин")
             return None
-        if len(args) == 2 and args[0] in model.drives and args[1] == "repair":
-            model.drives[args[0]].repair()
-            ctx.event("ОПЕРАТОР", args[0], "механическая часть насоса отремонтирована; ошибка ПЧ не сбрасывалась")
+        if len(args) >= 2 and args[0] in model.drives and args[1] == "repair":
+            raise ValueError(f"Используйте подтверждённый ремонт: equipment repair {args[0]} --confirm")
+        raise ValueError("pump: используйте list или pump <id> flow <л/мин>")
+    if command == "equipment":
+        if args == ["list"]:
+            ctx.view = "equipment"
+            if not ctx.screen_mode:
+                print_view(ctx.console, "equipment", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
             return None
-        raise ValueError("pump: используйте list, pump <id> flow <л/мин> или pump hp1|hp2 repair")
+        if len(args) == 2 and args[0] == "status" and args[1] in EQUIPMENT_IDS:
+            ctx.notice = _equipment_description(model, args[1])
+            if not ctx.screen_mode:
+                ctx.console.print(ctx.notice)
+            return None
+        if len(args) == 3 and args[0] in {"repair", "replace"} and args[1] in EQUIPMENT_IDS:
+            if args[2] != "--confirm":
+                raise ValueError("Ремонт или замена требуют --confirm")
+            was_commanded = model.repair_equipment(args[1], replace=args[0] == "replace")
+            ctx.notice = (
+                f"{args[1]}: {'заменено' if args[0] == 'replace' else 'отремонтировано'}; "
+                "ВНИМАНИЕ: команда платы активна, оборудование может немедленно запуститься"
+                if was_commanded else
+                f"{args[1]}: {'заменено' if args[0] == 'replace' else 'отремонтировано'}; команда платы не изменена"
+            )
+            return None
+        if len(args) == 4 and args[0] == "set" and args[1] in EQUIPMENT_IDS:
+            profiles = parse_equipment_profile(ctx.draft.equipment_profile)
+            profile = profiles[args[1]]
+            field_name = args[2]
+            if field_name not in EquipmentProfile.__dataclass_fields__:
+                raise ValueError("Неизвестный параметр профиля оборудования")
+            if field_name == "initial_state":
+                value: object = args[3].upper()
+            elif field_name == "failure_type":
+                value = args[3].casefold()
+            else:
+                value = _number(args[3], field_name)
+            profiles[args[1]] = replace(profile, **{field_name: value})
+            ctx.draft = replace(
+                ctx.draft,
+                equipment_profile=serialize_equipment_profiles(profiles),
+            )
+            ctx.notice = f"Черновик оборудования: {args[1]} {field_name}={value}"
+            ctx.event("ОПЕРАТОР", "equipment-draft", ctx.notice)
+            return None
+        raise ValueError("equipment list | status <id> | repair|replace <id> --confirm | set <id> <параметр> <значение>")
     if command == "irrigation":
         if len(args) == 4 and args[0] == "shelf" and args[2] == "flow-per-tier":
             rack = int(args[1])
@@ -563,9 +633,15 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         elif len(args) == 3 and args[1] == "force":
             model.force_sensor(sensor_id, _on_off(args[2]))
         elif len(args) == 3 and args[1] == "threshold":
-            model.sensors[sensor_id].threshold_l = _number(args[2], "Порог", 0, model.tanks[model.sensors[sensor_id].tank_id].capacity_l)
+            sensor = model.sensors[sensor_id]
+            threshold = _number(args[2], "Порог", 0, model.tanks[sensor.tank_id].capacity_l)
+            option = f"{sensor_id.replace('-', '_')}_threshold_l"
+            updated = replace(ctx.draft, **{option: threshold})
+            validate_settings(updated, validate_lights=False)
+            ctx.draft = updated
+            sensor.threshold_l = threshold
             model.refresh_sensor(sensor_id)
-            ctx.event("ОПЕРАТОР", sensor_id, f"порог {model.sensors[sensor_id].threshold_l:g} л")
+            ctx.event("ОПЕРАТОР", sensor_id, f"порог {threshold:g} л; добавлен в черновик настроек")
         else:
             raise ValueError("sensor <id> threshold <л> | force on|off | auto")
         return None

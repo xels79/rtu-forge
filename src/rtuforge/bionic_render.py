@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from rich.console import Console
 from rich.text import Text
 from .bionic_config import BionicSettings, OPTION_SPECS, parse_sensor_relay_map
+from .bionic_equipment import EQUIPMENT_IDS, parse_equipment_profile
 from .bionic_events import EventJournal
 from .bionic_idd import IDD_PARAMETERS, IDD_TELEMETRY
 from .bionic_lights import (
@@ -18,13 +19,14 @@ from .bionic_ponics import (
 )
 from .bionic_sensor_bridge import SensorRelayState
 
-VIEW_NAMES = ("status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "pressure", "irrigation", "light", "light-settings", "sensors", "ponics", "ponics-settings", "ponics-registers", "water", "drives", "drive-hp1", "drive-hp2")
-VIEW_TITLES = {"status":"СТАТУС","devices":"УСТРОЙСТВА","ports":"ПОРТЫ","settings":"НАСТРОЙКИ","help":"СПРАВКА","log":"ЖУРНАЛ","rs485":"RS485","tanks":"БАКИ","pumps":"НАСОСЫ","pressure":"ДАВЛЕНИЕ","irrigation":"ПОЛИВ","light":"ОСВЕЩЕНИЕ","light-settings":"НАСТРОЙКИ ОСВЕЩЕНИЯ","sensors":"ДАТЧИКИ УРОВНЯ","water":"СОСТАВ ВОДЫ","drives":"ЧАСТОТНИКИ","drive-hp1":"ЧАСТОТНИК HP1","drive-hp2":"ЧАСТОТНИК HP2"}
+VIEW_NAMES = ("status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "equipment", "pressure", "irrigation", "light", "light-settings", "sensors", "ponics", "ponics-settings", "ponics-registers", "water", "drives", "drive-hp1", "drive-hp2")
+VIEW_TITLES = {"status":"СТАТУС","devices":"УСТРОЙСТВА","ports":"ПОРТЫ","settings":"НАСТРОЙКИ","help":"СПРАВКА","log":"ЖУРНАЛ","rs485":"RS485","tanks":"БАКИ","pumps":"НАСОСЫ","equipment":"СОСТОЯНИЕ ОБОРУДОВАНИЯ","pressure":"ДАВЛЕНИЕ","irrigation":"ПОЛИВ","light":"ОСВЕЩЕНИЕ","light-settings":"НАСТРОЙКИ ОСВЕЩЕНИЯ","sensors":"ДАТЧИКИ УРОВНЯ","water":"СОСТАВ ВОДЫ","drives":"ЧАСТОТНИКИ","drive-hp1":"ЧАСТОТНИК HP1","drive-hp2":"ЧАСТОТНИК HP2"}
 TANK_NAMES = {"bo": "Осмос", "bp": "Бульон", "bso1": "Дренаж 1", "bso2": "Дренаж 2"}
 PUMP_NAMES = {"bo-to-bp": "Осмос → Бульон", "bso1-to-bp": "Дренаж 1 → Бульон", "bso2-to-bp": "Дренаж 2 → Бульон"}
 DRIVE_SOURCE_NAMES = {"panel":"панель", "terminals":"клеммы", "modbus":"Modbus", "unsupported":"не поддерживается"}
 PUMP_FAILURE_NAMES = {"none":"исправен", "jammed":"заклинивание", "impeller_damage":"повреждение рабочего колеса", "motor_failure":"отказ двигателя", "dry_run_wear":"износ после сухого хода", "loss_of_prime":"потеря заливки"}
 PROTECTION_NAMES = {"READY":"готова", "TIMING":"выдержка", "TRIPPED":"авария", "DISABLED":"отключена"}
+EQUIPMENT_STATE_NAMES = {"HEALTHY":"ИСПРАВНО", "DRY_RUNNING":"СУХОЙ ХОД", "OVERHEATED":"ПЕРЕГРЕВ", "DEGRADED":"ДЕГРАДАЦИЯ", "FAILED":"ОТКАЗ"}
 OUTPUT_NAMES = {1:"Насос подпора",2:"Перекачка: осмос → бульон",17:"Возврат: дренаж 1 → бульон",18:"Возврат: дренаж 2 → бульон",19:"Выбор HP1",20:"Выбор HP2",21:"Клапан источника: Осмос",22:"Клапан наполнения осмоса",23:"Клапан источника: Бульон",31:"RUN частотника HP2",32:"RUN частотника HP1"}
 HELP_GROUPS = (
     ("УПРАВЛЕНИЕ СИМУЛЯЦИЕЙ", "\n".join((
@@ -37,13 +39,13 @@ HELP_GROUPS = (
         "sim pause не закрывает RS485 и не отправляет плате команду остановки.",
     ))),
     ("ОБЩИЕ", "status — состояние; devices — устройства; ports — порты; help — справка; exit/quit — выход"),
-    ("НАВИГАЦИЯ", "view status|devices|ports|settings|help|log|rs485|tanks|pumps|pressure|irrigation|light|sensors|water|ponics|drives"),
+    ("НАВИГАЦИЯ", "view status|devices|ports|settings|help|log|rs485|tanks|pumps|equipment|pressure|irrigation|light|sensors|water|ponics|drives"),
     ("СВЕТ", "view light — все сигналы и фактическое свечение; view light settings — отдельная карта каждого яруса; light set <zone> type NONE|SINGLE|SPECTRAL_4; light set <zone> channel <role> <ID> <AO>; light apply; light save; light restore-defaults"),
     ("PONICPILOT", "view ponics; view ponics settings; view ponics registers; ponics dose <a|b|c|ph_plus|ph_minus> <мл>"),
-    ("ЧАСТОТНИКИ", "view drives; view drive hp1; view drive hp2; fault pump hp1|hp2 <тип>; pump hp1|hp2 repair. RUN учитывает PB.02; RESET частотника не ремонтирует насос."),
+    ("ЧАСТОТНИКИ", "view drives; view drive hp1; view drive hp2; fault pump hp1|hp2 <тип>. RUN учитывает PB.02; RESET частотника не ремонтирует насос; ремонт требует equipment repair <id> --confirm."),
     ("БАКИ", "tank list; tank <bo|bp|bso1|bso2> level <л|N%>; capacity <л>; tank bo fill-rate <л/мин>"),
-    ("НАСОСЫ", "pump list — состояние перекачки; pump <bo-to-bp|bso1-to-bp|bso2-to-bp> flow <л/мин> — модельный расход; pump hp1|hp2 repair — явный ремонт механики; irrigation shelf <1|2> flow-per-tier <л/мин>"),
-    ("ДАТЧИКИ", "sensor list; sensor <id> threshold <л>; force on|off; auto"),
+    ("НАСОСЫ И ПОВРЕЖДЕНИЯ", "view equipment; equipment list; equipment status <id>; equipment repair|replace <id> --confirm; equipment set <id> <параметр> <значение>. Сухой ход развивается автоматически; команда платы не изменяется."),
+    ("ДАТЧИКИ", "sensor list; sensor <id> threshold <л>; force on|off; auto. Порог MAX — положение датчика, а не физическая ёмкость бака."),
     ("ДАВЛЕНИЕ", "pressure target <бар>; range <мин> <макс>; rise-time <с>; fall-time <с>; pipe status|repair"),
     ("ЗАСОР И ПРОТЕЧКИ", "fault list — внутренние отказы модели; fault leak on|off|rate — протечка; fault blockage on|off|severity — засор после HIGH; fault pump hp1|hp2 <тип> — механический отказ без дополнительного сигнала плате; alarm list; alarm reset all"),
     ("ЖУРНАЛ", "log last <N>; log filter alarms|rs485|tanks|pumps|all; log export <файл.csv>"),
@@ -67,6 +69,10 @@ SETTING_LABELS = {
     "bso1_capacity_l":("Дренаж 1: ёмкость бака","л"), "bso2_capacity_l":("Дренаж 2: ёмкость бака","л"),
     "bo_initial_l":("Осмос: начальный объём","л"), "bp_initial_l":("Бульон: начальный объём","л"),
     "bso1_initial_l":("Дренаж 1: начальный объём","л"), "bso2_initial_l":("Дренаж 2: начальный объём","л"),
+    "bo_min_threshold_l":("Осмос: порог MIN","л"), "bo_max_threshold_l":("Осмос: порог MAX","л"),
+    "bp_min_threshold_l":("Бульон: порог MIN","л"), "bp_max_threshold_l":("Бульон: порог MAX","л"),
+    "bso1_min_threshold_l":("Дренаж 1: порог MIN","л"), "bso1_max_threshold_l":("Дренаж 1: порог MAX","л"),
+    "bso2_min_threshold_l":("Дренаж 2: порог MIN","л"), "bso2_max_threshold_l":("Дренаж 2: порог MAX","л"),
     "fill_flow_lpm":("Осмос: расход наполнения","л/мин"), "bo_to_bp_flow_lpm":("Насос Осмос → Бульон: расход","л/мин"),
     "bso1_to_bp_flow_lpm":("Насос Дренаж 1 → Бульон: расход","л/мин"), "bso2_to_bp_flow_lpm":("Насос Дренаж 2 → Бульон: расход","л/мин"),
     "rack1_tier_flow_lpm":("Стеллаж 1: расход яруса","л/мин"), "rack2_tier_flow_lpm":("Стеллаж 2: расход яруса","л/мин"),
@@ -84,6 +90,7 @@ SETTING_LABELS = {
     "rupture_residual_bar":("Остаточное давление после разрыва","бар"), "leak_pressure_factor":("Влияние протечки на давление","доля"),
     "blockage_severity":("Степень засора","%"),
     "light_profile":("Профиль освещения (редактируется в view light settings)",""),
+    "equipment_profile":("Профиль повреждений (редактируется в view equipment)",""),
     "ponics_irrigation_on_s":("PonicPilot: время полива","с"), "ponics_irrigation_pause_s":("PonicPilot: пауза полива","с"),
     "ponics_mode":("PonicPilot: режим",""), "ponics_ph_enabled":("PonicPilot: регулятор pH",""),
     "ponics_ph_dosing_pause_s":("PonicPilot: пауза дозирования pH","с"), "ponics_ph_low":("PonicPilot: нижняя точка pH","pH"),
@@ -170,7 +177,7 @@ def _technical(section:str,name:str)->str:
 def setting_rows(settings:BionicSettings,draft:BionicSettings,saved:BionicSettings,width:int)->tuple[list[str],list[str|None]]:
     sw=3; tw=max(12,min(34,width*30//100)); vw=max(8,min(20,width*18//100)); lw=max(8,width-tw-sw-vw-9); lines=[ellipsize("A — применено, S — сохранено",width),"",_row([("Техническое имя",tw),("Русское название",lw),("Значение",vw),("A/S",sw)],width)]; keys: list[str | None]=[None,None,None]
     for name,(section,_kind) in OPTION_SPECS.items():
-        if name == "light_profile":
+        if name in {"light_profile", "equipment_profile"}:
             continue
         label,unit=SETTING_LABELS.get(name,(name.replace("_"," "),"")); value=f"{getattr(draft,name)} {unit}".rstrip(); state=("A" if getattr(draft,name)==getattr(settings,name) else "-")+"/"+("S" if getattr(draft,name)==getattr(saved,name) else "-"); lines.append(_row([(_technical(section,name),tw),(label,lw),(value,vw),(state,sw)],width)); keys.append(name)
     return lines,keys
@@ -203,21 +210,23 @@ def _sensor_rows(model:BionicModel,settings:BionicSettings,state:SensorRelayStat
     ]
     compact=width<105
     if compact:
-        lines.append(_row([("CH",4),("Датчик",9),("Название",max(10,width-50)),("Р/С/Т/П",15),("Режим",8)],width))
+        lines.append(_row([("CH",4),("Датчик",9),("Порог",15),("Р/С/Т/П",15),("Режим",8)],width))
     else:
-        lines.append(_row([("Канал",6),("Датчик",10),("Русское название",20),("Расчёт",7),("Сигнал",7),("Треб.",7),("Подтв.",10),("Режим",14)],width))
+        lines.append(_row([("Канал",6),("Датчик",10),("Русское название",18),("Порог",15),("Расчёт",7),("Сигнал",7),("Треб.",7),("Подтв.",10),("Режим",14)],width))
     keys:list[str|None]=[None]*len(lines)
     for sensor_id,channel in sorted(mapping.items(),key=lambda item:item[1]):
         sensor=model.sensors[sensor_id]
         mode="AUTO" if sensor.forced is None else ("FORCE ON" if sensor.forced else "FORCE OFF")
         required=_relay_bit(desired,channel); acknowledged=_relay_bit(confirmed,channel)
+        capacity=model.tanks[sensor.tank_id].capacity_l
+        threshold=f"{sensor.threshold_l:g} л/{sensor.threshold_l/capacity*100:.1f}%"
         if compact:
             unknown="-" if not settings.hardware_mode else "?"
             states=f"{int(sensor.automatic)}/{int(sensor.value)}/{int(bool(required))}/{(unknown if acknowledged is None else int(acknowledged))}"
-            lines.append(_row([(f"CH{channel}",4),(sensor_id,9),(_sensor_name(sensor_id),max(10,width-50)),(states,15),(mode.replace('FORCE ','F-'),8)],width))
+            lines.append(_row([(f"CH{channel}",4),(sensor_id,9),(threshold,15),(states,15),(mode.replace('FORCE ','F-'),8)],width))
         else:
             offline="ОТКЛ" if not settings.hardware_mode else "НЕТ СВЯЗИ"
-            lines.append(_row([(f"CH{channel}",6),(sensor_id,10),(_sensor_name(sensor_id),20),(_on_off(sensor.automatic),7),(_on_off(sensor.value),7),(_on_off(required),7),(_on_off(acknowledged,offline=offline),10),(mode,14)],width))
+            lines.append(_row([(f"CH{channel}",6),(sensor_id,10),(_sensor_name(sensor_id),18),(threshold,15),(_on_off(sensor.automatic),7),(_on_off(sensor.value),7),(_on_off(required),7),(_on_off(acknowledged,offline=offline),10),(mode,14)],width))
         keys.append(f"sensor:{sensor_id}")
     lines += ["",ellipsize("Расчёт/Р — автоматика; Сигнал/С — с FORCE; Треб./Т — команда; Подтв./П — FC01.",width)]
     keys += [None,None]
@@ -225,12 +234,15 @@ def _sensor_rows(model:BionicModel,settings:BionicSettings,state:SensorRelayStat
 
 def _sensor_setting_rows(model:BionicModel,settings:BionicSettings,width:int)->tuple[list[str],list[str|None]]:
     mapping=parse_sensor_relay_map(settings.sensor_relay_map)
-    lines=[_row([("Датчик",10),("Бак / тип",22),("Порог",10),("Расчёт",8),("Канал",7),("Полярн.",11),("Контакт",8),("Режим",14)],width)]
+    lines=[_row([("Датчик",10),("Бак / тип",22),("Порог",16),("Расчёт",8),("Канал",7),("Полярн.",11),("Контакт",8),("Режим",14)],width)]
     keys:list[str|None]=[None]
     for sensor_id,channel in sorted(mapping.items(),key=lambda item:item[1]):
         sensor=model.sensors[sensor_id]
         mode="AUTO" if sensor.forced is None else ("FORCE ON" if sensor.forced else "FORCE OFF")
-        lines.append(_row([(sensor_id,10),(_sensor_name(sensor_id),22),(f"{sensor.threshold_l:g} л",10),(_on_off(sensor.automatic),8),(f"CH{channel}",7),("LOW" if settings.sensor_relay_active_low else "HIGH",11),(settings.sensor_relay_contact,8),(mode,14)],width))
+        capacity=getattr(settings,f"{sensor.tank_id}_capacity_l")
+        threshold_l=getattr(settings,f"{sensor_id.replace('-', '_')}_threshold_l")
+        threshold=f"{threshold_l:g} л / {threshold_l/capacity*100:.1f}%"
+        lines.append(_row([(sensor_id,10),(_sensor_name(sensor_id),22),(threshold,16),(_on_off(sensor.automatic),8),(f"CH{channel}",7),("LOW" if settings.sensor_relay_active_low else "HIGH",11),(settings.sensor_relay_contact,8),(mode,14)],width))
         keys.append(f"sensor:{sensor_id}")
     return lines,keys
 
@@ -413,6 +425,53 @@ def _light_settings(settings:BionicSettings,draft:BionicSettings,saved:BionicSet
                 keys.append(None)
     return [ellipsize(line,width) for line in lines],keys
 
+def _equipment(model:BionicModel,settings:BionicSettings,width:int)->list[str]:
+    profiles=parse_equipment_profile(settings.equipment_profile)
+    lines=[
+        "АВТОМАТИЧЕСКОЕ РАЗВИТИЕ ПОВРЕЖДЕНИЙ",
+        "Внутренняя диагностика имитатора: отдельные аварийные сигналы контроллеру не передаются.",
+        "Команда платы сохраняется при отказе. Ремонт: equipment repair <id> --confirm.",
+        "",
+        _row([("Оборудование",12),("Команда",8),("Факт",8),("Состояние",13),("Расход",11),("Сух. ход",10),("Нагрев",8),("Износ",8),("Ремонт",8),("Отказ",17)],width),
+    ]
+    for equipment_id in EQUIPMENT_IDS:
+        health=model.equipment_health(equipment_id)
+        commanded=model.equipment_commanded(equipment_id)
+        if equipment_id in model.pumps:
+            actual=model.pumps[equipment_id].actual_flow_lpm > 1e-6
+            flow=model.pumps[equipment_id].actual_flow_lpm
+            water_available=model.tanks[model.pumps[equipment_id].source].volume_l > 1e-9
+            pressure="—"
+        else:
+            drive=model.drives[equipment_id]
+            actual=drive.actual_hz > 0.1 and drive.hydraulic_factor > 0
+            flow=model.calculated_flow_lpm if actual else 0.0
+            water_available=model.relay(model.outputs["boost"]) and bool(model.available_sources())
+            pressure=f"{model.high_pressure_bar:.2f} бар"
+        lines.append(_row([
+            (equipment_id,12),("RUN" if commanded else "STOP",8),("RUN" if actual else "STOP",8),
+            (EQUIPMENT_STATE_NAMES[health.state],13),(f"{flow:.2f} л/мин",11),(f"{health.dry_run_s:.1f} с",10),
+            (f"{health.heat*100:.1f}%",8),(f"{health.damage*100:.1f}%",8),("ДА" if health.repair_required else "нет",8),(PUMP_FAILURE_NAMES.get(health.failure,health.failure),17),
+        ],width))
+        profile=profiles[equipment_id]
+        lines.append(ellipsize(
+            f"  вода: {'доступна' if water_available else 'НЕТ'}; создаваемое давление: {pressure}; "
+            f"суммарный сухой ход {health.total_dry_run_s:.1f} с; замен {health.replacements}",
+            width,
+        ))
+        lines.append(ellipsize(
+            f"  пороги, с: предупреждение {profile.dry_run_warning_s:g}; перегрев {profile.overheat_s:g}; "
+            f"деградация {profile.degrade_s:g}; отказ {profile.failure_s:g}; тип отказа {profile.failure_type}",
+            width,
+        ))
+    lines += [
+        "",
+        "Настройка черновика: equipment set <id> dry_run_warning_s|overheat_s|degrade_s|failure_s <значение>",
+        "Дополнительно: heating_rate_per_s, cooling_rate_per_s, wear_rate_per_s, wear_flow_reduction, initial_state, failure_type.",
+        "Применение/сохранение: settings apply / settings save. initial_state применяется при следующем сбросе модели.",
+    ]
+    return [ellipsize(line,width) for line in lines]
+
 def _drives(model:BionicModel,settings:BionicSettings,width:int)->list[str]:
     lines=["Привод | ID | Источник | Modbus | Клемма | Выбор | Факт | Частота | Ток | Ошибка"]
     for drive_id,drive in model.drives.items():
@@ -424,7 +483,7 @@ def _drive(model:BionicModel,drive_id:str,width:int)->list[str]:
     drive=model.drives[drive_id]
     telemetry={1:round(drive.target_hz()*10),2:round(drive.actual_hz*10),3:round(drive.calculated_current_a*10),4:drive.speed_rpm,27:drive.fault,28:int(drive.actual_hz>0.1)}
     configuration=drive.configuration
-    lines=["ТЕКУЩАЯ РАБОТА",f"Источник RUN: PB.02={configuration[102]} ({DRIVE_SOURCE_NAMES[drive.control_source]}) | выбранный сигнал: {'RUN' if model.drive_commanded(drive) else 'STOP'}",f"Команда Modbus: {'RUN' if drive.run_register else 'STOP'} | RUN-клемма do-{drive.run_relay}: {_on_off(model.relay(drive.run_relay))} | выбор do-{drive.selector_relay}: {_on_off(model.relay(drive.selector_relay))}",f"Задание {drive.target_hz():.1f} Гц | выход ПЧ {drive.actual_hz:.1f} Гц | разгон/торможение {drive.ramp_up_s:g}/{drive.ramp_down_s:g} с",f"РАСЧЁТ ИМИТАТОРА: ток {drive.calculated_current_a:.1f}/{drive.nominal_current_a:.1f} А | нагрузка ×{drive.calculated_load:.2f} | защита {PROTECTION_NAMES[drive.protection_state]}",f"Насос: {PUMP_FAILURE_NAMES[drive.mechanical_failure]} | повреждение {drive.mechanical_damage*100:.0f}% | ремонт {'ТРЕБУЕТСЯ' if drive.repair_required else 'не требуется'}",f"Штатный PA.27: {drive.fault} | RESET {'возможен, механику не ремонтирует' if drive.fault else 'не требуется'} | связь {'есть' if drive.online else 'нет'}","","РЕГИСТРЫ","Имя | Адрес | Название                          | RAW   | Масштаб / доступ"]
+    lines=["ТЕКУЩАЯ РАБОТА",f"Источник RUN: PB.02={configuration[102]} ({DRIVE_SOURCE_NAMES[drive.control_source]}) | команда платы: {'RUN' if model.drive_input_command(drive) else 'STOP'} | разрешение ПЧ: {'RUN' if model.drive_commanded(drive) else 'STOP'}",f"Команда Modbus: {'RUN' if drive.run_register else 'STOP'} | RUN-клемма do-{drive.run_relay}: {_on_off(model.relay(drive.run_relay))} | выбор do-{drive.selector_relay}: {_on_off(model.relay(drive.selector_relay))}",f"Задание {drive.target_hz():.1f} Гц | выход ПЧ {drive.actual_hz:.1f} Гц | разгон/торможение {drive.ramp_up_s:g}/{drive.ramp_down_s:g} с",f"РАСЧЁТ ИМИТАТОРА: ток {drive.calculated_current_a:.1f}/{drive.nominal_current_a:.1f} А | нагрузка ×{drive.calculated_load:.2f} | защита {PROTECTION_NAMES[drive.protection_state]}",f"Насос: {PUMP_FAILURE_NAMES[drive.mechanical_failure]} | повреждение {drive.mechanical_damage*100:.0f}% | ремонт {'ТРЕБУЕТСЯ' if drive.repair_required else 'не требуется'}",f"Штатный PA.27: {drive.fault} | RESET {'возможен, механику не ремонтирует' if drive.fault else 'не требуется'} | связь {'есть' if drive.online else 'нет'}","","РЕГИСТРЫ","Имя | Адрес | Название                          | RAW   | Масштаб / доступ"]
     for address,value in {**telemetry,**configuration}.items():
         if address in IDD_TELEMETRY:
             code,label,detail=IDD_TELEMETRY[address]
@@ -443,8 +502,9 @@ def render_page(name:str,model:BionicModel,journal:EventJournal,settings:BionicS
     elif name=="settings": lines,keys=_settings(model,settings,draft,saved,relay_state,width)
     elif name=="help": lines=_help(width,help_query)
     elif name=="log": lines=_log(journal,log_filter,width)
-    elif name=="tanks": lines=[f"{t.id} | {TANK_NAMES[t.id]} | {t.volume_l:.1f}/{t.capacity_l:.1f} л | перелив {t.overflow_l:.1f} л" for t in model.tanks.values()]
+    elif name=="tanks": lines=[f"{t.id} | {TANK_NAMES[t.id]} | {t.volume_l:.1f}/{t.capacity_l:.1f} л | MIN {model.sensors[f'{t.id}-min'].threshold_l:g} л | MAX {model.sensors[f'{t.id}-max'].threshold_l:g} л | перелив {t.overflow_l:.1f} л" for t in model.tanks.values()]
     elif name=="pumps": lines=[f"{p.id} | {PUMP_NAMES[p.id]} | {'RUN' if model.relay(p.relay) else 'STOP'} | {p.actual_flow_lpm:.1f} л/мин" for p in model.pumps.values()]
+    elif name=="equipment": lines=_equipment(model,settings,width)
     elif name=="pressure": lines=_pressure(model,width)
     elif name=="irrigation": lines=[f"{t.id} | Стеллаж {t.rack}, ярус | do-{t.relay} | {t.actual_flow_lpm:.1f} л/мин" for t in model.tiers.values()]
     elif name=="light": lines=_light(model,width)

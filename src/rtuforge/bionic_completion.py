@@ -5,11 +5,12 @@ from __future__ import annotations
 from prompt_toolkit.completion import Completer, Completion
 
 from .bionic_config import OPTION_SPECS
+from .bionic_equipment import EQUIPMENT_IDS, EquipmentProfile
 from .bionic_render import VIEW_NAMES
 
 
 COMMANDS = sorted({
-    "alarm", "devices", "exit", "fault", "help", "irrigation", "log",
+    "alarm", "devices", "equipment", "exit", "fault", "help", "irrigation", "log",
     "light", "pipe", "ponics", "ports", "pressure", "pump", "quit", "relay", "sensor",
     "settings", "sim", "status", "tank", "view",
 })
@@ -18,6 +19,7 @@ TANKS = ["bo", "bp", "bso1", "bso2"]
 PUMPS = ["bo-to-bp", "bso1-to-bp", "bso2-to-bp"]
 SENSORS = [f"{tank}-{kind}" for tank in TANKS for kind in ("min", "max")]
 DEVICES = ["relay-32ch", "ao-1", "ao-2", "ao-3", "ponics", "ai-pressure", "hp1", "hp2", "sensor-relay"]
+EQUIPMENT_FIELDS = list(EquipmentProfile.__dataclass_fields__)
 
 
 def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
@@ -44,11 +46,21 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
     elif len(completed) == 2 and completed[0] == "tank" and completed[1] in TANKS:
         candidates = ["level", "capacity"] + (["fill-rate"] if completed[1] == "bo" else [])
     elif completed == ["pump"]:
-        candidates = ["list", *PUMPS, "hp1", "hp2"]
+        candidates = ["list", *PUMPS]
     elif len(completed) == 2 and completed[0] == "pump" and completed[1] in PUMPS:
         candidates = ["flow"]
-    elif len(completed) == 2 and completed[0] == "pump" and completed[1] in {"hp1", "hp2"}:
-        candidates = ["repair"]
+    elif completed == ["equipment"]:
+        candidates = ["list", "status", "repair", "replace", "set"]
+    elif len(completed) == 2 and completed[0] == "equipment" and completed[1] in {"status", "repair", "replace", "set"}:
+        candidates = list(EQUIPMENT_IDS)
+    elif len(completed) == 3 and completed[:2] == ["equipment", "set"]:
+        candidates = EQUIPMENT_FIELDS
+    elif len(completed) == 3 and completed[0] == "equipment" and completed[1] in {"repair", "replace"}:
+        candidates = ["--confirm"]
+    elif len(completed) == 4 and completed[:2] == ["equipment", "set"] and completed[3] == "initial_state":
+        candidates = ["healthy", "dry_running", "overheated", "degraded", "failed"]
+    elif len(completed) == 4 and completed[:2] == ["equipment", "set"] and completed[3] == "failure_type":
+        candidates = ["jammed", "impeller_damage", "motor_failure", "loss_of_prime"]
     elif completed == ["sensor"]:
         candidates = ["list", *SENSORS]
     elif len(completed) == 2 and completed[0] == "sensor" and completed[1] in SENSORS:
