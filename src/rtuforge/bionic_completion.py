@@ -10,7 +10,7 @@ from .bionic_render import VIEW_NAMES
 
 COMMANDS = sorted({
     "alarm", "devices", "exit", "fault", "help", "irrigation", "log",
-    "pipe", "ponics", "ports", "pressure", "pump", "quit", "relay", "sensor",
+    "light", "pipe", "ponics", "ports", "pressure", "pump", "quit", "relay", "sensor",
     "settings", "sim", "status", "tank", "view",
 })
 
@@ -33,6 +33,8 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
         candidates = ["settings", "registers"]
     elif completed == ["view", "drive"]:
         candidates = ["hp1", "hp2"]
+    elif completed == ["view", "light"]:
+        candidates = ["settings"]
     elif completed == ["help"]:
         candidates = ["search"]
     elif completed == ["devices"]:
@@ -42,9 +44,11 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
     elif len(completed) == 2 and completed[0] == "tank" and completed[1] in TANKS:
         candidates = ["level", "capacity"] + (["fill-rate"] if completed[1] == "bo" else [])
     elif completed == ["pump"]:
-        candidates = ["list", *PUMPS]
+        candidates = ["list", *PUMPS, "hp1", "hp2"]
     elif len(completed) == 2 and completed[0] == "pump" and completed[1] in PUMPS:
         candidates = ["flow"]
+    elif len(completed) == 2 and completed[0] == "pump" and completed[1] in {"hp1", "hp2"}:
+        candidates = ["repair"]
     elif completed == ["sensor"]:
         candidates = ["list", *SENSORS]
     elif len(completed) == 2 and completed[0] == "sensor" and completed[1] in SENSORS:
@@ -61,8 +65,24 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
         candidates = ["1", "2"]
     elif len(completed) == 3 and completed[:2] == ["irrigation", "shelf"]:
         candidates = ["flow-per-tier"]
+    elif completed == ["light"]:
+        candidates = ["settings", "set", "apply", "save", "restore-defaults"]
+    elif completed == ["light", "set"]:
+        candidates = [f"zone-{index}" for index in range(1, 7)]
+    elif len(completed) == 3 and completed[:2] == ["light", "set"]:
+        candidates = ["type", "rack", "tier", "relay", "enabled", "name", "channel", "voltage", "brightness"]
+    elif len(completed) == 4 and completed[0] == "light" and completed[1] == "set" and completed[3] == "type":
+        candidates = ["none", "single", "spectral_4"]
+    elif len(completed) == 4 and completed[0] == "light" and completed[1] == "set" and completed[3] == "enabled":
+        candidates = ["on", "off"]
+    elif len(completed) == 4 and completed[0] == "light" and completed[1] == "set" and completed[3] == "channel":
+        candidates = ["brightness", "red", "far_red", "blue", "white"]
     elif completed == ["fault"]:
-        candidates = ["list", "clear", "leak", "blockage"]
+        candidates = ["list", "clear", "leak", "blockage", "pump"]
+    elif completed == ["fault", "pump"]:
+        candidates = ["hp1", "hp2"]
+    elif len(completed) == 3 and completed[:2] == ["fault", "pump"]:
+        candidates = ["none", "jammed", "impeller_damage", "motor_failure", "dry_run_wear", "loss_of_prime"]
     elif completed == ["fault", "clear"]:
         candidates = ["all"]
     elif completed in (["fault", "leak"], ["fault", "blockage"]):

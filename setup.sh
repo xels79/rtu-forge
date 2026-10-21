@@ -19,7 +19,7 @@ Options:
   --data-dir PATH      RTUFORGE_HOME and user data directory
   --working-dir PATH   Working directory for the optional desktop launcher
   --install-dir PATH   Installation environment directory
-  --bin-dir PATH       Directory for the rtuforge launcher
+  --bin-dir PATH       Directory for rtuforge, standforge and bionic-immitator launchers
   --no-migrate         Do not copy existing config/scripts/history from RepoRoot
   --desktop            Create ~/.local/share/applications/rtu-forge.desktop
   --no-path-update     Do not update ~/.bashrc or ~/.zshrc
@@ -132,6 +132,23 @@ text = (
 launcher.write_text(text, encoding="utf-8", newline="\n")
 PY
 chmod 755 -- "$LAUNCHER"
+
+for command_name in standforge bionic-immitator; do
+    command_launcher=$BIN_DIR/$command_name
+    "$VENV_DIR/bin/python" - "$command_launcher" "$VENV_DIR/bin/$command_name" <<'PY'
+from pathlib import Path
+import shlex
+import sys
+
+launcher, executable = map(Path, sys.argv[1:])
+launcher.write_text(
+    "#!/bin/sh\n" + f"exec {shlex.quote(str(executable))} \"$@\"\n",
+    encoding="utf-8",
+    newline="\n",
+)
+PY
+    chmod 755 -- "$command_launcher"
+done
 
 DESKTOP_ENTRY="not created"
 if [ "$CREATE_DESKTOP" -eq 1 ]; then
@@ -248,6 +265,8 @@ esac
 printf 'Running self-check...\n'
 "$LAUNCHER" --help >/dev/null
 "$LAUNCHER" paths
+"$BIN_DIR/standforge" --help >/dev/null
+"$BIN_DIR/bionic-immitator" --help >/dev/null
 
 printf '\nRepository:    %s\n' "$REPO_ROOT"
 printf 'Data/Home:     %s\n' "$DATA_DIR"
@@ -255,6 +274,8 @@ printf 'Working dir:   %s\n' "$WORKING_DIR"
 printf 'Install dir:   %s\n' "$INSTALL_DIR"
 printf 'Bin dir:       %s\n' "$BIN_DIR"
 printf 'Executable:    %s\n' "$LAUNCHER"
+printf 'StandForge:    %s\n' "$BIN_DIR/standforge"
+printf 'Bionic:        %s\n' "$BIN_DIR/bionic-immitator"
 printf 'Config:        %s\n' "$DATA_DIR/config.ini"
 printf 'Scripts:       %s\n' "$DATA_DIR/scripts.ini"
 printf 'Desktop entry: %s\n' "$DESKTOP_ENTRY"

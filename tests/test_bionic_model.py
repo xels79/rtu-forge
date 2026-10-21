@@ -274,6 +274,96 @@ def test_configured_closing_spike_participates_in_rupture_threshold():
     assert model.high_pressure_bar <= 3
 
 
+@pytest.mark.parametrize(
+    "source,terminal,modbus,selected,expected",
+    [
+        (1, True, False, True, True),
+        (1, False, True, True, False),
+        (2, True, False, True, False),
+        (2, False, True, True, True),
+        (1, True, False, False, False),
+        (2, False, True, False, False),
+        (0, True, True, True, False),
+    ],
+)
+def test_drive_run_source_and_selector_are_not_ored(source, terminal, modbus, selected, expected):
+    model = running_model()
+    drive = model.drives["hp1"]
+    drive.configuration[102] = source
+    drive.run_register = modbus
+    drive.ramp_up_s = 0.1
+    model.set_relay(drive.run_relay, terminal)
+    model.set_relay(drive.selector_relay, selected)
+    model.tick(0.2)
+    assert (drive.actual_hz > 0.1) is expected
+
+
+def test_pressure_matrix_zero_to_six_tiers_is_monotonic_at_42_hz():
+    pressures = []
+    for count in range(7):
+        model = running_model()
+        model.pressure_rise_s = model.boost_rise_s = 0
+        model.rupture_threshold_bar = 100
+        tiers = tuple(range(9, 9 + count))
+        enable_pressure(model, hz=42, tiers=tiers)
+        pressures.append(model.high_pressure_bar)
+    assert pressures == sorted(pressures, reverse=True)
+    assert pressures[0] == pytest.approx(84, abs=0.2)
+    assert pressures[3] == pytest.approx(57, abs=0.2)
+    assert pressures[6] < pressures[3]
+
+
+def test_jammed_pump_has_no_pressure_trips_protection_and_keeps_run_command():
+    model = running_model()
+    model.pressure_rise_s = model.boost_rise_s = 0
+    model.rupture_threshold_bar = 100
+    drive = model.drives["hp1"]
+    drive.mechanical_failure = "jammed"
+    drive.overload_trip_s = 0.2
+    enable_pressure(model, hz=42)
+    assert drive.calculated_current_a > drive.nominal_current_a
+    assert drive.fault == 10
+    assert drive.run_register is False
+    assert model.relay(drive.run_relay)
+    assert model.high_pressure_bar == 0
+    assert model.calculated_flow_lpm == 0
+
+
+def test_disabled_protection_and_loss_of_prime_do_not_fake_safe_stop():
+    model = running_model()
+    drive = model.drives["hp1"]
+    drive.mechanical_failure = "jammed"
+    drive.overload_protection_enabled = False
+    enable_pressure(model, hz=42)
+    assert drive.fault == 0
+    assert drive.actual_hz > 0
+    assert drive.calculated_current_a > drive.nominal_current_a
+    drive.mechanical_failure = "loss_of_prime"
+    model.tick(1)
+    assert drive.fault == 0
+    assert drive.actual_hz > 0
+    assert drive.calculated_current_a <= drive.no_load_current_a
+    assert model.high_pressure_bar < 5
+
+
+def test_reset_does_not_repair_mechanics_and_jam_retrips():
+    model = running_model()
+    drive = model.drives["hp1"]
+    drive.mechanical_failure = "jammed"
+    drive.overload_trip_s = 0.1
+    drive.configuration[102] = 2
+    drive.run_register = True
+    model.set_relay(drive.selector_relay, True)
+    model.tick(0.2)
+    assert drive.fault == 10
+    drive.reset_fault()
+    assert drive.mechanical_failure == "jammed"
+    model.tick(0.2)
+    assert drive.fault == 10
+    drive.repair()
+    assert drive.mechanical_failure == "none"
+
+
 def test_level_sensor_delay_hysteresis_and_force_do_not_change_volume():
     model = running_model()
     sensor = model.sensors["bo-min"]

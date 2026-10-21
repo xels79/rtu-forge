@@ -6,6 +6,9 @@ import configparser
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
+from .bionic_idd import validate_idd_parameter
+from .bionic_lights import FACTORY_LIGHT_PROFILE, parse_light_profile, validate_light_profile
+
 
 @dataclass(frozen=True)
 class BionicSettings:
@@ -69,6 +72,7 @@ class BionicSettings:
     leak_rate_lpm: float = 12.0
     leak_pressure_factor: float = 0.25
     blockage_severity: float = 70.0
+    light_profile: str = FACTORY_LIGHT_PROFILE
     ponics_irrigation_on_s: int = 60
     ponics_irrigation_pause_s: int = 300
     ponics_mode: int = 0
@@ -110,16 +114,46 @@ class BionicSettings:
     ph_reagent_delta_per_ml_at_100l: float = 0.02
     hp1_ramp_up_s: float = 5.0
     hp1_ramp_down_s: float = 5.0
+    hp1_pb00: int = 290
     hp1_pb01: int = 5
     hp1_pb02: int = 2
+    hp1_pb05: int = 500
+    hp1_pb06: int = 200
+    hp1_pc12: int = 1460
+    hp1_pc15: int = 500
     hp1_ph00: int = 1
     hp1_ph01: int = 3
+    hp1_nominal_current_a: float = 16.0
+    hp1_no_load_current_a: float = 4.0
+    hp1_pump_load_coefficient: float = 1.0
+    hp1_jam_current_multiplier: float = 2.0
+    hp1_overload_trip_s: float = 60.0
+    hp1_overload_protection_enabled: bool = True
+    hp1_overload_threshold_multiplier: float = 1.5
+    hp1_protection_behavior: str = "latched_reset"
+    hp1_mechanical_failure: str = "none"
+    hp1_mechanical_damage: float = 0.0
     hp2_ramp_up_s: float = 5.0
     hp2_ramp_down_s: float = 5.0
+    hp2_pb00: int = 290
     hp2_pb01: int = 5
     hp2_pb02: int = 2
+    hp2_pb05: int = 500
+    hp2_pb06: int = 200
+    hp2_pc12: int = 1460
+    hp2_pc15: int = 500
     hp2_ph00: int = 1
     hp2_ph01: int = 3
+    hp2_nominal_current_a: float = 16.0
+    hp2_no_load_current_a: float = 4.0
+    hp2_pump_load_coefficient: float = 1.0
+    hp2_jam_current_multiplier: float = 2.0
+    hp2_overload_trip_s: float = 60.0
+    hp2_overload_protection_enabled: bool = True
+    hp2_overload_threshold_multiplier: float = 1.5
+    hp2_protection_behavior: str = "latched_reset"
+    hp2_mechanical_failure: str = "none"
+    hp2_mechanical_damage: float = 0.0
     simulation_speed: float = 1.0
 
 
@@ -150,6 +184,8 @@ def _section(name: str) -> str:
         return "pressure"
     if name.startswith(("leak_", "blockage_")):
         return "faults"
+    if name == "light_profile":
+        return "lighting"
     return "simulation"
 
 
@@ -171,13 +207,15 @@ def parse_sensor_relay_map(value: str) -> dict[str, int]:
         raise ValueError("Карта реле должна иметь вид sensor:channel,sensor:channel") from None
 
 
-def validate_settings(settings: BionicSettings) -> None:
+def validate_settings(settings: BionicSettings, *, validate_lights: bool = True) -> None:
     addresses = {
         name: getattr(settings, name)
         for name in ("relay_address", "ao1_address", "ao2_address", "ao3_address", "ponics_address", "ai_address", "hp1_address", "hp2_address")
     }
     if any(not 1 <= value <= 247 for value in addresses.values()):
         raise ValueError("Адреса виртуальных Modbus-устройств должны быть в диапазоне 1..247")
+    if settings.ponics_address != 5:
+        raise ValueError("PonicPilot Bionic Mini жёстко использует Modbus ID 5")
     if len(set(addresses.values())) != len(addresses):
         raise ValueError("Адреса виртуальных Modbus-устройств на USB №1 не должны совпадать")
     if settings.sensor_relay_id not in range(1, 248):
@@ -227,6 +265,11 @@ def validate_settings(settings: BionicSettings) -> None:
         raise ValueError("Степень засора должна быть в диапазоне 0..100")
     if not 0 <= settings.rupture_residual_bar <= 3:
         raise ValueError("Остаточное давление после разрыва должно быть в диапазоне 0..3 бар")
+    if validate_lights:
+        validate_light_profile(
+            parse_light_profile(settings.light_profile),
+            {settings.ao1_address, settings.ao2_address, settings.ao3_address},
+        )
     if not 0.1 <= settings.simulation_speed <= 100:
         raise ValueError("Скорость симуляции должна быть в диапазоне 0.1..100")
     if settings.ponics_mode not in {0, 2, 3, 4, 5}:
@@ -263,6 +306,45 @@ def validate_settings(settings: BionicSettings) -> None:
         raise ValueError("Сумма поглощения и осаждения не должна превышать 1")
     if min(settings.hp1_ramp_up_s, settings.hp1_ramp_down_s, settings.hp2_ramp_up_s, settings.hp2_ramp_down_s) < 0:
         raise ValueError("Времена разгона и торможения частотников не могут быть отрицательными")
+    failures = {"none", "jammed", "impeller_damage", "motor_failure", "dry_run_wear", "loss_of_prime"}
+    for prefix in ("hp1", "hp2"):
+        drive_config = {
+            100: getattr(settings, f"{prefix}_pb00"),
+            101: getattr(settings, f"{prefix}_pb01"),
+            102: getattr(settings, f"{prefix}_pb02"),
+            105: getattr(settings, f"{prefix}_pb05"),
+            106: getattr(settings, f"{prefix}_pb06"),
+            107: round(getattr(settings, f"{prefix}_ramp_up_s") * 10),
+            108: round(getattr(settings, f"{prefix}_ramp_down_s") * 10),
+            210: round(getattr(settings, f"{prefix}_nominal_current_a") * 10),
+            212: getattr(settings, f"{prefix}_pc12"),
+            215: getattr(settings, f"{prefix}_pc15"),
+            700: getattr(settings, f"{prefix}_ph00"),
+            701: getattr(settings, f"{prefix}_ph01"),
+            702: getattr(settings, f"{prefix}_address"),
+            816: int(getattr(settings, f"{prefix}_overload_protection_enabled")),
+        }
+        for address, raw in drive_config.items():
+            validate_idd_parameter(address, raw, drive_config)
+        if getattr(settings, f"{prefix}_mechanical_failure") not in failures:
+            raise ValueError("Тип отказа насоса: none, jammed, impeller_damage, motor_failure, dry_run_wear или loss_of_prime")
+        if getattr(settings, f"{prefix}_protection_behavior") != "latched_reset":
+            raise ValueError("Для IDD подтверждено только поведение защиты latched_reset")
+        damage = getattr(settings, f"{prefix}_mechanical_damage")
+        positive = (
+            getattr(settings, f"{prefix}_nominal_current_a"),
+            getattr(settings, f"{prefix}_jam_current_multiplier"),
+            getattr(settings, f"{prefix}_overload_threshold_multiplier"),
+        )
+        nonnegative_drive = (
+            getattr(settings, f"{prefix}_no_load_current_a"),
+            getattr(settings, f"{prefix}_pump_load_coefficient"),
+            getattr(settings, f"{prefix}_overload_trip_s"),
+        )
+        if not 0 <= damage <= 1 or any(value <= 0 for value in positive) or any(value < 0 for value in nonnegative_drive):
+            raise ValueError("Параметры тока, защиты и повреждения частотников вне допустимого диапазона")
+        if getattr(settings, f"{prefix}_no_load_current_a") > getattr(settings, f"{prefix}_nominal_current_a"):
+            raise ValueError("Ток холостого хода не может превышать номинальный ток")
 
 
 def _parse_value(current: object, value: str) -> object:
@@ -284,7 +366,7 @@ def changed(settings: BionicSettings, name: str, raw_value: str) -> BionicSettin
     if name not in OPTION_SPECS:
         raise ValueError(f"Неизвестный параметр: {name}")
     result = replace(settings, **{name: _parse_value(getattr(settings, name), raw_value)})
-    validate_settings(result)
+    validate_settings(result, validate_lights=False)
     return result
 
 

@@ -30,7 +30,8 @@ Defaults:
 - `RepoRoot`: directory containing `setup.ps1`;
 - `DataDir`: `%APPDATA%\RTUForge`;
 - `WorkingDir`: DataDir;
-- executable: the actual `rtuforge.exe` reported by the uv tool bin directory.
+- executables: `rtuforge.exe`, `standforge.exe`, and `bionic-immitator.exe` in
+  the actual uv tool bin directory.
 
 Explicit relative `-RepoRoot`, `-DataDir`, and `-WorkingDir` values are resolved against the PowerShell invocation directory, even when the destination does not exist yet:
 
@@ -39,7 +40,13 @@ Explicit relative `-RepoRoot`, `-DataDir`, and `-WorkingDir` values are resolved
 .\setup.ps1 -NoShortcut
 ```
 
-Unless `-NoShortcut` is used, the installer creates a per-user `RTU Forge.lnk` whose target is the installed `rtuforge.exe`, whose arguments contain the absolute DataDir as `--home`, and whose working directory is WorkingDir. Unless `-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are copied from RepoRoot only when the source exists and the destination does not. Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1` to update the editable installation after dependency or packaging changes.
+Unless `-NoShortcut` is used, the installer creates per-user `RTU Forge.lnk`
+and `Bionic Immitator.lnk` shortcuts. The Bionic shortcut uses
+`<DataDir>\bionic-data`; it does not share or overwrite RTU Forge files. Unless
+`-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are
+copied from RepoRoot only when the source exists and the destination does not.
+Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1`
+to update the editable installation after dependency or packaging changes.
 
 `-NoMigrate` means only that these three files are not copied from RepoRoot. With a pre-existing config in DataDir, the installation is fully operational. With a new empty DataDir, setup and its `--help`/`paths` self-check succeed, but config-dependent commands report a missing config until you provide `config.ini`.
 
@@ -74,6 +81,15 @@ that tank only. Use
 `view <page>` or `F1`–`F6` to navigate, the mouse wheel or `PgUp`/`PgDn` to
 scroll, `Tab` for contextual completion, and `Up`/`Down` for persistent command
 history. See [BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md) for the complete key map.
+
+Lighting is configured independently per tier through `view light settings`.
+The mutable `light_profile` option stores the six `NONE`, `SINGLE`, or
+`SPECTRAL_4` assignments, their power DOs, physical Modbus AO IDs/channels,
+voltage ranges, brightness ranges, names, and enabled flags. `light apply`
+changes only the active interpretation, `light save` changes only the saved
+lighting profile, and `light restore-defaults` restores the Bionic Mini factory
+map in the draft. These operations never write controller-owned DO or AO
+outputs.
 
 The pressure model exposes mutable `pressure_rise_s`,
 `valve_pressure_response_ms`, `valve_pressure_close_response_ms`,
@@ -142,7 +158,11 @@ All installer paths are normalized to absolute paths before files are created. M
 
 `--no-migrate` means only that config, scripts, and history are not copied from RepoRoot. It is suitable when DataDir already contains the intended user files. For a new empty DataDir, installer self-checks `--help` and `paths` still succeed, while config-dependent commands report a missing `config.ini` until one is supplied.
 
-The generated `<BinDir>/rtuforge` launcher exports the absolute DataDir as `RTUFORGE_HOME`, uses `exec`, forwards all arguments, and preserves the caller's current directory. `--desktop` is optional and uses WorkingDir only for graphical launch.
+The generated `<BinDir>/rtuforge`, `<BinDir>/standforge`, and
+`<BinDir>/bionic-immitator` launchers use `exec`, forward all arguments, and
+preserve the caller's current directory. The RTU Forge launcher additionally
+exports the absolute DataDir as `RTUFORGE_HOME`. `--desktop` is optional and
+uses WorkingDir only for graphical RTU Forge launch.
 
 ## Runtime path and user-data model
 
@@ -152,7 +172,7 @@ The generated `<BinDir>/rtuforge` launcher exports the absolute DataDir as `RTUF
 | DataDir / RTUFORGE_HOME | `config.ini`, `scripts.ini`, history | `%APPDATA%\RTUForge` | `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge` |
 | WorkingDir | Starting directory for shortcut/desktop launch | DataDir | DataDir |
 | InstallDir | Installation environment | managed by `uv tool` | `${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge` |
-| Executable / BinDir | User shell executable/launcher | value from `uv tool dir --bin` | `$HOME/.local/bin/rtuforge` |
+| Executable / BinDir | User shell executables/launchers | value from `uv tool dir --bin` | `$HOME/.local/bin/{rtuforge,standforge,bionic-immitator}` |
 
 These roles are independent: DataDir, WorkingDir, and RepoRoot may coincide, but none is derived from another after setup. Inspect active application paths with:
 

@@ -13,6 +13,8 @@ from enum import Enum
 from math import sqrt
 from typing import Callable
 
+from .bionic_idd import IDD_FAULT_OVERLOAD_RUNNING, validate_idd_parameter
+from .bionic_lights import FACTORY_LIGHTS, LightConfig, LightType, brightness_percent
 from .bionic_ponics import PonicsPilot
 
 
@@ -241,15 +243,123 @@ class Drive:
     motor_hours: float = 0.0
     fault: int = 0
     online: bool = True
+    nominal_current_a: float = 16.0
+    no_load_current_a: float = 4.0
+    pump_load_coefficient: float = 1.0
+    jam_current_multiplier: float = 2.0
+    overload_trip_s: float = 60.0
+    overload_protection_enabled: bool = True
+    overload_threshold_multiplier: float = 1.5
+    protection_behavior: str = "latched_reset"
+    mechanical_failure: str = "none"
+    mechanical_damage: float = 0.0
+    calculated_current_a: float = 0.0
+    calculated_load: float = 0.0
+    overload_elapsed_s: float = 0.0
+    protection_state: str = "READY"
     configuration: dict[int, int] = field(default_factory=dict)
+    configuration_changed: Callable[[int, int], None] = field(
+        default=lambda _address, _value: None, repr=False, compare=False,
+    )
 
     def __post_init__(self) -> None:
         if not self.configuration:
-            self.configuration = {101: 5, 102: 2, 700: 1, 701: 3, 702: self.address}
+            self.configuration = {
+                # Standalone model tests use the physical RUN terminals.  The
+                # application applies its persisted PB.02 (normally RS-485).
+                100: 290, 101: 5, 102: 1, 105: 500, 106: 200,
+                107: 50, 108: 50, 210: round(self.nominal_current_a * 10),
+                212: 1460, 215: 500,
+                700: 1, 701: 3, 702: self.address,
+                816: int(self.overload_protection_enabled),
+            }
+
+    @property
+    def control_source(self) -> str:
+        return {0: "panel", 1: "terminals", 2: "modbus"}.get(
+            self.configuration.get(102, 0), "unsupported",
+        )
+
+    @property
+    def frequency_source(self) -> str:
+        return "modbus" if self.configuration.get(101) == 5 else (
+            "local" if self.configuration.get(101) == 0 else "unsupported"
+        )
+
+    def write_parameter(self, address: int, value: int) -> None:
+        validate_idd_parameter(address, value, self.configuration)
+        self.configuration[address] = value
+        if address == 107:
+            self.ramp_up_s = value / 10.0
+        elif address == 108:
+            self.ramp_down_s = value / 10.0
+        elif address == 702:
+            self.address = value
+        elif address == 210:
+            self.nominal_current_a = value / 10.0
+        elif address == 816:
+            self.overload_protection_enabled = bool(value)
+        self.configuration_changed(address, value)
+
+    def commanded(self, terminal_run: bool, selected: bool) -> bool:
+        if not self.online or self.fault or not selected:
+            return False
+        if self.control_source == "terminals":
+            return terminal_run
+        if self.control_source == "modbus":
+            return self.run_register
+        return False
+
+    @property
+    def repair_required(self) -> bool:
+        return self.mechanical_failure != "none" or self.mechanical_damage > 0
+
+    @property
+    def hydraulic_factor(self) -> float:
+        if self.mechanical_failure in {"jammed", "motor_failure"}:
+            return 0.0
+        if self.mechanical_failure == "impeller_damage":
+            return 0.2
+        if self.mechanical_failure == "loss_of_prime":
+            return 0.05
+        wear = self.mechanical_damage
+        if self.mechanical_failure == "dry_run_wear":
+            return max(0.0, 1.0 - min(1.0, wear))
+        return max(0.0, 1.0 - 0.8 * min(1.0, wear))
+
+    def repair(self) -> None:
+        self.mechanical_failure = "none"
+        self.mechanical_damage = 0.0
+        self.overload_elapsed_s = 0.0
+
+    def reset_fault(self) -> None:
+        self.fault = 0
+        self.overload_elapsed_s = 0.0
+        self.protection_state = "READY"
+
+    def target_hz(self) -> float:
+        if self.frequency_source == "modbus":
+            requested = self.setpoint_hz
+        elif self.frequency_source == "local":
+            requested = self.configuration[100] / 10.0
+        else:
+            requested = 0.0
+        minimum = self.configuration[106] / 10.0
+        maximum = self.configuration[105] / 10.0
+        return min(maximum, max(minimum, requested))
+
+    @property
+    def speed_rpm(self) -> int:
+        nominal_hz = self.configuration[215] / 10.0
+        if nominal_hz <= 0:
+            return 0
+        return round(self.configuration[212] * self.actual_hz / nominal_hz)
 
     def update(self, external_run: bool, selected: bool, dt_s: float) -> None:
-        running = self.online and not self.fault and selected and (external_run or self.run_register)
-        target = self.setpoint_hz if running else 0.0
+        running = self.commanded(external_run, selected)
+        if running and self.mechanical_failure == "dry_run_wear":
+            self.mechanical_damage = min(1.0, self.mechanical_damage + dt_s / 300.0)
+        target = self.target_hz() if running else 0.0
         duration = self.ramp_up_s if target > self.actual_hz else self.ramp_down_s
         step = max(self.setpoint_hz, 1.0) * dt_s / max(duration, 1e-9)
         if self.actual_hz < target:
@@ -258,6 +368,34 @@ class Drive:
             self.actual_hz = max(target, self.actual_hz - step)
         if self.actual_hz > 0.1:
             self.motor_hours += dt_s / 3600.0
+        ratio = min(1.0, self.actual_hz / max(self.configuration[105] / 10.0, 0.1))
+        if self.actual_hz <= 0.1:
+            self.calculated_load = 0.0
+            self.calculated_current_a = 0.0
+        elif self.mechanical_failure == "jammed":
+            self.calculated_load = self.jam_current_multiplier
+            self.calculated_current_a = self.nominal_current_a * self.jam_current_multiplier
+        elif self.mechanical_failure == "motor_failure":
+            self.calculated_load = 0.0
+            self.calculated_current_a = 0.0
+        elif self.mechanical_failure in {"loss_of_prime", "dry_run_wear"}:
+            self.calculated_load = 0.1
+            self.calculated_current_a = self.no_load_current_a * max(ratio, 0.2)
+        else:
+            self.calculated_load = self.pump_load_coefficient * self.hydraulic_factor
+            span = max(0.0, self.nominal_current_a - self.no_load_current_a)
+            self.calculated_current_a = self.no_load_current_a + span * self.calculated_load * ratio
+        threshold = self.nominal_current_a * self.overload_threshold_multiplier
+        overloaded = self.calculated_current_a > threshold
+        if running and overloaded and self.overload_protection_enabled:
+            self.protection_state = "TIMING"
+            self.overload_elapsed_s += dt_s
+            if self.overload_elapsed_s >= self.overload_trip_s:
+                self.fault = IDD_FAULT_OVERLOAD_RUNNING
+                self.protection_state = "TRIPPED"
+        elif not self.fault:
+            self.overload_elapsed_s = 0.0
+            self.protection_state = "READY" if self.overload_protection_enabled else "DISABLED"
 
 
 @dataclass
@@ -266,15 +404,6 @@ class WaterMeter:
     total_l: float = 0.0
     status: str = "OK"
     source: str = "виртуальный"
-
-
-@dataclass(frozen=True)
-class LightZone:
-    id: str
-    rack: int
-    tier: int
-    power_relay: int
-    channels: dict[str, tuple[int, int]]
 
 
 DEFAULT_OUTPUTS: dict[str, int] = {
@@ -337,14 +466,7 @@ class BionicModel:
         self.water_meter = WaterMeter()
         self.analog_outputs: dict[tuple[int, int], int] = {}
         # Device indexes follow the verified Stage 7 bindings (AO slaves 2..4).
-        self.lights = {
-            "zone-1": LightZone("zone-1", 1, 1, 3, {"brightness": (2, 1)}),
-            "zone-2": LightZone("zone-2", 1, 2, 4, {"red": (2, 2), "far_red": (2, 3), "blue": (2, 4), "white": (2, 5)}),
-            "zone-3": LightZone("zone-3", 1, 3, 5, {"brightness": (2, 6)}),
-            "zone-4": LightZone("zone-4", 2, 1, 6, {"brightness": (2, 7)}),
-            "zone-5": LightZone("zone-5", 2, 2, 7, {"red": (2, 8), "far_red": (3, 1), "blue": (3, 2), "white": (3, 3)}),
-            "zone-6": LightZone("zone-6", 2, 3, 8, {"brightness": (3, 4)}),
-        }
+        self.lights = {light.id: light for light in FACTORY_LIGHTS}
         self.water_supply_available = True
         self.fill_flow_lpm = 3.0
         self.fill_valve_stuck_open = False
@@ -411,13 +533,35 @@ class BionicModel:
         self.analog_outputs[(device_address, channel)] = value
         self.event("RS485", f"ao-{device_address}/{channel}", str(value))
 
-    def light_state(self, zone_id: str) -> tuple[bool, dict[str, float]]:
-        zone = self.lights[zone_id]
-        values = {
-            name: self.analog_outputs.get((device, channel), 0) / 100.0
-            for name, (device, channel) in zone.channels.items()
+    def configure_lights(self, profile: tuple[LightConfig, ...]) -> None:
+        """Apply a mapping without changing any controller-owned output."""
+        self.lights = {light.id: light for light in profile}
+
+    def light_channel_state(self, zone_id: str) -> dict[str, tuple[int, int, float, float]]:
+        """Return role -> (Modbus ID, AO, volts, requested brightness percent)."""
+        light = self.lights[zone_id]
+        return {
+            binding.role: (
+                binding.device_id,
+                binding.channel,
+                self.analog_outputs.get((binding.device_id, binding.channel), 0) / 1000.0,
+                brightness_percent(
+                    light,
+                    self.analog_outputs.get((binding.device_id, binding.channel), 0) / 1000.0,
+                ),
+            )
+            for binding in light.channels
         }
-        return self.relay(zone.power_relay), values
+
+    def light_state(self, zone_id: str) -> tuple[bool, dict[str, float]]:
+        light = self.lights[zone_id]
+        powered = light.enabled and light.light_type != LightType.NONE and self.relay(light.power_relay)
+        values = {role: state[3] for role, state in self.light_channel_state(zone_id).items()}
+        return powered, values
+
+    def light_effective(self, zone_id: str) -> bool:
+        powered, values = self.light_state(zone_id)
+        return powered and any(value > 0 for value in values.values())
 
     def force_sensor(self, sensor_id: str, value: bool | None) -> None:
         sensor = self.sensors[sensor_id]
@@ -549,11 +693,8 @@ class BionicModel:
 
     def drive_commanded(self, drive: Drive) -> bool:
         """Report whether the controller is currently commanding this HP."""
-        return (
-            drive.online
-            and not drive.fault
-            and self.relay(drive.selector_relay)
-            and (self.relay(drive.run_relay) or drive.run_register)
+        return drive.commanded(
+            self.relay(drive.run_relay), self.relay(drive.selector_relay),
         )
 
     def _blockage_aperture(self) -> float:
@@ -566,7 +707,7 @@ class BionicModel:
     def _pressure_target(self, open_tiers: int) -> float:
         aperture = self._blockage_aperture()
         self.hydraulic_resistance = 1.0 / (aperture * aperture)
-        drive = max(self.drives.values(), key=lambda item: item.actual_hz)
+        drive = max(self.drives.values(), key=lambda item: item.actual_hz * item.hydraulic_factor)
         if (
             drive.actual_hz <= 0.1
             or not self.drive_commanded(drive)
@@ -591,7 +732,7 @@ class BionicModel:
             1.0,
             self.low_pressure_bar / max(self.boost_pressure_bar, 1e-9),
         )
-        pressure *= supply_factor
+        pressure *= supply_factor * drive.hydraulic_factor
         if self.leak_enabled:
             pressure *= max(0.05, 1.0 - self.leak_pressure_factor)
         return min(self.pressure_max_bar, pressure)
@@ -656,7 +797,7 @@ class BionicModel:
         self.pressure_target_bar = pressure_target
         pump_running = max((drive.actual_hz for drive in self.drives.values()), default=0.0) > 0.1
         pump_pressurizing = any(
-            drive.actual_hz > 0.1 and self.drive_commanded(drive)
+            drive.actual_hz > 0.1 and drive.hydraulic_factor > 0 and self.drive_commanded(drive)
             for drive in self.drives.values()
         )
         hydraulic_signature = self._hydraulic_state(active_tiers)
@@ -714,7 +855,10 @@ class BionicModel:
         source_bo = self.relay(self.outputs["source_osmosis"])
         source_bp = self.relay(self.outputs["source_broth"])
         self.hydraulic_uncertainty = source_bo and source_bp
-        scale = max((drive.actual_hz for drive in self.drives.values()), default=0.0) / 29.0
+        scale = max(
+            (drive.actual_hz * drive.hydraulic_factor for drive in self.drives.values()),
+            default=0.0,
+        ) / 29.0
         if self.pipe_ruptured:
             scale *= 0.1
         scale *= self._blockage_aperture()

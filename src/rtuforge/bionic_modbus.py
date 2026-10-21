@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable
 
+from .bionic_idd import IDD_BAUDRATES, IDD_FORMATS, IDD_PARAMETERS
 from .bionic_model import BionicModel
 from .bionic_ponics import PONICS_DOSING_REGISTERS, PONICS_REGISTER_COUNT, PONICS_WRITABLE_SETTINGS
 from .crc import append_crc, has_valid_crc
@@ -38,6 +39,9 @@ class ModbusDevice:
 
     def handle_pdu(self, function: int, data: bytes) -> bytes | int:
         return ILLEGAL_FUNCTION
+
+    def responds(self) -> bool:
+        return self.online
 
 
 class RelayDevice(ModbusDevice):
@@ -218,21 +222,41 @@ class PonicsDevice(ModbusDevice):
 
 
 class IddDevice(ModbusDevice):
-    """Register subset used by the firmware's IDD222M21E driver."""
+    """Documented IDD222M21E telemetry, controls, and RW parameters."""
 
-    def __init__(self, address: int, model: BionicModel, drive_id: str) -> None:
+    def __init__(
+        self, address: int, model: BionicModel, drive_id: str, *,
+        bus_baudrate: int = 9600, bus_parity: str = "N", bus_stopbits: float = 1.0,
+    ) -> None:
         super().__init__(address)
         self.model = model
         self.drive_id = drive_id
         self.configuration = self.model.drives[drive_id].configuration
+        self.pending_address: int | None = None
+        self.address_available: Callable[[int], bool] = lambda _address: True
+        self.bus_baudrate = bus_baudrate
+        self.bus_parity = bus_parity
+        self.bus_stopbits = bus_stopbits
+
+    def responds(self) -> bool:
+        protocol, parity, stopbits = IDD_FORMATS.get(
+            self.configuration.get(701), ("unsupported", "", 0.0),
+        )
+        return (
+            self.online
+            and IDD_BAUDRATES.get(self.configuration.get(700)) == self.bus_baudrate
+            and protocol == "RTU"
+            and parity == self.bus_parity
+            and stopbits == self.bus_stopbits
+        )
 
     def _register(self, address: int) -> int | None:
         drive = self.model.drives[self.drive_id]
         values = {
-            1: round(drive.setpoint_hz * 10),
+            1: round(drive.target_hz() * 10),
             2: round(drive.actual_hz * 10),
-            3: round(drive.actual_hz * 2),
-            4: round(drive.motor_hours * 10),
+            3: round(drive.calculated_current_a * 10),
+            4: drive.speed_rpm,
             27: drive.fault,
             28: 1 if drive.actual_hz > 0.1 else 0,
             **self.configuration,
@@ -260,13 +284,24 @@ class IddDevice(ModbusDevice):
                 elif value == 2:
                     drive.run_register = True
                 elif value == 0x10:
-                    drive.fault = 0
+                    drive.reset_fault()
                 else:
                     return ILLEGAL_VALUE
             elif register == 0x2001:
-                if not 200 <= value <= 500:
+                if not 0 <= value <= 4000:
                     return ILLEGAL_VALUE
                 drive.setpoint_hz = value / 10.0
+            elif register in IDD_PARAMETERS:
+                if register == 702 and (
+                    not self.address_available(value) or not 1 <= value <= 247
+                ):
+                    return ILLEGAL_VALUE
+                try:
+                    drive.write_parameter(register, value)
+                except ValueError:
+                    return ILLEGAL_VALUE
+                if register == 702 and value != self.address:
+                    self.pending_address = value
             else:
                 return ILLEGAL_ADDRESS
             return data
@@ -283,6 +318,10 @@ class ModbusBus:
         if device.address in self.devices:
             raise ValueError(f"Duplicate Modbus address: {device.address}")
         self.devices[device.address] = device
+        if isinstance(device, IddDevice):
+            device.address_available = lambda address, current=device: (
+                address == current.address or address not in self.devices
+            )
 
     def handle(self, frame: bytes) -> bytes:
         if len(frame) < 4:
@@ -295,14 +334,21 @@ class ModbusBus:
             return b""
         slave, function = frame[0], frame[1]
         device = self.devices.get(slave)
-        if device is None or not device.online or (
+        if device is None or not device.responds() or (
             isinstance(device, PonicsDevice) and not device.model.ponics.respond
         ):
             return b""
         result = device.handle_pdu(function, frame[2:-2])
         if isinstance(result, int):
             return exception(slave, function, result)
-        return append_crc(bytes((slave, function)) + result)
+        response = append_crc(bytes((slave, function)) + result)
+        if isinstance(device, IddDevice) and device.pending_address is not None:
+            new_address = device.pending_address
+            device.pending_address = None
+            del self.devices[slave]
+            device.address = new_address
+            self.devices[new_address] = device
+        return response
 
 
 def expected_frame_length(buffer: bytes) -> int | None:
@@ -324,6 +370,11 @@ def build_default_bus(model: BionicModel, addresses: object) -> ModbusBus:
     bus.add(AnalogOutputDevice(addresses.ao3_address, lambda channel, value: model.set_analog_output(addresses.ao3_address, channel, value)))
     bus.add(PonicsDevice(addresses.ponics_address, model))
     bus.add(AnalogInputDevice(addresses.ai_address, model))
-    bus.add(IddDevice(addresses.hp1_address, model, "hp1"))
-    bus.add(IddDevice(addresses.hp2_address, model, "hp2"))
+    serial = {
+        "bus_baudrate": addresses.controller_baudrate,
+        "bus_parity": addresses.controller_parity,
+        "bus_stopbits": addresses.controller_stopbits,
+    }
+    bus.add(IddDevice(addresses.hp1_address, model, "hp1", **serial))
+    bus.add(IddDevice(addresses.hp2_address, model, "hp2", **serial))
     return bus

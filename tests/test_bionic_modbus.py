@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from rtuforge.bionic_config import BionicSettings, changed, load_settings, parse_sensor_relay_map, save_settings
+from rtuforge.bionic_lights import LightType
 from rtuforge.bionic_model import BionicModel
 from rtuforge.bionic_modbus import build_default_bus
 from rtuforge.bionic_sensor_bridge import SensorRelayBridge
@@ -32,6 +33,32 @@ def test_ao_fc03_fc06_fc10_and_illegal_address():
     assert request(bus, "02 03 00 08 00 01") == bytes.fromhex("02 83 02")
 
 
+def test_light_voltage_brightness_and_power_are_independent():
+    model = BionicModel()
+    bus = build_default_bus(model, BionicSettings())
+    assert request(bus, "02 06 00 00 1B 58") == bytes.fromhex("02 06 00 00 1B 58")
+    state = model.light_channel_state("zone-1")["brightness"]
+    assert state == pytest.approx((2, 1, 7.0, 70.0))
+    assert not model.light_effective("zone-1")
+    model.set_relay(3, True)
+    assert model.light_effective("zone-1")
+    assert model.light_channel_state("zone-1")["brightness"][2:] == pytest.approx((7.0, 70.0))
+
+
+def test_four_channel_spectral_light_reads_each_written_ao_register():
+    model = BionicModel()
+    bus = build_default_bus(model, BionicSettings())
+    request(bus, "02 10 00 01 00 04 08 03 E8 07 D0 0B B8 0F A0")
+    states = model.light_channel_state("zone-2")
+    assert model.lights["zone-2"].light_type == LightType.SPECTRAL_4
+    assert {role: value[2] for role, value in states.items()} == pytest.approx({
+        "red": 1.0, "far_red": 2.0, "blue": 3.0, "white": 4.0,
+    })
+    assert {role: value[3] for role, value in states.items()} == pytest.approx({
+        "red": 10.0, "far_red": 20.0, "blue": 30.0, "white": 40.0,
+    })
+
+
 def test_ai_fc04_uses_physical_pressure_and_rejects_fc03():
     model = BionicModel()
     model.low_pressure_bar = 3
@@ -47,6 +74,58 @@ def test_idd_registers_and_write_does_not_fake_run_feedback():
     assert request(bus, "07 06 20 01 01 A4") == bytes.fromhex("07 06 20 01 01 A4")
     assert model.drives["hp1"].setpoint_hz == 42
     assert request(bus, "07 03 00 1C 00 01") == bytes.fromhex("07 03 02 00 00")
+
+
+def test_idd_documented_rw_parameters_ranges_readback_and_ro_rejection():
+    model = BionicModel()
+    bus = build_default_bus(model, BionicSettings())
+    assert request(bus, "07 06 00 65 00 05") == bytes.fromhex("07 06 00 65 00 05")
+    assert request(bus, "07 06 00 66 00 02") == bytes.fromhex("07 06 00 66 00 02")
+    assert request(bus, "07 06 00 69 01 90") == bytes.fromhex("07 06 00 69 01 90")
+    assert request(bus, "07 06 00 6A 00 C8") == bytes.fromhex("07 06 00 6A 00 C8")
+    assert request(bus, "07 06 00 6B 00 19") == bytes.fromhex("07 06 00 6B 00 19")
+    assert request(bus, "07 06 00 D2 00 96") == bytes.fromhex("07 06 00 D2 00 96")
+    assert request(bus, "07 06 03 30 00 00") == bytes.fromhex("07 06 03 30 00 00")
+    assert request(bus, "07 03 00 6B 00 01") == bytes.fromhex("07 03 02 00 19")
+    assert model.drives["hp1"].ramp_up_s == 2.5
+    assert model.drives["hp1"].nominal_current_a == 15.0
+    assert not model.drives["hp1"].overload_protection_enabled
+    model.drives["hp1"].actual_hz = 25.0
+    assert request(bus, "07 03 00 04 00 01") == bytes.fromhex("07 03 02 02 DA")
+    assert request(bus, "07 06 00 66 00 03") == bytes.fromhex("07 86 03")
+    assert request(bus, "07 06 00 02 00 01") == bytes.fromhex("07 86 02")
+
+
+def test_idd_ph02_moves_device_after_reply_and_rejects_duplicate_address():
+    model = BionicModel()
+    bus = build_default_bus(model, BionicSettings())
+    assert request(bus, "07 06 02 BE 00 11") == bytes.fromhex("07 06 02 BE 00 11")
+    assert bus.handle(append_crc(bytes.fromhex("07 03 02 BE 00 01"))) == b""
+    assert request(bus, "11 03 02 BE 00 01") == bytes.fromhex("11 03 02 00 11")
+    assert request(bus, "11 06 02 BE 00 08") == bytes.fromhex("11 86 03")
+
+
+def test_idd_serial_parameter_takes_effect_after_write_reply():
+    bus = build_default_bus(BionicModel(), BionicSettings())
+    assert request(bus, "07 06 02 BC 00 00") == bytes.fromhex("07 06 02 BC 00 00")
+    assert bus.handle(append_crc(bytes.fromhex("07 03 02 BC 00 01"))) == b""
+
+
+def test_idd_overload_uses_only_standard_telemetry_and_preserves_run_command():
+    model = BionicModel()
+    model.running = True
+    drive = model.drives["hp1"]
+    drive.configuration[102] = 2
+    drive.overload_trip_s = 0.1
+    drive.mechanical_failure = "jammed"
+    model.set_relay(drive.selector_relay, True)
+    bus = build_default_bus(model, BionicSettings())
+    assert request(bus, "07 06 20 00 00 02") == bytes.fromhex("07 06 20 00 00 02")
+    model.tick(0.2)
+    assert drive.run_register
+    assert request(bus, "07 03 00 1B 00 01") == bytes.fromhex("07 03 02 00 0A")
+    assert request(bus, "07 03 00 03 00 01") == bytes.fromhex("07 03 02 01 40")
+    assert request(bus, "07 03 00 1D 00 01") == bytes.fromhex("07 83 02")
 
 
 def test_ponics_reads_full_map_scales_bp_measurements_and_writes_only_confirmed_registers():
@@ -106,6 +185,8 @@ def test_settings_roundtrip_validation_and_no_implicit_file(tmp_path: Path):
     assert changed(settings, "valve_pressure_response_ms", "200").valve_pressure_response_ms == 200
     with pytest.raises(ValueError, match="0..3 бар"):
         changed(settings, "rupture_residual_bar", "3.1")
+    with pytest.raises(ValueError, match="Modbus ID 5"):
+        changed(settings, "ponics_address", "15")
 
 
 class FakeTransport:

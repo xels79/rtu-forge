@@ -12,8 +12,15 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from rich.console import Console
-from .bionic_config import BionicSettings, changed, load_settings, parse_sensor_relay_map, save_settings
+from .bionic_config import (
+    BionicSettings, changed, load_settings, parse_sensor_relay_map, save_settings,
+    validate_settings,
+)
 from .bionic_events import EventJournal
+from .bionic_lights import (
+    FACTORY_LIGHT_PROFILE, LightChannel, LightType, change_light_type,
+    parse_light_profile, replace_light, serialize_light_profile,
+)
 from .bionic_model import BionicModel
 from .bionic_modbus import build_default_bus
 from .bionic_ponics import PONICS_OPTION_NAMES, PONICS_REGISTERS
@@ -27,16 +34,17 @@ HELP = """Bionic Immitator — цифровая физическая устан�
 
 status | devices | ports | help
 tank list | tank <bo|bp|bso1|bso2> level <л|N%> | capacity <л> | fill-rate <л/мин>
-pump list | pump <bo-to-bp|bso1-to-bp|bso2-to-bp> flow <л/мин>
+pump list | pump <bo-to-bp|bso1-to-bp|bso2-to-bp> flow <л/мин> | pump hp1|hp2 repair
 irrigation shelf <1|2> flow-per-tier <л/мин>
 pressure target <бар> | range <мин> <макс> | rise-time <с> | fall-time <с>
 pipe rupture-threshold <бар> | status | repair
 sensor list | sensor <id> threshold <л> | force on|off | auto
-fault leak on|off | rate <л/мин>
+fault leak on|off | rate <л/мин> | fault pump hp1|hp2 <тип>
 fault blockage on|off | severity <0..100> | fault list | fault clear all
 alarm list | alarm reset all
 sim start | pause | resume | speed <1..100> | reset --confirm
 view main|settings|log|rs485|tanks|pumps|pressure|irrigation|light|sensors|water
+view light settings | light set <zone> <поле> ... | light apply|save|restore-defaults
 view ponics | view ponics settings | view ponics registers
 view drives | view drive hp1 | view drive hp2
 ponics dose <a|b|c|ph_plus|ph_minus> <мл> | set <PDU> <RAW>
@@ -163,19 +171,41 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
         38: settings.ponics_temperature_low_c,
         39: settings.ponics_temperature_high_c,
     })
-    for drive_id, address, ramp_up, ramp_down, values in (
-        ("hp1", settings.hp1_address, settings.hp1_ramp_up_s, settings.hp1_ramp_down_s,
-         (settings.hp1_pb01, settings.hp1_pb02, settings.hp1_ph00, settings.hp1_ph01)),
-        ("hp2", settings.hp2_address, settings.hp2_ramp_up_s, settings.hp2_ramp_down_s,
-         (settings.hp2_pb01, settings.hp2_pb02, settings.hp2_ph00, settings.hp2_ph01)),
-    ):
+    for drive_id in ("hp1", "hp2"):
+        prefix = drive_id
+        address = getattr(settings, f"{prefix}_address")
         drive = model.drives[drive_id]
         drive.address = address
-        drive.ramp_up_s = ramp_up
-        drive.ramp_down_s = ramp_down
-        drive.configuration.update(dict(zip((101, 102, 700, 701), values)))
-        drive.configuration[702] = address
+        drive.ramp_up_s = getattr(settings, f"{prefix}_ramp_up_s")
+        drive.ramp_down_s = getattr(settings, f"{prefix}_ramp_down_s")
+        drive.configuration.update({
+            100: getattr(settings, f"{prefix}_pb00"),
+            101: getattr(settings, f"{prefix}_pb01"),
+            102: getattr(settings, f"{prefix}_pb02"),
+            105: getattr(settings, f"{prefix}_pb05"),
+            106: getattr(settings, f"{prefix}_pb06"),
+            107: round(drive.ramp_up_s * 10),
+            108: round(drive.ramp_down_s * 10),
+            210: round(getattr(settings, f"{prefix}_nominal_current_a") * 10),
+            212: getattr(settings, f"{prefix}_pc12"),
+            215: getattr(settings, f"{prefix}_pc15"),
+            700: getattr(settings, f"{prefix}_ph00"),
+            701: getattr(settings, f"{prefix}_ph01"),
+            702: address,
+            816: int(getattr(settings, f"{prefix}_overload_protection_enabled")),
+        })
+        drive.nominal_current_a = getattr(settings, f"{prefix}_nominal_current_a")
+        drive.no_load_current_a = getattr(settings, f"{prefix}_no_load_current_a")
+        drive.pump_load_coefficient = getattr(settings, f"{prefix}_pump_load_coefficient")
+        drive.jam_current_multiplier = getattr(settings, f"{prefix}_jam_current_multiplier")
+        drive.overload_trip_s = getattr(settings, f"{prefix}_overload_trip_s")
+        drive.overload_protection_enabled = getattr(settings, f"{prefix}_overload_protection_enabled")
+        drive.overload_threshold_multiplier = getattr(settings, f"{prefix}_overload_threshold_multiplier")
+        drive.protection_behavior = getattr(settings, f"{prefix}_protection_behavior")
+        drive.mechanical_failure = getattr(settings, f"{prefix}_mechanical_failure")
+        drive.mechanical_damage = getattr(settings, f"{prefix}_mechanical_damage")
     model.speed = settings.simulation_speed
+    model.configure_lights(parse_light_profile(settings.light_profile))
 
 
 def make_context(home: Path, config_path: Path | None = None, *, console: Console | None = None, test_mode: bool = False) -> BionicContext:
@@ -189,6 +219,7 @@ def make_context(home: Path, config_path: Path | None = None, *, console: Consol
     ctx.sensor_relay_state = SensorRelayState()
     ctx.model.event = ctx.event
     _bind_ponics_draft(ctx)
+    _bind_drive_draft(ctx)
     return ctx
 
 
@@ -208,6 +239,33 @@ def _bind_ponics_draft(ctx: BionicContext) -> None:
     ctx.model.ponics.setting_changed = update
 
 
+def _bind_drive_draft(ctx: BionicContext) -> None:
+    """Stage externally written nonvolatile IDD parameters for explicit Save."""
+    names = {
+        100: "pb00", 101: "pb01", 102: "pb02", 105: "pb05", 106: "pb06",
+        212: "pc12", 215: "pc15",
+        700: "ph00", 701: "ph01",
+    }
+
+    for drive_id, drive in ctx.model.drives.items():
+        def update(address: int, raw: int, prefix: str = drive_id) -> None:
+            if address == 107:
+                name, value = f"{prefix}_ramp_up_s", raw / 10.0
+            elif address == 108:
+                name, value = f"{prefix}_ramp_down_s", raw / 10.0
+            elif address == 702:
+                name, value = f"{prefix}_address", raw
+            elif address == 210:
+                name, value = f"{prefix}_nominal_current_a", raw / 10.0
+            elif address == 816:
+                name, value = f"{prefix}_overload_protection_enabled", bool(raw)
+            else:
+                name, value = f"{prefix}_{names[address]}", raw
+            ctx.draft = replace(ctx.draft, **{name: value})
+
+        drive.configuration_changed = update
+
+
 def _number(value: str, label: str, minimum: float = 0.0, maximum: float | None = None) -> float:
     try:
         result = float(value.replace(",", "."))
@@ -219,12 +277,37 @@ def _number(value: str, label: str, minimum: float = 0.0, maximum: float | None 
     return result
 
 
+def _integer(value: str, label: str, minimum: int, maximum: int) -> int:
+    try:
+        result = int(value, 0)
+    except ValueError:
+        raise ValueError(f"{label}: ожидалось целое число") from None
+    if not minimum <= result <= maximum:
+        raise ValueError(f"{label}: допустимо {minimum}..{maximum}")
+    return result
+
+
 def _on_off(value: str) -> bool:
     if value.casefold() == "on":
         return True
     if value.casefold() == "off":
         return False
     raise ValueError("Укажите on или off")
+
+
+def _light_draft(ctx: BionicContext, zone_id: str):
+    profile = parse_light_profile(ctx.draft.light_profile)
+    try:
+        light = next(item for item in profile if item.id == zone_id)
+    except StopIteration:
+        raise ValueError(f"Неизвестный ярус освещения: {zone_id}") from None
+    return profile, light
+
+
+def _store_light_draft(ctx: BionicContext, profile, message: str) -> None:
+    ctx.draft = replace(ctx.draft, light_profile=serialize_light_profile(profile))
+    ctx.notice = f"Черновик света: {message}"
+    ctx.event("ОПЕРАТОР", "lighting-draft", message)
 
 
 def _print_tanks(ctx: BionicContext) -> None:
@@ -271,13 +354,14 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             ("ponics",): "ponics", ("ponics", "settings"): "ponics-settings",
             ("ponics", "registers"): "ponics-registers", ("drives",): "drives",
             ("drive", "hp1"): "drive-hp1", ("drive", "hp2"): "drive-hp2",
+            ("light", "settings"): "light-settings",
         }
-        allowed = {"main", "status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "pressure", "irrigation", "light", "sensors", "water"}
+        allowed = {"main", "status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "pressure", "irrigation", "light", "light-settings", "sensors", "water"}
         target = nested.get(tuple(args))
         if target is None and len(args) == 1 and args[0] in allowed:
             target = "status" if args[0] == "main" else args[0]
         if target is None:
-            raise ValueError("view: укажите страницу, включая ponics [settings|registers], drives или drive hp1|hp2")
+            raise ValueError("view: укажите страницу, включая light settings, ponics [settings|registers], drives или drive hp1|hp2")
         ctx.view = target
         if not ctx.screen_mode:
             print_view(ctx.console, ctx.view, model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
@@ -315,6 +399,76 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
         if not ctx.screen_mode:
             print_view(ctx.console, "devices", model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
         return None
+    if command == "light":
+        if args == ["settings"]:
+            ctx.view = "light-settings"
+            if not ctx.screen_mode:
+                print_view(ctx.console, ctx.view, model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
+            return None
+        if args == ["restore-defaults"]:
+            ctx.draft = replace(ctx.draft, light_profile=FACTORY_LIGHT_PROFILE)
+            ctx.notice = "Черновик света восстановлен из профиля Bionic Mini"
+            ctx.event("ОПЕРАТОР", "lighting-draft", "восстановлен заводской профиль Bionic Mini")
+            return None
+        if args == ["apply"]:
+            applied = replace(ctx.settings, light_profile=ctx.draft.light_profile)
+            validate_settings(applied)
+            model.configure_lights(parse_light_profile(applied.light_profile))
+            ctx.settings = applied
+            ctx.event("ОПЕРАТОР", "lighting", "черновик света применён; физические выходы не изменялись")
+            return None
+        if args == ["save"]:
+            saved = replace(ctx.saved or ctx.settings, light_profile=ctx.draft.light_profile)
+            validate_settings(saved)
+            save_settings(ctx.config_path, saved)
+            ctx.saved = saved
+            ctx.event("ОПЕРАТОР", "lighting", f"профиль света сохранён в {ctx.config_path}; рабочая модель не изменена")
+            return None
+        if len(args) >= 4 and args[0] == "set":
+            zone_id, field = args[1], args[2]
+            profile, light = _light_draft(ctx, zone_id)
+            if field == "type" and len(args) == 4:
+                try:
+                    updated = change_light_type(light, LightType(args[3].upper()))
+                except ValueError:
+                    raise ValueError("Тип света: NONE, SINGLE или SPECTRAL_4") from None
+            elif field in {"rack", "tier", "relay"} and len(args) == 4:
+                value = _integer(args[3], field, 1, 32)
+                attribute = {"rack": "rack", "tier": "tier", "relay": "power_relay"}[field]
+                updated = replace(light, **{attribute: value})
+            elif field == "enabled" and len(args) == 4:
+                updated = replace(light, enabled=_on_off(args[3]))
+            elif field == "name" and len(args) >= 4:
+                updated = replace(light, name=" ".join(args[3:]))
+            elif field == "channel" and len(args) == 6:
+                role = args[3].casefold()
+                if role not in {channel.role for channel in light.channels}:
+                    raise ValueError("Канал не предусмотрен выбранным типом светильника")
+                binding = LightChannel(
+                    role,
+                    _integer(args[4], "Modbus ID", 1, 247),
+                    _integer(args[5], "Канал AO", 1, 8),
+                )
+                updated = replace(light, channels=tuple(
+                    binding if channel.role == role else channel for channel in light.channels
+                ))
+            elif field == "voltage" and len(args) == 5:
+                updated = replace(
+                    light,
+                    min_voltage_v=_number(args[3], "Минимальное напряжение", 0, 10),
+                    max_voltage_v=_number(args[4], "Максимальное напряжение", 0, 10),
+                )
+            elif field == "brightness" and len(args) == 5:
+                updated = replace(
+                    light,
+                    min_brightness_pct=_number(args[3], "Минимальная яркость", 0, 100),
+                    max_brightness_pct=_number(args[4], "Максимальная яркость", 0, 100),
+                )
+            else:
+                raise ValueError("light set <zone> type|rack|tier|relay|enabled|name|channel|voltage|brightness ...")
+            _store_light_draft(ctx, replace_light(profile, zone_id, updated), f"{zone_id}: {field}")
+            return None
+        raise ValueError("light settings|apply|save|restore-defaults|set <zone> <поле> ...")
     if command == "tank":
         if args == ["list"]:
             ctx.view = "tanks"
@@ -349,7 +503,11 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             model.pumps[args[0]].flow_lpm = _number(args[2], "Расход насоса")
             ctx.event("ОПЕРАТОР", args[0], f"расход {model.pumps[args[0]].flow_lpm:g} л/мин")
             return None
-        raise ValueError("pump: используйте list или pump <id> flow <л/мин>")
+        if len(args) == 2 and args[0] in model.drives and args[1] == "repair":
+            model.drives[args[0]].repair()
+            ctx.event("ОПЕРАТОР", args[0], "механическая часть насоса отремонтирована; ошибка ПЧ не сбрасывалась")
+            return None
+        raise ValueError("pump: используйте list, pump <id> flow <л/мин> или pump hp1|hp2 repair")
     if command == "irrigation":
         if len(args) == 4 and args[0] == "shelf" and args[2] == "flow-per-tier":
             rack = int(args[1])
@@ -418,7 +576,11 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
                 f"leak={'on' if model.leak_enabled else 'off'}; "
                 f"blockage={'on' if model.blockage_enabled else 'off'} "
                 f"({model.blockage_severity:g}%, {model.blockage_position}); "
-                f"pipe={'ruptured' if model.pipe_ruptured else 'ok'}"
+                f"pipe={'ruptured' if model.pipe_ruptured else 'ok'}; "
+                + "; ".join(
+                    f"{drive.id}={drive.mechanical_failure}, IDD fault={drive.fault}"
+                    for drive in model.drives.values()
+                )
             )
             if not ctx.screen_mode: ctx.console.print(ctx.notice)
         elif args == ["clear", "all"]:
@@ -434,8 +596,14 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             ctx.event("ОПЕРАТОР", "blockage", args[1])
         elif len(args) == 3 and args[:2] == ["blockage", "severity"]:
             model.blockage_severity = _number(args[2], "Степень засора", 0, 100)
+        elif len(args) == 3 and args[0] == "pump" and args[1] in model.drives:
+            failures = {"none", "jammed", "impeller_damage", "motor_failure", "dry_run_wear", "loss_of_prime"}
+            if args[2] not in failures:
+                raise ValueError("Тип отказа: none, jammed, impeller_damage, motor_failure, dry_run_wear или loss_of_prime")
+            model.drives[args[1]].mechanical_failure = args[2]
+            ctx.event("ОПЕРАТОР", args[1], f"механический отказ: {args[2]}; отдельный сигнал контроллеру не формируется")
         else:
-            raise ValueError("fault: используйте list, clear all, leak on|off|rate или blockage on|off|severity")
+            raise ValueError("fault: используйте list, clear all, leak, blockage или fault pump hp1|hp2 <тип>")
         return None
     if command == "alarm":
         if args == ["list"]:
@@ -461,6 +629,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             ctx.model = BionicModel(ctx.event)
             apply_model_settings(ctx.settings, ctx.model, initial=True)
             _bind_ponics_draft(ctx)
+            _bind_drive_draft(ctx)
             ctx.event("ОПЕРАТОР", "simulation", "виртуальное состояние сброшено; физические выходы не изменялись")
             return "reconnect"
         elif args and args[0] == "reset":
@@ -504,6 +673,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
                 "sensor_relay_id", "sensor_relay_channels", "sensor_relay_active_low", "sensor_relay_map",
                 "sensor_relay_loss_behavior", "hardware_mode",
             ))
+            validate_settings(ctx.draft)
             apply_model_settings(ctx.draft, ctx.model)
             ctx.settings = ctx.draft
             ctx.event("ОПЕРАТОР", "settings", "черновик применён к работающей модели")

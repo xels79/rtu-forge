@@ -72,6 +72,52 @@ def test_pressure_diagnostics_show_hydraulic_inputs_and_outputs(tmp_path):
         assert expected in text
 
 
+def test_light_page_shows_all_tiers_voltage_brightness_and_effective_state(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.model.set_analog_output(2, 1, 7000)
+    text = "\n".join(page(ctx, "light", 180).lines)
+    assert all(f"zone-{index}" in text for index in range(1, 7))
+    assert "Питание DO3: ВЫКЛ | фактический свет: ВЫКЛ" in text
+    assert "Modbus ID 2 / AO1 | задание 7.000 В | яркость 70.0%" in text
+    assert "Красный" in text and "Дальний красный" in text
+    ctx.model.set_relay(3, True)
+    assert "Питание DO3: ВКЛ | фактический свет: ВКЛ" in "\n".join(page(ctx, "light", 180).lines)
+
+
+def test_light_settings_page_has_selectable_rows_and_profile_states(tmp_path):
+    ctx, _ = context(tmp_path)
+    execute_command(ctx, "view light settings")
+    settings_page = page(ctx, "light-settings", 180)
+    text = "\n".join(settings_page.lines)
+    assert ctx.view == "light-settings"
+    assert {key for key in settings_page.row_keys if key} == {f"light:zone-{index}" for index in range(1, 7)}
+    assert "F5: применить только свет" in text
+    assert "Проверка черновика: КОРРЕКТЕН" in text
+    assert "SPECTRAL_4" in text and "Modbus ID 2 / AO2" in text
+
+
+def test_none_light_does_not_show_false_brightness(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.model.set_analog_output(2, 1, 7000)
+    execute_command(ctx, "light set zone-1 type NONE")
+    execute_command(ctx, "light apply")
+    lines = page(ctx, "light", 180).lines
+    zone_start = next(index for index, line in enumerate(lines) if line.startswith("zone-1 "))
+    zone_end = next(index for index, line in enumerate(lines[zone_start + 1 :], zone_start + 1) if line.startswith("zone-2 "))
+    zone_text = "\n".join(lines[zone_start:zone_end])
+    assert "Светильник не установлен" in zone_text
+    assert "70.0%" not in zone_text
+
+
+def test_main_page_lists_only_powered_light_tiers(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.model.set_relay(3, True)
+    text = "\n".join(page(ctx, "status", 180).lines)
+    light_line = next(line for line in text.splitlines() if "ОСВЕЩЕНИЕ ВКЛ:" in line)
+    assert "Стеллаж 1, ярус 1" in light_line
+    assert "Стеллаж 1, ярус 2" not in light_line
+
+
 def test_status_has_exactly_three_recent_event_slots(tmp_path):
     ctx, _ = context(tmp_path)
     for index in range(5):
@@ -101,6 +147,9 @@ def test_narrow_pages_are_clipped_without_wrapping(tmp_path):
     assert all("\n" not in line and len(line) <= 32 for line in narrow.lines)
     assert any(line.endswith("...") for line in narrow.lines)
     assert "Русское" in narrow.lines[0]
+    light = page(ctx, "light", 42)
+    assert all("\n" not in line and len(line) <= 42 for line in light.lines)
+    assert len(visible_lines(light, height=8, scroll=1000)) == 8
 
 
 def test_viewport_is_fixed_height_and_scroll_is_clamped(tmp_path):
@@ -134,6 +183,8 @@ def test_completion_covers_nested_commands_and_names():
     assert "pressure_rise_s" in completion_candidates("settings set pressure_")
     assert completion_candidates("log filter a") == ["alarms", "all"]
     assert "ai-pressure" in completion_candidates("devices ")
+    assert completion_candidates("view light ") == ["settings"]
+    assert completion_candidates("light set zone-1 type ") == ["none", "single", "spectral_4"]
 
 
 def test_screen_mode_commands_navigate_without_printing_dump(tmp_path):
@@ -208,8 +259,9 @@ def test_water_page_shows_independent_composition_for_all_tanks(tmp_path):
     assert "EC, мСм/см" in text and "Поглощено" in text
 
 
-def test_drive_pages_show_verified_read_only_configuration(tmp_path):
+def test_drive_pages_show_verified_rw_configuration_and_internal_failure_state(tmp_path):
     ctx, _ = context(tmp_path)
     assert "do-19" in "\n".join(page(ctx, "drives", 160).lines)
     hp1 = "\n".join(page(ctx, "drive-hp1", 160).lines)
-    assert "Pb01" in hp1 and "PH02" in hp1 and "Запись не реализована" in hp1
+    assert "PB.01" in hp1 and "PH.02" in hp1 and "RAW, RW" in hp1
+    assert "РАСЧЁТ ИМИТАТОРА" in hp1 and "не передаётся плате" in hp1
