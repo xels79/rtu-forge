@@ -201,7 +201,8 @@ def _pump_block(rendered, name):
     styled = rendered.styled_lines or []
     start = next(
         index for index, line in enumerate(styled)
-        if f"{name} CMD" in "".join(text for _style, text in line)
+        if "".join(text for _style, text in line).lstrip().startswith(name)
+        and "CMD" in "".join(text for _style, text in line)
     )
     end = next(
         (
@@ -219,7 +220,7 @@ def test_status_transfer_pump_separates_command_motor_and_flow(tmp_path):
     ctx.model.set_relay(pump.relay, True)
     pump.actual_flow_lpm = 3.5
     rendered = page(ctx, "status", 80)
-    command_line = _status_line(rendered, "БО→БП CMD")
+    command_line = _pump_block(rendered, "БО→БП")[0]
     flow_line = _status_line(rendered, "ПОДАЧА ЕСТЬ 3.50")
     assert ("output_on", "ВКЛ") in command_line
     assert ("running", "РАБОТАЕТ") in command_line
@@ -254,7 +255,7 @@ def test_status_nonblocking_damage_does_not_fake_motor_stop(tmp_path, failure, l
     ctx.model.set_relay(pump.relay, True)
     pump.health.failure = failure
     rendered = page(ctx, "status", 80)
-    assert ("running", "РАБОТАЕТ") in _status_line(rendered, "БО→БП CMD")
+    assert ("running", "РАБОТАЕТ") in _pump_block(rendered, "БО→БП")[0]
     assert ("fault", label) in _status_line(rendered, label)
 
 
@@ -264,7 +265,7 @@ def test_status_jammed_transfer_motor_is_stopped(tmp_path):
     ctx.model.set_relay(pump.relay, True)
     pump.health.failure = "jammed"
     rendered = page(ctx, "status", 80)
-    command_line = _status_line(rendered, "БСО1→БП CMD")
+    command_line = _pump_block(rendered, "БСО1→БП")[0]
     assert ("output_on", "ВКЛ") in command_line
     assert ("inactive", "СТОП") in command_line
     assert ("fault", "ОТКАЗ ЗАКЛИНИВАНИЕ") in _status_line(rendered, "ОТКАЗ ЗАКЛИНИВАНИЕ")
@@ -296,7 +297,7 @@ def test_status_hp_rotation_does_not_depend_on_hydraulic_factor(tmp_path):
     drive.health.damage = 1.0
     assert drive.hydraulic_factor == 0.0
     rendered = page(ctx, "status", 80)
-    assert ("running", "РАБОТАЕТ 42.0 Гц") in _status_line(rendered, "HP1 CMD")
+    assert ("running", "РАБОТАЕТ 42.0 Гц") in _pump_block(rendered, "HP1")[0]
 
 
 def test_status_hp_flow_is_not_invented_when_motor_rotates(tmp_path):
@@ -342,6 +343,41 @@ def test_status_output_columns_do_not_shift_between_on_and_off(tmp_path):
     after_text = "".join(text for _style, text in after)
     assert before_text.index("Осмос") == after_text.index("Осмос")
     assert before_text.index("|") == after_text.index("|")
+
+
+@pytest.mark.parametrize("width", [50, 80, 110, 120, 160])
+def test_status_pump_fields_are_aligned_for_different_state_lengths(tmp_path, width):
+    ctx, _ = context(tmp_path)
+    before = page(ctx, "status", width)
+    pump = ctx.model.pumps["bo-to-bp"]
+    ctx.model.set_relay(pump.relay, True)
+    pump.actual_flow_lpm = 3.5
+    after = page(ctx, "status", width)
+
+    def plain_block(rendered, name):
+        lines = [
+            (line.split(" │ ", 1)[0][1:].rstrip() if rendered.layout_mode == "double" else line)
+            for line in rendered.lines
+        ]
+        start = next(
+            index for index, line in enumerate(lines)
+            if line.lstrip().startswith(name) and "CMD" in line
+        )
+        end = next(
+            (index for index in range(start + 1, len(lines)) if " CMD " in lines[index]),
+            len(lines),
+        )
+        return lines[start:end]
+
+    before_blocks = [plain_block(before, name) for name in ("БО→БП", "БСО1→БП", "БСО2→БП", "HP1", "HP2")]
+    after_block = plain_block(after, "БО→БП")
+    assert len({line[0].index("CMD") for line in before_blocks}) == 1
+    assert len({line[0].index("МОТОР") for line in before_blocks}) == 1
+    assert len({line[1].index("ПОДАЧА") for line in before_blocks}) == 1
+    assert len({line[1].index("СУХОЙ ХОД") for line in before_blocks}) == 1
+    assert len({line[2].index("ОТКАЗ") for line in before_blocks}) == 1
+    assert before_blocks[0][0].index("МОТОР") == after_block[0].index("МОТОР")
+    assert before_blocks[0][1].index("СУХОЙ ХОД") == after_block[1].index("СУХОЙ ХОД")
 
 
 def test_status_relay_confirmation_mismatch_and_offline_are_visible(tmp_path):

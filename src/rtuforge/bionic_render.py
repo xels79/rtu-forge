@@ -322,16 +322,22 @@ def _pump_status_lines(
     failures: tuple[str, ...],
 ) -> list[StyledLine]:
     """Render one pump without allowing its safety-critical states to clip."""
-    indent = " " * (cell_len(name) + 1)
+    name_width = 7
+    indent = " " * (name_width + 1)
     command = _state(commanded)
+    command_padding = ("", " " * (4 - cell_len(command[1])))
     motor = (motor_style, motor_text)
     model_note = ("demo", " (МОДЕЛЬ)") if motor_is_modelled else ("", "")
     flow = (flow_style, flow_text)
+    flow_cell = _fit_fragments(_styled("ПОДАЧА ", flow), 25, pad=True)
     dry = ("fault", "СУХОЙ ХОД") if dry_running else ("inactive", "СУХОЙ ХОД НЕТ")
     failure_parts = tuple(("fault", failure) for failure in failures) or (("inactive", "ОТКАЗ НЕТ"),)
 
-    first = _styled(f"{name} CMD ", command, " | МОТОР ", motor, model_note)
-    second = _styled(indent, "ПОДАЧА ", flow, " | ", dry)
+    first = _styled(
+        f"{name:<{name_width}} CMD ", command, command_padding,
+        " | МОТОР ", motor, model_note,
+    )
+    second = _styled(indent, *flow_cell, " | ", dry)
     third_parts: list[tuple[str, object] | object] = [indent]
     for index, failure in enumerate(failure_parts):
         if index:
@@ -345,7 +351,7 @@ def _pump_status_lines(
     # Widths 50–59 use one field per line. Every important state remains
     # complete; only optional numeric/detail text is prepared by the caller.
     lines = [
-        _styled(f"{name} CMD ", command),
+        _styled(f"{name:<{name_width}} CMD ", command),
         _styled(indent, "МОТОР ", motor, model_note),
         _styled(indent, "ПОДАЧА ", flow),
         _styled(indent, dry),
