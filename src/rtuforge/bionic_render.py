@@ -262,7 +262,7 @@ def _status_tanks(model: BionicModel) -> list[StyledLine]:
 
 def _status_sensors(
     model: BionicModel, settings: BionicSettings,
-    relay_state: SensorRelayState | None,
+    relay_state: SensorRelayState | None, width: int,
 ) -> tuple[list[StyledLine], list[str]]:
     names = {"bo": "БО", "bp": "БП", "bso1": "БСО1", "bso2": "БСО2"}
     mapping = parse_sensor_relay_map(settings.sensor_relay_map)
@@ -285,79 +285,168 @@ def _status_sensors(
                 parts.append(" | ")
         lines.append(_styled(*parts))
         if settings.hardware_mode:
-            relay_parts: list[tuple[str, object] | object] = ["     реле: "]
+            relay_items: list[StyledLine] = []
+            relay_values: list[StyledLine] = []
             for kind, label in (("min", "MIN"), ("max", "MAX")):
                 sensor_id = f"{tank_id}-{kind}"
                 channel = mapping[sensor_id]
                 expected = bool(desired & (1 << (channel - 1)))
+                relay_parts: list[tuple[str, object] | object] = [f"{label} CH{channel} "]
                 if relay_state is None or not relay_state.online or relay_state.confirmed is None:
-                    relay_parts += [f"{label} CH{channel} ", ("warning", "НЕТ СВЯЗИ")]
+                    relay_parts.append(("warning", "НЕТ СВЯЗИ"))
                 else:
                     confirmed = bool(relay_state.confirmed & (1 << (channel - 1)))
-                    relay_parts += [f"{label} CH{channel} ", _state(confirmed)]
+                    relay_parts.append(_state(confirmed))
                     if confirmed != expected:
                         relay_parts += [("warning", " ≠ ТРЕБ.")]
                         warnings.append(f"{sensor_id}/CH{channel}: треб. {'ВКЛ' if expected else 'ВЫКЛ'}, подтв. {'ВКЛ' if confirmed else 'ВЫКЛ'}")
-                if kind == "min":
-                    relay_parts.append(" | ")
-            lines.append(_styled(*relay_parts))
+                relay_value = _styled(*relay_parts)
+                relay_values.append(relay_value)
+                relay_items.append(_styled("     ", *relay_value))
+            combined = _styled(
+                "     реле: ", *relay_values[0], " | ", *relay_values[1],
+            )
+            if cell_len(_plain(combined)) <= width:
+                lines.append(combined)
+            else:
+                lines.extend(relay_items)
     if not settings.hardware_mode:
         lines.append(_styled(("inactive", "Физическое подтверждение USB №2 отключено")))
     return lines, warnings
 
 
-def _status_pumps(model: BionicModel) -> list[StyledLine]:
-    lines = [_heading("НАСОСЫ")]
-    short_names = {"bo-to-bp": "БО → БП", "bso1-to-bp": "БСО1 → БП", "bso2-to-bp": "БСО2 → БП"}
-    for pump_id in ("bo-to-bp", "bso1-to-bp", "bso2-to-bp"):
-        pump = model.pumps[pump_id]
-        commanded = model.equipment_commanded(pump_id)
-        # A running motor and hydraulic flow are different observations: a
-        # dry-running pump may still rotate while its measured flow is zero.
-        actual = commanded and not pump.health.failed
-        actual_style = "running" if actual else ("fault" if pump.health.failed else ("warning" if commanded else "inactive"))
-        failure_style = "fault" if pump.health.failed else "inactive"
-        lines.append(_styled(
-            f"{short_names[pump_id]:<9} CMD ", _state(commanded), " | ФАКТ ",
-            (actual_style, "РАБОТАЕТ" if actual else "СТОП"), " | ",
-            (failure_style, PUMP_FAILURE_NAMES.get(pump.health.failure, pump.health.failure)),
-        ))
-        lines.append(_styled(f"          расход {pump.actual_flow_lpm:.2f} л/мин"))
-    for drive_id in ("hp1", "hp2"):
-        drive = model.drives[drive_id]
-        commanded = model.equipment_commanded(drive_id)
-        actual = drive.actual_hz > 0.1 and drive.hydraulic_factor > 0 and not drive.health.failed and not drive.fault
-        actual_style = "running" if actual else ("fault" if drive.health.failed or drive.fault else ("warning" if commanded else "inactive"))
-        failure = drive.health.failure if drive.health.failed else (f"IDD {drive.fault}" if drive.fault else "исправен")
-        lines.append(_styled(
-            f"{drive_id.upper():<9} CMD ", _state(commanded), " | ФАКТ ",
-            (actual_style, "РАБОТАЕТ" if actual else "СТОП"), " | ",
-            ("fault" if drive.health.failed or drive.fault else "inactive", failure),
-        ))
-        lines.append(_styled(f"          частота {drive.actual_hz:.1f} Гц | ток {drive.calculated_current_a:.1f} А"))
+def _pump_status_lines(
+    name: str, width: int, *, commanded: bool,
+    motor_style: str, motor_text: str, motor_is_modelled: bool,
+    flow_style: str, flow_text: str, dry_running: bool,
+    failures: tuple[str, ...],
+) -> list[StyledLine]:
+    """Render one pump without allowing its safety-critical states to clip."""
+    indent = " " * (cell_len(name) + 1)
+    command = _state(commanded)
+    motor = (motor_style, motor_text)
+    model_note = ("demo", " (МОДЕЛЬ)") if motor_is_modelled else ("", "")
+    flow = (flow_style, flow_text)
+    dry = ("fault", "СУХОЙ ХОД") if dry_running else ("inactive", "СУХОЙ ХОД НЕТ")
+    failure_parts = tuple(("fault", failure) for failure in failures) or (("inactive", "ОТКАЗ НЕТ"),)
+
+    first = _styled(f"{name} CMD ", command, " | МОТОР ", motor, model_note)
+    second = _styled(indent, "ПОДАЧА ", flow, " | ", dry)
+    third_parts: list[tuple[str, object] | object] = [indent]
+    for index, failure in enumerate(failure_parts):
+        if index:
+            third_parts.append(" | ")
+        third_parts.append(failure)
+    third = _styled(*third_parts)
+    compact = [first, second, third]
+    if all(cell_len(_plain(line)) <= width for line in compact):
+        return compact
+
+    # Widths 50–59 use one field per line. Every important state remains
+    # complete; only optional numeric/detail text is prepared by the caller.
+    lines = [
+        _styled(f"{name} CMD ", command),
+        _styled(indent, "МОТОР ", motor, model_note),
+        _styled(indent, "ПОДАЧА ", flow),
+        _styled(indent, dry),
+    ]
+    lines.extend(_styled(indent, failure) for failure in failure_parts)
     return lines
 
 
-def _output_parts(model: BionicModel, items: tuple[tuple[str, int], ...]) -> StyledLine:
-    parts: list[tuple[str, object] | object] = []
+def _status_pumps(model: BionicModel, width: int) -> list[StyledLine]:
+    lines = [_heading("НАСОСЫ")]
+    short_names = {"bo-to-bp": "БО→БП", "bso1-to-bp": "БСО1→БП", "bso2-to-bp": "БСО2→БП"}
+    blocking_failures = {"jammed", "motor_failure"}
+    failure_names = {
+        "jammed": "ОТКАЗ ЗАКЛИНИВАНИЕ",
+        "impeller_damage": "ОТКАЗ ПОВРЕЖДЕНО КОЛЕСО",
+        "motor_failure": "ОТКАЗ ДВИГАТЕЛЯ",
+        "loss_of_prime": "ОТКАЗ ПОТЕРЯ ЗАЛИВКИ",
+        "dry_run_wear": "ОТКАЗ ИЗНОС ПОСЛЕ СУХОГО ХОДА",
+    }
+    for pump_id in ("bo-to-bp", "bso1-to-bp", "bso2-to-bp"):
+        pump = model.pumps[pump_id]
+        commanded = model.equipment_commanded(pump_id)
+        motor_running = commanded and pump.health.failure not in blocking_failures
+        has_flow = pump.actual_flow_lpm > 1e-6
+        flow_style = "ok" if has_flow else ("warning" if motor_running else "inactive")
+        failures = (
+            (failure_names.get(pump.health.failure, f"ОТКАЗ {pump.health.failure.upper()}"),)
+            if pump.health.failed else tuple()
+        )
+        lines.extend(_pump_status_lines(
+            short_names[pump_id], width, commanded=commanded,
+            motor_style="running" if motor_running else "inactive",
+            motor_text="РАБОТАЕТ" if motor_running else "СТОП",
+            motor_is_modelled=True,
+            flow_style=flow_style,
+            flow_text=(f"ЕСТЬ {pump.actual_flow_lpm:.2f} л/мин" if has_flow else "НЕТ"),
+            dry_running=pump.health.dry_running,
+            failures=failures,
+        ))
+    for drive_id in ("hp1", "hp2"):
+        drive = model.drives[drive_id]
+        commanded = model.equipment_commanded(drive_id)
+        motor_running = (
+            drive.actual_hz > 0.1
+            and drive.health.failure not in blocking_failures
+        )
+        flow_known_absent = (
+            not motor_running
+            or drive.health.dry_running
+            or drive.health.failure in blocking_failures
+        )
+        flow_text = "НЕТ" if flow_known_absent else "НЕ ОПРЕДЕЛЕНА"
+        flow_style = "inactive" if not motor_running else "warning"
+        failures_list: list[str] = []
+        if drive.health.failed:
+            failures_list.append(failure_names.get(
+                drive.health.failure, f"ОТКАЗ {drive.health.failure.upper()}",
+            ))
+        if drive.fault:
+            failures_list.append(f"АВАРИЯ IDD {drive.fault}")
+        lines.extend(_pump_status_lines(
+            drive_id.upper(), width, commanded=commanded,
+            motor_style="running" if motor_running else "inactive",
+            motor_text=(f"РАБОТАЕТ {drive.actual_hz:.1f} Гц" if motor_running else "СТОП"),
+            motor_is_modelled=False,
+            flow_style=flow_style, flow_text=flow_text,
+            dry_running=drive.health.dry_running,
+            failures=tuple(failures_list),
+        ))
+    return lines
+
+
+def _output_parts(
+    model: BionicModel, items: tuple[tuple[str, int], ...], width: int,
+    *, label_width: int,
+) -> StyledLine:
+    cell_width = max(1, (width - 3 * (len(items) - 1)) // len(items))
+    cells: list[StyledLine] = []
     for index, (label, channel) in enumerate(items):
+        state_style, state_text = _state(model.relay(channel))
+        cell = _styled(f"{label:<{label_width}} DO{channel:>2} ", (state_style, state_text))
+        cells.append(_fit_fragments(cell, cell_width, pad=index < len(items) - 1))
+    parts: list[tuple[str, object] | object] = []
+    for index, cell in enumerate(cells):
         if index:
             parts.append(" | ")
-        parts += [f"{label} DO{channel} ", _state(model.relay(channel))]
+        parts.extend(cell)
     return _styled(*parts)
 
 
-def _status_outputs(model: BionicModel) -> list[StyledLine]:
+def _status_outputs(model: BionicModel, width: int) -> list[StyledLine]:
     return [
         _heading("КЛАПАНЫ И ВЫХОДЫ"),
-        _output_parts(model, (("Наполнение", 22), ("Осмос", 21))),
-        _output_parts(model, (("Бульон", 23), ("Подпор", 1))),
-        _output_parts(model, (("БО→БП", 2), ("БСО1", 17))),
-        _output_parts(model, (("БСО2", 18),)),
-        _output_parts(model, tuple((f"Я{index}", 8 + index) for index in range(1, 4))),
-        _output_parts(model, tuple((f"Я{index}", 8 + index) for index in range(4, 7))),
-        _output_parts(model, (("Выбор HP1", 19), ("HP2", 20))),
-        _output_parts(model, (("RUN HP1", 32), ("HP2", 31))),
+        _output_parts(model, (("Наполнение", 22), ("Осмос", 21)), width, label_width=10),
+        _output_parts(model, (("Бульон", 23), ("Подпор", 1)), width, label_width=10),
+        _output_parts(model, (("БО→БП", 2), ("БСО1", 17)), width, label_width=10),
+        _output_parts(model, (("БСО2", 18),), width, label_width=10),
+        _output_parts(model, tuple((f"Я{index}", 8 + index) for index in range(1, 4)), width, label_width=2),
+        _output_parts(model, tuple((f"Я{index}", 8 + index) for index in range(4, 7)), width, label_width=2),
+        _output_parts(model, (("Выбор HP1", 19), ("Выбор HP2", 20)), width, label_width=10),
+        _output_parts(model, (("RUN HP1", 32), ("RUN HP2", 31)), width, label_width=10),
     ]
 
 
@@ -474,10 +563,13 @@ def _status(
     model: BionicModel, journal: EventJournal, settings: BionicSettings,
     relay_state: SensorRelayState | None, width: int,
 ) -> tuple[list[str], list[StyledLine], str, tuple[int, int] | None]:
-    sensors, relay_warnings = _status_sensors(model, settings, relay_state)
+    left_content_width = floor((width - 5) * 0.56) if width >= 110 else width
+    sensors, relay_warnings = _status_sensors(
+        model, settings, relay_state, left_content_width,
+    )
     tanks = _status_tanks(model)
-    pumps = _status_pumps(model)
-    outputs = _status_outputs(model)
+    pumps = _status_pumps(model, left_content_width)
+    outputs = _status_outputs(model, left_content_width)
     hydraulics = _status_hydraulics(model)
     ponics = _status_ponics(model)
     drives = _status_drives(model)

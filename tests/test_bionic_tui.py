@@ -129,7 +129,7 @@ def test_status_layout_respects_terminal_cells_at_required_widths(tmp_path, widt
     assert all(cell_len(line) <= width for line in rendered.lines)
     text = "\n".join(rendered.lines)
     assert text.count("MIN ") == 4 and text.count("MAX ") == 4
-    for pump in ("БО → БП", "БСО1 → БП", "БСО2 → БП", "HP1", "HP2"):
+    for pump in ("БО→БП", "БСО1→БП", "БСО2→БП", "HP1", "HP2"):
         assert pump in text
     for heading in (
         "БАКИ", "ДАТЧИКИ УРОВНЯ", "НАСОСЫ", "PONICPILOT · БП",
@@ -173,7 +173,7 @@ def test_status_semantic_colours_follow_fact_not_only_commands(tmp_path):
     pump = ctx.model.pumps["bo-to-bp"]
     pump.actual_flow_lpm = 4.0
     drive = ctx.model.drives["hp1"]
-    drive.actual_hz = 42.0
+    drive.actual_hz = 0.0
     drive.fault = 10
     rendered = page(ctx, "status", 120)
     fragments = [fragment for line in rendered.styled_lines or [] for fragment in line]
@@ -188,6 +188,160 @@ def test_status_semantic_colours_follow_fact_not_only_commands(tmp_path):
     assert not any(style == "running" for line in hp1_lines for style, _text in line)
     assert any(style == "fault" for line in hp1_lines for style, _text in line)
     assert all("\x1b" not in line for line in rendered.lines)
+
+
+def _status_line(rendered, needle):
+    return next(
+        line for line in rendered.styled_lines or []
+        if needle in "".join(text for _style, text in line)
+    )
+
+
+def _pump_block(rendered, name):
+    styled = rendered.styled_lines or []
+    start = next(
+        index for index, line in enumerate(styled)
+        if f"{name} CMD" in "".join(text for _style, text in line)
+    )
+    end = next(
+        (
+            index for index in range(start + 1, len(styled))
+            if " CMD " in "".join(text for _style, text in styled[index])
+        ),
+        len(styled),
+    )
+    return styled[start:end]
+
+
+def test_status_transfer_pump_separates_command_motor_and_flow(tmp_path):
+    ctx, _ = context(tmp_path)
+    pump = ctx.model.pumps["bo-to-bp"]
+    ctx.model.set_relay(pump.relay, True)
+    pump.actual_flow_lpm = 3.5
+    rendered = page(ctx, "status", 80)
+    command_line = _status_line(rendered, "БО→БП CMD")
+    flow_line = _status_line(rendered, "ПОДАЧА ЕСТЬ 3.50")
+    assert ("output_on", "ВКЛ") in command_line
+    assert ("running", "РАБОТАЕТ") in command_line
+    assert ("demo", " (МОДЕЛЬ)") in command_line
+    assert ("ok", "ЕСТЬ 3.50 л/мин") in flow_line
+
+
+def test_status_dry_running_motor_stays_green_without_flow(tmp_path):
+    ctx, _ = context(tmp_path)
+    pump = ctx.model.pumps["bo-to-bp"]
+    ctx.model.set_relay(pump.relay, True)
+    pump.actual_flow_lpm = 0.0
+    pump.health.dry_running = True
+    rendered = page(ctx, "status", 80)
+    block = _pump_block(rendered, "БО→БП")
+    command_line, flow_line = block[:2]
+    assert ("running", "РАБОТАЕТ") in command_line
+    assert ("warning", "НЕТ") in flow_line
+    assert ("fault", "СУХОЙ ХОД") in flow_line
+
+
+@pytest.mark.parametrize(
+    ("failure", "label"),
+    [
+        ("loss_of_prime", "ОТКАЗ ПОТЕРЯ ЗАЛИВКИ"),
+        ("impeller_damage", "ОТКАЗ ПОВРЕЖДЕНО КОЛЕСО"),
+    ],
+)
+def test_status_nonblocking_damage_does_not_fake_motor_stop(tmp_path, failure, label):
+    ctx, _ = context(tmp_path)
+    pump = ctx.model.pumps["bo-to-bp"]
+    ctx.model.set_relay(pump.relay, True)
+    pump.health.failure = failure
+    rendered = page(ctx, "status", 80)
+    assert ("running", "РАБОТАЕТ") in _status_line(rendered, "БО→БП CMD")
+    assert ("fault", label) in _status_line(rendered, label)
+
+
+def test_status_jammed_transfer_motor_is_stopped(tmp_path):
+    ctx, _ = context(tmp_path)
+    pump = ctx.model.pumps["bso1-to-bp"]
+    ctx.model.set_relay(pump.relay, True)
+    pump.health.failure = "jammed"
+    rendered = page(ctx, "status", 80)
+    command_line = _status_line(rendered, "БСО1→БП CMD")
+    assert ("output_on", "ВКЛ") in command_line
+    assert ("inactive", "СТОП") in command_line
+    assert ("fault", "ОТКАЗ ЗАКЛИНИВАНИЕ") in _status_line(rendered, "ОТКАЗ ЗАКЛИНИВАНИЕ")
+
+
+def test_status_vfd_trip_keeps_board_run_but_stops_motor_and_flow(tmp_path):
+    ctx, _ = context(tmp_path)
+    drive = ctx.model.drives["hp1"]
+    drive.configuration[102] = 1
+    ctx.model.set_relay(drive.selector_relay, True)
+    ctx.model.set_relay(drive.run_relay, True)
+    drive.actual_hz = 0.0
+    drive.fault = 10
+    assert ctx.model.equipment_commanded("hp1")
+    rendered = page(ctx, "status", 80)
+    block = _pump_block(rendered, "HP1")
+    command_line = block[0]
+    assert ("output_on", "ВКЛ") in command_line
+    assert ("inactive", "СТОП") in command_line
+    assert any(("inactive", "НЕТ") in line for line in block)
+    assert any(("fault", "АВАРИЯ IDD 10") in line for line in block)
+
+
+def test_status_hp_rotation_does_not_depend_on_hydraulic_factor(tmp_path):
+    ctx, _ = context(tmp_path)
+    drive = ctx.model.drives["hp1"]
+    drive.actual_hz = 42.0
+    drive.health.failure = "dry_run_wear"
+    drive.health.damage = 1.0
+    assert drive.hydraulic_factor == 0.0
+    rendered = page(ctx, "status", 80)
+    assert ("running", "РАБОТАЕТ 42.0 Гц") in _status_line(rendered, "HP1 CMD")
+
+
+def test_status_hp_flow_is_not_invented_when_motor_rotates(tmp_path):
+    ctx, _ = context(tmp_path)
+    drive = ctx.model.drives["hp1"]
+    drive.actual_hz = 42.0
+    rendered = page(ctx, "status", 80)
+    block = _pump_block(rendered, "HP1")
+    assert any(("warning", "НЕ ОПРЕДЕЛЕНА") in line for line in block)
+
+
+@pytest.mark.parametrize("width", [50, 59, 60, 80, 109, 110, 120, 160])
+def test_status_important_pump_states_never_use_ellipsis(tmp_path, width):
+    ctx, _ = context(tmp_path)
+    transfer = ctx.model.pumps["bo-to-bp"]
+    ctx.model.set_relay(transfer.relay, True)
+    transfer.health.dry_running = True
+    transfer.actual_flow_lpm = 0.0
+    damaged = ctx.model.pumps["bso2-to-bp"]
+    ctx.model.set_relay(damaged.relay, True)
+    damaged.health.failure = "impeller_damage"
+    drive = ctx.model.drives["hp1"]
+    drive.configuration[102] = 1
+    ctx.model.set_relay(drive.selector_relay, True)
+    ctx.model.set_relay(drive.run_relay, True)
+    drive.fault = 10
+    rendered = page(ctx, "status", width)
+    left_lines = [line.split(" │ ", 1)[0].strip() for line in rendered.lines]
+    start = left_lines.index("НАСОСЫ")
+    end = left_lines.index("КЛАПАНЫ И ВЫХОДЫ")
+    pump_text = "\n".join(left_lines[start:end])
+    assert "..." not in pump_text
+    for state in ("ВКЛ", "ВЫКЛ", "РАБОТАЕТ", "СТОП", "СУХОЙ ХОД", "АВАРИЯ", "ОТКАЗ"):
+        assert state in pump_text
+
+
+def test_status_output_columns_do_not_shift_between_on_and_off(tmp_path):
+    ctx, _ = context(tmp_path)
+    before = _status_line(page(ctx, "status", 80), "Наполнение")
+    before_text = "".join(text for _style, text in before)
+    ctx.model.set_relay(22, True)
+    after = _status_line(page(ctx, "status", 80), "Наполнение")
+    after_text = "".join(text for _style, text in after)
+    assert before_text.index("Осмос") == after_text.index("Осмос")
+    assert before_text.index("|") == after_text.index("|")
 
 
 def test_status_relay_confirmation_mismatch_and_offline_are_visible(tmp_path):
@@ -208,6 +362,24 @@ def test_status_relay_confirmation_mismatch_and_offline_are_visible(tmp_path):
         style == "warning" and text == "НЕТ СВЯЗИ"
         for line in offline.styled_lines or [] for style, text in line
     )
+
+
+@pytest.mark.parametrize("width", [50, 59, 60, 80, 109, 110, 120, 160])
+def test_status_all_relay_no_link_states_are_complete_at_supported_widths(tmp_path, width):
+    ctx, _ = context(tmp_path)
+    ctx.settings = ctx.draft = replace(ctx.settings, hardware_mode=True)
+    ctx.sensor_relay_state = SensorRelayState(
+        desired=0, confirmed=None, online=False, error="нет ответа",
+    )
+    rendered = page(ctx, "status", width)
+    left_lines = [line.split(" │ ", 1)[0].strip() for line in rendered.lines]
+    start = left_lines.index("ДАТЧИКИ УРОВНЯ")
+    end = left_lines.index("НАСОСЫ")
+    sensor_text = "\n".join(left_lines[start:end])
+    assert sensor_text.count("НЕТ СВЯЗИ") == 8
+    assert all("..." not in line for line in left_lines[start:end] if "НЕТ СВЯЗИ" in line)
+    for channel in range(1, 9):
+        assert f"CH{channel} " in sensor_text
 
 
 def test_status_has_exactly_three_recent_event_slots(tmp_path):
