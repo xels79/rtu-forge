@@ -355,9 +355,20 @@ class BionicModel:
         self.high_pressure_bar = 0.0
         self.pressure_rise_s = 5.0
         self.pressure_fall_s = 4.0
+        self.valve_pressure_response_ms = 200
+        self.valve_pressure_close_response_ms = 200
+        self.transient_pressure_spike_coefficient = 0.0
+        self.transient_pressure_spike_duration_ms = 100
+        self.closed_head_pressure_bar = 90.0
         self.pressure_max_bar = 90.0
         self.rupture_threshold_bar = 75.0
         self.rupture_residual_bar = 2.0
+        self.pressure_target_bar = 0.0
+        self.last_pressure_spike_bar = 0.0
+        self.max_pressure_bar = 0.0
+        self.calculated_flow_lpm = 0.0
+        self.hydraulic_resistance = 1.0
+        self.blockage_position = "после датчика HIGH"
         self.pipe_ruptured = False
         self.leak_enabled = False
         self.leak_rate_lpm = 12.0
@@ -379,6 +390,10 @@ class BionicModel:
         self.operation_hint: str | None = None
         self.hydraulic_uncertainty = False
         self._overflowing: set[str] = set()
+        self._hydraulic_signature: tuple[object, ...] | None = None
+        self._pressure_pump_running = False
+        self._valve_response_remaining_s = 0.0
+        self._spike_remaining_s = 0.0
         self.ponics = PonicsPilot(self, lambda kind, subject, message: self.event(kind, subject, message))
 
     def relay(self, channel: int) -> bool:
@@ -474,6 +489,9 @@ class BionicModel:
 
     def repair_pipe(self) -> None:
         self.pipe_ruptured = False
+        self._hydraulic_signature = None
+        self._valve_response_remaining_s = 0.0
+        self._spike_remaining_s = 0.0
         self._alarm("PIPE_RUPTURE", "pipe", False)
         self.event("ОПЕРАТОР", "pipe", "виртуальный трубопровод отремонтирован")
 
@@ -516,20 +534,76 @@ class BionicModel:
         else:
             raise ValueError("Неизвестный реагент PonicPilot")
 
+    def selected_sources(self) -> list[str]:
+        """Return source tanks whose feed valves are physically open."""
+        sources: list[str] = []
+        if self.relay(self.outputs["source_osmosis"]):
+            sources.append("bo")
+        if self.relay(self.outputs["source_broth"]):
+            sources.append("bp")
+        return sources
+
+    def available_sources(self) -> list[str]:
+        """Return selected source tanks which can currently supply water."""
+        return [tank_id for tank_id in self.selected_sources() if self.tanks[tank_id].volume_l > 1e-9]
+
+    def drive_commanded(self, drive: Drive) -> bool:
+        """Report whether the controller is currently commanding this HP."""
+        return (
+            drive.online
+            and not drive.fault
+            and self.relay(drive.selector_relay)
+            and (self.relay(drive.run_relay) or drive.run_register)
+        )
+
+    def _blockage_aperture(self) -> float:
+        if not self.blockage_enabled:
+            return 1.0
+        # A narrowing increases resistance approximately with the inverse
+        # square of its effective opening. HIGH is fixed upstream of it.
+        return max(0.1, 1.0 - 0.55 * self.blockage_severity / 100.0)
+
     def _pressure_target(self, open_tiers: int) -> float:
+        aperture = self._blockage_aperture()
+        self.hydraulic_resistance = 1.0 / (aperture * aperture)
         drive = max(self.drives.values(), key=lambda item: item.actual_hz)
-        if drive.actual_hz <= 0.1 or self.low_pressure_bar <= 0.1:
+        if (
+            drive.actual_hz <= 0.1
+            or not self.drive_commanded(drive)
+            or self.low_pressure_bar <= 0.1
+            or not self.available_sources()
+        ):
             return 0.0
+        if self.pipe_ruptured:
+            return min(3.0, max(0.0, self.rupture_residual_bar))
         calibrated = max(0.0, 30.0 + (drive.actual_hz - 29.0) * (27.0 / 13.0))
-        paths = max(open_tiers, 0.35)
-        pressure = calibrated * sqrt(3.0 / paths)
+        effective_paths = open_tiers / self.hydraulic_resistance
+        shutoff = min(
+            self.pressure_max_bar,
+            max(0.0, self.closed_head_pressure_bar * drive.actual_hz / 45.0),
+        )
+        if effective_paths <= 3.0:
+            load = (1.0 - max(0.0, effective_paths) / 3.0) ** 1.5
+            pressure = calibrated + (shutoff - calibrated) * load
+        else:
+            pressure = calibrated * sqrt(3.0 / effective_paths)
+        supply_factor = min(
+            1.0,
+            self.low_pressure_bar / max(self.boost_pressure_bar, 1e-9),
+        )
+        pressure *= supply_factor
         if self.leak_enabled:
             pressure *= max(0.05, 1.0 - self.leak_pressure_factor)
-        if self.blockage_enabled:
-            pressure *= 1.0 + 0.5 * self.blockage_severity / 100.0
-        if self.pipe_ruptured:
-            return self.rupture_residual_bar
         return min(self.pressure_max_bar, pressure)
+
+    def _hydraulic_state(self, active_tiers: list[Tier]) -> tuple[object, ...]:
+        return (
+            tuple(tier.id for tier in active_tiers),
+            self.relay(self.outputs["boost"]),
+            tuple(self.selected_sources()),
+            self.blockage_enabled,
+            round(self.blockage_severity, 6),
+        )
 
     def _smooth(self, current: float, target: float, rise_s: float, fall_s: float, dt_s: float) -> float:
         duration = rise_s if target > current else fall_s
@@ -567,7 +641,7 @@ class BionicModel:
         for drive in self.drives.values():
             drive.update(self.relay(drive.run_relay), self.relay(drive.selector_relay), dt_s)
 
-        boost_has_water = self.tanks["bo"].volume_l > 0 or self.tanks["bp"].volume_l > 0
+        boost_has_water = bool(self.available_sources())
         boost_target = (
             self.boost_pressure_bar
             if self.relay(self.outputs["boost"]) and boost_has_water
@@ -579,14 +653,63 @@ class BionicModel:
 
         active_tiers = [tier for tier in self.tiers.values() if self.relay(tier.relay)]
         pressure_target = self._pressure_target(len(active_tiers))
-        if not self.pipe_ruptured and pressure_target >= self.rupture_threshold_bar:
+        self.pressure_target_bar = pressure_target
+        pump_running = max((drive.actual_hz for drive in self.drives.values()), default=0.0) > 0.1
+        pump_pressurizing = any(
+            drive.actual_hz > 0.1 and self.drive_commanded(drive)
+            for drive in self.drives.values()
+        )
+        hydraulic_signature = self._hydraulic_state(active_tiers)
+        hydraulic_changed = (
+            self._hydraulic_signature is not None
+            and hydraulic_signature != self._hydraulic_signature
+            and self._pressure_pump_running
+            and pump_running
+        )
+        if hydraulic_changed:
+            closing = pressure_target > self.high_pressure_bar
+            response_ms = (
+                self.valve_pressure_close_response_ms
+                if closing else self.valve_pressure_response_ms
+            )
+            self._valve_response_remaining_s = response_ms / 1000.0
+            self.last_pressure_spike_bar = 0.0
+            if closing and self.transient_pressure_spike_coefficient > 0:
+                self.last_pressure_spike_bar = max(
+                    0.0,
+                    pressure_target - self.high_pressure_bar,
+                ) * self.transient_pressure_spike_coefficient
+                self._spike_remaining_s = self.transient_pressure_spike_duration_ms / 1000.0
+        self._hydraulic_signature = hydraulic_signature
+        self._pressure_pump_running = pump_running
+
+        spike = self.last_pressure_spike_bar if self._spike_remaining_s > 0 else 0.0
+        rupture_pressure = pressure_target + spike
+        self.max_pressure_bar = max(self.max_pressure_bar, self.high_pressure_bar, rupture_pressure)
+        if not self.pipe_ruptured and rupture_pressure >= self.rupture_threshold_bar:
             self.pipe_ruptured = True
             self._alarm("PIPE_RUPTURE", "pipe", True)
-            pressure_target = self.rupture_residual_bar
+            pressure_target = min(3.0, max(0.0, self.rupture_residual_bar))
+            self.pressure_target_bar = pressure_target
+            self._spike_remaining_s = 0.0
+            spike = 0.0
+        displayed_target = pressure_target + spike
+        if self.pipe_ruptured:
+            displayed_target = min(3.0, max(0.0, self.rupture_residual_bar)) if pump_pressurizing else 0.0
+        if self._valve_response_remaining_s > 0 or self.pipe_ruptured:
+            response_s = min(
+                self._valve_response_remaining_s or 0.2,
+                0.2 if self.pipe_ruptured else float("inf"),
+            )
+            rise_s = fall_s = response_s
+        else:
+            rise_s, fall_s = self.pressure_rise_s, self.pressure_fall_s
         self.high_pressure_bar = self._smooth(
-            self.high_pressure_bar, pressure_target, self.pressure_rise_s,
-            0.5 if self.pipe_ruptured else self.pressure_fall_s, dt_s,
+            self.high_pressure_bar, displayed_target, rise_s, fall_s, dt_s,
         )
+        self.max_pressure_bar = max(self.max_pressure_bar, self.high_pressure_bar)
+        self._valve_response_remaining_s = max(0.0, self._valve_response_remaining_s - dt_s)
+        self._spike_remaining_s = max(0.0, self._spike_remaining_s - dt_s)
 
         source_bo = self.relay(self.outputs["source_osmosis"])
         source_bp = self.relay(self.outputs["source_broth"])
@@ -594,14 +717,9 @@ class BionicModel:
         scale = max((drive.actual_hz for drive in self.drives.values()), default=0.0) / 29.0
         if self.pipe_ruptured:
             scale *= 0.1
-        if self.blockage_enabled:
-            scale *= max(0.0, 1.0 - self.blockage_severity / 100.0)
+        scale *= self._blockage_aperture()
         requested_l = sum(tier.flow_lpm for tier in active_tiers) * scale * dt_s / 60.0
-        shares: list[str] = []
-        if source_bo:
-            shares.append("bo")
-        if source_bp:
-            shares.append("bp")
+        shares = self.available_sources() if self.relay(self.outputs["boost"]) else []
         delivered = 0.0
         delivered_solution = SolutionParcel(0.0, 0.0, 0.0, 0.0, 0.0)
         if shares and max((d.actual_hz for d in self.drives.values()), default=0.0) > 0.1:
@@ -648,6 +766,8 @@ class BionicModel:
                 else:
                     pending.append((delay - dt_s, parcel))
             tier._returns = pending
+
+        self.calculated_flow_lpm = sum(tier.actual_flow_lpm for tier in self.tiers.values())
 
         leak_flow = self.leak_rate_lpm if self.leak_enabled and self.high_pressure_bar > 0.1 else 0.0
         if self.pipe_ruptured and self.high_pressure_bar > 0.1:

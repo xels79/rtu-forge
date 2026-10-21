@@ -125,6 +125,7 @@ def test_rupture_latches_without_stopping_controller_and_requires_repair():
     assert model.pipe_ruptured
     assert model.relay(32)
     assert model.high_pressure_bar <= 3
+    assert 4000 <= model.analog_raw(2) <= 4480
     model.tick(10)
     assert model.high_pressure_bar <= 3
     model.reset_alarms()
@@ -152,6 +153,125 @@ def test_leak_loses_water_and_blockage_reduces_flow():
     blocked.tick(60)
     assert blocked.total_leak_l > 0
     assert blocked.tanks["bo"].volume_l < before
+
+
+def test_blockage_is_downstream_resistance_raising_high_and_reducing_flow():
+    pressures = []
+    flows = []
+    resistances = []
+    for severity in (0, 40, 70, 90):
+        model = running_model()
+        model.pressure_rise_s = model.boost_rise_s = 0
+        model.rupture_threshold_bar = 100
+        model.blockage_enabled = severity > 0
+        model.blockage_severity = severity
+        enable_pressure(model, hz=42)
+        pressures.append(model.high_pressure_bar)
+        flows.append(model.calculated_flow_lpm)
+        resistances.append(model.hydraulic_resistance)
+    assert pressures[0] == pytest.approx(57, abs=0.2)
+    assert pressures == sorted(pressures)
+    assert flows == sorted(flows, reverse=True)
+    assert resistances == sorted(resistances)
+    assert model.blockage_position == "после датчика HIGH"
+
+
+def test_strong_blockage_ruptures_pipe_and_off_does_not_repair_it():
+    model = running_model()
+    model.pressure_rise_s = model.boost_rise_s = 0
+    model.blockage_enabled = True
+    model.blockage_severity = 100
+    enable_pressure(model, hz=42)
+    assert model.pipe_ruptured
+    assert model.high_pressure_bar <= 3
+    assert model.max_pressure_bar >= 75
+    assert model.alarms[("PIPE_RUPTURE", "pipe")].state == AlarmState.ACTIVE
+    assert model.relay(32)
+    model.blockage_enabled = False
+    model.tick(1)
+    assert model.pipe_ruptured
+    model.repair_pipe()
+    model.tick(1)
+    assert not model.pipe_ruptured
+    assert model.high_pressure_bar == pytest.approx(57, abs=0.2)
+
+
+def test_blockage_cannot_create_pressure_with_stopped_hp_or_closed_source():
+    model = running_model()
+    model.pressure_rise_s = model.pressure_fall_s = model.boost_rise_s = 0
+    model.blockage_enabled = True
+    model.blockage_severity = 100
+    model.rupture_threshold_bar = 100
+    enable_pressure(model, hz=42)
+    model.set_relay(32, False)
+    model.tick(0.1)
+    assert model.drives["hp1"].actual_hz > 0
+    assert model.pressure_target_bar == 0
+    assert model.high_pressure_bar == 0
+    model.set_relay(32, True)
+    model.drives["hp1"].ramp_up_s = 0
+    model.set_relay(21, False)
+    model.tick(0.2)
+    assert model.pressure_target_bar == 0
+    assert model.calculated_flow_lpm == 0
+
+
+def test_running_hp_reacts_quickly_to_tier_valves_and_closed_head():
+    model = running_model()
+    model.pressure_rise_s = model.boost_rise_s = 0
+    model.valve_pressure_response_ms = 200
+    model.valve_pressure_close_response_ms = 200
+    model.rupture_threshold_bar = 100
+    enable_pressure(model, hz=42)
+    three = model.high_pressure_bar
+    model.set_relay(11, False)
+    model.tick(0.05)
+    assert three < model.high_pressure_bar < model.pressure_target_bar
+    model.tick(0.2)
+    two = model.high_pressure_bar
+    model.set_relay(10, False)
+    model.tick(0.2)
+    one = model.high_pressure_bar
+    model.set_relay(9, False)
+    model.tick(0.2)
+    closed = model.high_pressure_bar
+    assert three < two < one < closed
+    assert closed == pytest.approx(84, abs=0.2)
+    model.set_relay(9, True)
+    model.set_relay(10, True)
+    model.set_relay(11, True)
+    model.set_relay(12, True)
+    model.set_relay(13, True)
+    model.set_relay(14, True)
+    model.tick(0.2)
+    assert model.high_pressure_bar < three
+
+
+def test_starting_hp_with_all_tiers_closed_reaches_shutoff_head_and_ruptures():
+    model = running_model()
+    model.pressure_rise_s = model.boost_rise_s = 0
+    enable_pressure(model, hz=42, tiers=())
+    assert model.max_pressure_bar == pytest.approx(84, abs=0.2)
+    assert model.pipe_ruptured
+    assert model.high_pressure_bar <= 3
+    assert model.relay(32)
+
+
+def test_configured_closing_spike_participates_in_rupture_threshold():
+    model = running_model()
+    model.pressure_rise_s = model.boost_rise_s = 0
+    model.valve_pressure_close_response_ms = 200
+    model.transient_pressure_spike_coefficient = 3.0
+    model.transient_pressure_spike_duration_ms = 100
+    enable_pressure(model, hz=42)
+    assert not model.pipe_ruptured
+    model.set_relay(11, False)
+    model.tick(0.05)
+    assert model.last_pressure_spike_bar > 0
+    assert model.max_pressure_bar >= 75
+    assert model.pipe_ruptured
+    model.tick(0.2)
+    assert model.high_pressure_bar <= 3
 
 
 def test_level_sensor_delay_hysteresis_and_force_do_not_change_volume():

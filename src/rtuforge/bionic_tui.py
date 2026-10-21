@@ -68,7 +68,7 @@ def run_tui(ctx: BionicContext, reconnect: Callable[[], None]) -> None:
         page, scroll, height = current_page()
         visible = page.lines[scroll : scroll + height]
         visible += [""] * (height - len(visible))
-        fragments = [("class:title", f"BIONIC IMMITATOR — {page.title}\n")]
+        fragments = [("class:title", f"BIONIC IMMITATOR — {page.simulation_status} | {page.title}\n")]
         for local_row, line in enumerate(visible):
             absolute_row = scroll + local_row
             style = ""

@@ -75,6 +75,15 @@ that tank only. Use
 scroll, `Tab` for contextual completion, and `Up`/`Down` for persistent command
 history. See [BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md) for the complete key map.
 
+The pressure model exposes mutable `pressure_rise_s`,
+`valve_pressure_response_ms`, `valve_pressure_close_response_ms`,
+`transient_pressure_spike_coefficient`,
+`transient_pressure_spike_duration_ms`, `closed_head_pressure_bar`,
+`rupture_threshold_bar`, and `rupture_residual_bar` options. Valve response
+times are model parameters in milliseconds; the default transient spike
+coefficient is zero because no measured water-hammer characteristic is being
+claimed.
+
 The Bionic level sensors drive a separately connected physical Waveshare Relay
 8/16CH on USB/RS-485 №2; they are not exposed as extra virtual devices on USB
 №1. The default CH1..CH8 map, configurable NO/NC installation contact, relay

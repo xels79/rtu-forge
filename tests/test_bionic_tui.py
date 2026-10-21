@@ -40,6 +40,38 @@ def test_required_views_have_separate_content(tmp_path):
     assert "USB №1" in ports and "БАКИ" not in ports
 
 
+def test_help_has_prominent_simulation_control_section(tmp_path):
+    ctx, _ = context(tmp_path)
+    text = "\n".join(page(ctx, "help").lines)
+    assert "УПРАВЛЕНИЕ СИМУЛЯЦИЕЙ" in text
+    assert "sim start            Запустить расчёт физики" in text
+    assert "sim reset --confirm  Сбросить виртуальное состояние" in text
+    assert "sim pause не закрывает RS485" in text
+    assert "не отправляет плате команду остановки" in text
+
+
+def test_every_page_exposes_fixed_simulation_status(tmp_path):
+    ctx, _ = context(tmp_path)
+    execute_command(ctx, "sim start")
+    for name in VIEW_NAMES:
+        assert page(ctx, name).simulation_status == "СИМУЛЯЦИЯ: РАБОТАЕТ | СКОРОСТЬ: ×1.0"
+    execute_command(ctx, "sim speed 5")
+    execute_command(ctx, "sim pause")
+    assert page(ctx, "pressure").simulation_status == "СИМУЛЯЦИЯ: ПАУЗА | СКОРОСТЬ: ×5.0"
+
+
+def test_pressure_diagnostics_show_hydraulic_inputs_and_outputs(tmp_path):
+    ctx, _ = context(tmp_path)
+    text = "\n".join(page(ctx, "pressure", 180).lines)
+    for expected in (
+        "частота", "Ярусы открыты", "Клапаны ярусов", "Источник",
+        "Расчётный расход", "HIGH, текущее давление", "Целевое давление модели",
+        "Последний переходный скачок", "Максимальное зафиксированное давление",
+        "Трубопровод", "после датчика HIGH",
+    ):
+        assert expected in text
+
+
 def test_status_has_exactly_three_recent_event_slots(tmp_path):
     ctx, _ = context(tmp_path)
     for index in range(5):

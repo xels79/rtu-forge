@@ -58,6 +58,11 @@ class BionicSettings:
     boost_fall_s: float = 2.0
     pressure_rise_s: float = 5.0
     pressure_fall_s: float = 4.0
+    valve_pressure_response_ms: int = 200
+    valve_pressure_close_response_ms: int = 200
+    transient_pressure_spike_coefficient: float = 0.0
+    transient_pressure_spike_duration_ms: int = 100
+    closed_head_pressure_bar: float = 90.0
     pressure_max_bar: float = 90.0
     rupture_threshold_bar: float = 75.0
     rupture_residual_bar: float = 2.0
@@ -141,9 +146,9 @@ def _section(name: str) -> str:
         return "irrigation"
     if name.startswith("sensor_"):
         return "sensors"
-    if name.startswith(("boost_", "pressure_")):
+    if name.startswith(("boost_", "pressure_", "valve_pressure_", "transient_pressure_", "closed_head_", "rupture_")):
         return "pressure"
-    if name.startswith(("rupture_", "leak_", "blockage_")):
+    if name.startswith(("leak_", "blockage_")):
         return "faults"
     return "simulation"
 
@@ -209,6 +214,9 @@ def validate_settings(settings: BionicSettings) -> None:
         settings.return_delay_s, settings.sensor_hysteresis_l, settings.sensor_delay_s,
         settings.boost_pressure_bar, settings.boost_rise_s, settings.boost_fall_s,
         settings.pressure_rise_s, settings.pressure_fall_s, settings.pressure_max_bar,
+        settings.valve_pressure_response_ms, settings.valve_pressure_close_response_ms,
+        settings.transient_pressure_spike_coefficient, settings.transient_pressure_spike_duration_ms,
+        settings.closed_head_pressure_bar,
         settings.rupture_threshold_bar, settings.rupture_residual_bar, settings.leak_rate_lpm,
     )
     if any(value < 0 for value in nonnegative):
@@ -217,6 +225,8 @@ def validate_settings(settings: BionicSettings) -> None:
         raise ValueError("Доли возврата и влияния протечки должны быть в диапазоне 0..1")
     if not 0 <= settings.blockage_severity <= 100:
         raise ValueError("Степень засора должна быть в диапазоне 0..100")
+    if not 0 <= settings.rupture_residual_bar <= 3:
+        raise ValueError("Остаточное давление после разрыва должно быть в диапазоне 0..3 бар")
     if not 0.1 <= settings.simulation_speed <= 100:
         raise ValueError("Скорость симуляции должна быть в диапазоне 0.1..100")
     if settings.ponics_mode not in {0, 2, 3, 4, 5}:

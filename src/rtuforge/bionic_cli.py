@@ -104,6 +104,11 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
     model.boost_fall_s = settings.boost_fall_s
     model.pressure_rise_s = settings.pressure_rise_s
     model.pressure_fall_s = settings.pressure_fall_s
+    model.valve_pressure_response_ms = settings.valve_pressure_response_ms
+    model.valve_pressure_close_response_ms = settings.valve_pressure_close_response_ms
+    model.transient_pressure_spike_coefficient = settings.transient_pressure_spike_coefficient
+    model.transient_pressure_spike_duration_ms = settings.transient_pressure_spike_duration_ms
+    model.closed_head_pressure_bar = settings.closed_head_pressure_bar
     model.pressure_max_bar = settings.pressure_max_bar
     model.rupture_threshold_bar = settings.rupture_threshold_bar
     model.rupture_residual_bar = settings.rupture_residual_bar
@@ -409,7 +414,12 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
     if command == "fault":
         if args == ["list"]:
             ctx.view = "pressure"
-            ctx.notice = f"leak={'on' if model.leak_enabled else 'off'}; blockage={'on' if model.blockage_enabled else 'off'}; pipe={'ruptured' if model.pipe_ruptured else 'ok'}"
+            ctx.notice = (
+                f"leak={'on' if model.leak_enabled else 'off'}; "
+                f"blockage={'on' if model.blockage_enabled else 'off'} "
+                f"({model.blockage_severity:g}%, {model.blockage_position}); "
+                f"pipe={'ruptured' if model.pipe_ruptured else 'ok'}"
+            )
             if not ctx.screen_mode: ctx.console.print(ctx.notice)
         elif args == ["clear", "all"]:
             model.leak_enabled = model.blockage_enabled = False

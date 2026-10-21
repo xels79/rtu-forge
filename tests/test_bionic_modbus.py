@@ -103,6 +103,9 @@ def test_settings_roundtrip_validation_and_no_implicit_file(tmp_path: Path):
     assert changed(settings, "sensor_relay_contact", "NC").sensor_relay_contact == "NC"
     with pytest.raises(ValueError, match="NO или NC"):
         changed(settings, "sensor_relay_contact", "closed")
+    assert changed(settings, "valve_pressure_response_ms", "200").valve_pressure_response_ms == 200
+    with pytest.raises(ValueError, match="0..3 бар"):
+        changed(settings, "rupture_residual_bar", "3.1")
 
 
 class FakeTransport:

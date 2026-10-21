@@ -19,6 +19,15 @@ TANK_NAMES = {"bo": "Осмос", "bp": "Бульон", "bso1": "Дренаж 1"
 PUMP_NAMES = {"bo-to-bp": "Осмос → Бульон", "bso1-to-bp": "Дренаж 1 → Бульон", "bso2-to-bp": "Дренаж 2 → Бульон"}
 OUTPUT_NAMES = {1:"Насос подпора",2:"Перекачка: осмос → бульон",17:"Возврат: дренаж 1 → бульон",18:"Возврат: дренаж 2 → бульон",19:"Выбор HP1",20:"Выбор HP2",21:"Клапан источника: Осмос",22:"Клапан наполнения осмоса",23:"Клапан источника: Бульон",31:"RUN частотника HP2",32:"RUN частотника HP1"}
 HELP_GROUPS = (
+    ("УПРАВЛЕНИЕ СИМУЛЯЦИЕЙ", "\n".join((
+        "sim start            Запустить расчёт физики",
+        "sim pause            Приостановить расчёт физики",
+        "sim resume           Продолжить расчёт",
+        "sim speed 1          Нормальная скорость",
+        "sim speed 5          Пятикратная скорость",
+        "sim reset --confirm  Сбросить виртуальное состояние",
+        "sim pause не закрывает RS485 и не отправляет плате команду остановки.",
+    ))),
     ("ОБЩИЕ", "status — состояние; devices — устройства; ports — порты; help — справка; exit/quit — выход"),
     ("НАВИГАЦИЯ", "view status|devices|ports|settings|help|log|rs485|tanks|pumps|pressure|irrigation|light|sensors|water|ponics|drives"),
     ("PONICPILOT", "view ponics; view ponics settings; view ponics registers; ponics dose <a|b|c|ph_plus|ph_minus> <мл>"),
@@ -56,6 +65,11 @@ SETTING_LABELS = {
     "sensor_hysteresis_l":("Гистерезис датчиков уровня","л"), "sensor_delay_s":("Задержка датчиков уровня","с"),
     "boost_pressure_bar":("Давление подпора","бар"), "boost_rise_s":("Время набора подпора","с"), "boost_fall_s":("Время падения подпора","с"),
     "pressure_rise_s":("Время набора давления","с"), "pressure_fall_s":("Время падения давления","с"),
+    "valve_pressure_response_ms":("Реакция давления на открытие клапана","мс"),
+    "valve_pressure_close_response_ms":("Реакция давления на закрытие клапана","мс"),
+    "transient_pressure_spike_coefficient":("Коэффициент переходного скачка","×"),
+    "transient_pressure_spike_duration_ms":("Длительность переходного скачка","мс"),
+    "closed_head_pressure_bar":("Давление HP при закрытых ярусах (45 Гц)","бар"),
     "pressure_max_bar":("Максимальное давление модели","бар"),
     "rupture_threshold_bar":("Порог разрыва трассы","бар"), "leak_rate_lpm":("Интенсивность протечки","л/мин"),
     "rupture_residual_bar":("Остаточное давление после разрыва","бар"), "leak_pressure_factor":("Влияние протечки на давление","доля"),
@@ -90,6 +104,7 @@ class ScreenPage:
     title: str
     lines: list[str]
     row_keys: list[str | None]
+    simulation_status: str = ""
 
 def ellipsize(value: object, width: int) -> str:
     text = str(value).replace("\n", " ")
@@ -215,8 +230,45 @@ def _help(width:int,query:str)->list[str]:
     q=query.casefold().strip(); lines=["Поиск: "+(q or "нет")+"  (help search <текст>)",""]
     for title,body in HELP_GROUPS:
         if q and q not in title.casefold() and q not in body.casefold(): continue
-        lines += [title,ellipsize(body,width),""]
+        lines += [title,*[ellipsize(line,width) for line in body.splitlines()],""]
     return lines
+
+def simulation_status(model:BionicModel)->str:
+    if model.paused:
+        state="ПАУЗА"
+    elif model.running:
+        state="РАБОТАЕТ"
+    else:
+        state="ОСТАНОВЛЕНА"
+    return f"СИМУЛЯЦИЯ: {state} | СКОРОСТЬ: ×{model.speed:.1f}"
+
+def _pressure(model:BionicModel,width:int)->list[str]:
+    drive=max(model.drives.values(),key=lambda item:item.actual_hz)
+    active=[tier for tier in model.tiers.values() if model.relay(tier.relay)]
+    source_ids=model.selected_sources()
+    source_names={"bo":"БО (Осмос)","bp":"БП (Бульон)"}
+    selected=", ".join(source_names[item] for item in source_ids) or "нет — путь закрыт"
+    available=", ".join(source_names[item] for item in model.available_sources()) or "нет"
+    lines=[
+        "ГИДРАВЛИКА ВЫСОКОГО ДАВЛЕНИЯ",
+        f"HP: {drive.id.upper()} | команда {'RUN' if model.drive_commanded(drive) else 'STOP'} | факт {'RUN' if drive.actual_hz>0.1 else 'STOP'} | частота {drive.actual_hz:.1f} Гц",
+        f"Ярусы открыты: {len(active)} из {len(model.tiers)} | "+(", ".join(tier.id for tier in active) or "нет"),
+        "Клапаны ярусов: "+" | ".join(f"do-{tier.relay} {'ОТКР' if model.relay(tier.relay) else 'ЗАКР'}" for tier in model.tiers.values()),
+        f"Насос подпора do-{model.outputs['boost']}: {'RUN' if model.relay(model.outputs['boost']) else 'STOP'} | LOW {model.low_pressure_bar:.2f} бар",
+        f"Источник: {selected} | доступна вода: {available}",
+        f"Клапаны источника: do-{model.outputs['source_osmosis']} {'ОТКР' if model.relay(model.outputs['source_osmosis']) else 'ЗАКР'} | do-{model.outputs['source_broth']} {'ОТКР' if model.relay(model.outputs['source_broth']) else 'ЗАКР'}",
+        "",
+        f"Расчётный расход: {model.calculated_flow_lpm:.2f} л/мин",
+        f"HIGH, текущее давление: {model.high_pressure_bar:.2f} бар",
+        f"Целевое давление модели: {model.pressure_target_bar:.2f} бар",
+        f"Последний переходный скачок: +{model.last_pressure_spike_bar:.2f} бар",
+        f"Максимальное зафиксированное давление: {model.max_pressure_bar:.2f} бар",
+        f"Трубопровод: {'РАЗРУШЕН — требуется pipe repair' if model.pipe_ruptured else 'ИСПРАВЕН'}",
+        "",
+        f"Засор: {'ВКЛ' if model.blockage_enabled else 'ВЫКЛ'} | степень {model.blockage_severity:.0f}% | положение: {model.blockage_position}",
+        f"Расчётное относительное сопротивление: ×{model.hydraulic_resistance:.2f}",
+    ]
+    return [ellipsize(line,width) for line in lines]
 
 def _log(j:EventJournal,category:str,width:int)->list[str]:
     return [f"Фильтр: {category}","Дата/время                | Тип       | Объект       | Событие"]+[ellipsize(f"{e.at[:19]:<24} | {e.kind:<9} | {e.subject:<12} | {e.message}",width) for e in j.filtered(category)]
@@ -309,7 +361,7 @@ def render_page(name:str,model:BionicModel,journal:EventJournal,settings:BionicS
     elif name=="log": lines=_log(journal,log_filter,width)
     elif name=="tanks": lines=[f"{t.id} | {TANK_NAMES[t.id]} | {t.volume_l:.1f}/{t.capacity_l:.1f} л | перелив {t.overflow_l:.1f} л" for t in model.tanks.values()]
     elif name=="pumps": lines=[f"{p.id} | {PUMP_NAMES[p.id]} | {'RUN' if model.relay(p.relay) else 'STOP'} | {p.actual_flow_lpm:.1f} л/мин" for p in model.pumps.values()]
-    elif name=="pressure": lines=[f"LOW | Датчик низкого давления | {model.low_pressure_bar:.2f} бар",f"HIGH | Датчик высокого давления | {model.high_pressure_bar:.2f} бар",f"HP1 | Частотник высокого давления 1 | {model.drives['hp1'].actual_hz:.1f} Гц",f"HP2 | Частотник высокого давления 2 | {model.drives['hp2'].actual_hz:.1f} Гц"]
+    elif name=="pressure": lines=_pressure(model,width)
     elif name=="irrigation": lines=[f"{t.id} | Стеллаж {t.rack}, ярус | do-{t.relay} | {t.actual_flow_lpm:.1f} л/мин" for t in model.tiers.values()]
     elif name=="light": lines=[f"{z.id} | Стеллаж {z.rack}, ярус {z.tier} | do-{z.power_relay} | {'ON' if model.light_state(z.id)[0] else 'OFF'}" for z in model.lights.values()]
     elif name=="sensors": lines,keys=_sensor_rows(model,settings,relay_state,width)
@@ -326,10 +378,13 @@ def render_page(name:str,model:BionicModel,journal:EventJournal,settings:BionicS
         title=f"PONICPILOT • {PONICS_TANK_LABEL} • {PONICS_DEMO_LABEL}"
     else:
         title=VIEW_TITLES.get(name,name.upper())
-    return ScreenPage(title,[ellipsize(x,width) for x in lines],keys or [None]*len(lines))
+    return ScreenPage(
+        title,[ellipsize(x,width) for x in lines],keys or [None]*len(lines),
+        simulation_status(model),
+    )
 
 def visible_lines(page:ScreenPage,*,height:int,scroll:int=0)->list[str]:
     height=max(1,height); start=min(max(scroll,0),max(0,len(page.lines)-height)); lines=page.lines[start:start+height]; return lines+[""]*(height-len(lines))
 
 def print_view(console:Console,name:str,model:BionicModel,journal:EventJournal,settings:BionicSettings,draft:BionicSettings,saved:BionicSettings|None=None,relay_state:SensorRelayState|None=None)->None:
-    page=render_page(name,model,journal,settings,draft,saved or settings,width=console.width,relay_state=relay_state); console.print(Text("BIONIC IMMITATOR — "+page.title+"\n"+"\n".join(page.lines)))
+    page=render_page(name,model,journal,settings,draft,saved or settings,width=console.width,relay_state=relay_state); console.print(Text("BIONIC IMMITATOR — "+page.simulation_status+" | "+page.title+"\n"+"\n".join(page.lines)))

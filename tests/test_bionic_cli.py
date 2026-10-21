@@ -37,6 +37,9 @@ def test_tank_sensor_fault_pipe_and_alarm_commands(tmp_path):
     assert ctx.model.leak_enabled and ctx.model.leak_rate_lpm == 9.5
     assert ctx.model.blockage_enabled and ctx.model.blockage_severity == 40
     ctx.model.pipe_ruptured = True
+    execute_command(ctx, "fault blockage off")
+    assert not ctx.model.blockage_enabled
+    assert ctx.model.pipe_ruptured
     execute_command(ctx, "alarm reset all")
     assert ctx.model.pipe_ruptured
     execute_command(ctx, "pipe repair")
