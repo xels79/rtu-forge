@@ -67,6 +67,15 @@ class SensorRelayBridge:
             return self.state
 
         needs_write = self._last_written != desired
+        # After a bounded retry burst, a periodic health check starts a new
+        # burst with FC0F.  This guarantees that recovery re-applies the
+        # complete desired image instead of trusting outputs left during the
+        # outage.
+        if (
+            needs_write and force_read and self._write_attempts >= self.max_retries
+            and current_time >= self._next_retry_at
+        ):
+            self._write_attempts = 0
         if (
             needs_write and self._write_attempts < self.max_retries
             and current_time >= self._next_retry_at
@@ -104,17 +113,20 @@ class SensorRelayBridge:
         self.state.confirmed = self._read_image(read_exchange.rx, self.channels)
         self.state.online = True
         self.state.last_success_at = datetime.now(timezone.utc).isoformat()
+        self._write_attempts = 0
+        self._next_retry_at = 0.0
         if self.state.confirmed == desired:
             self._last_written = desired
-            self._write_attempts = 0
             self.state.error = None
         else:
+            self._last_written = None
             self.state.error = "подтверждённое состояние реле не совпадает с требуемым"
 
     def _offline(self, exc: Exception) -> None:
         self.state.online = False
         self.state.confirmed = None
         self.state.error = str(exc)
+        self._last_written = None
 
     def _valid_write(self, request: bytes, response: bytes) -> bool:
         return (

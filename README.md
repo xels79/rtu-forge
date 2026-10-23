@@ -123,6 +123,10 @@ lifetime, current wear, and applied/saved state. `--sync-wear` aligns a new
 pump's wear lifetime with `failure_s` without repairing existing damage.
 Named `sim state` checkpoints persist physical test state separately from the
 INI and never restore controller-owned DO, AO, or RUN commands.
+On every exit, the current physical state is also written atomically to
+`bionic-runtime-state.json` and restored on the next launch. It remains in
+effect until `sim reset --confirm`; controller-owned DO, AO, frequency, and
+RUN commands are still never restored from this file.
 
 It has its own configuration and event journal and does not modify
 `config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,

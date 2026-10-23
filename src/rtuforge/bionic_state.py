@@ -14,6 +14,7 @@ from .bionic_model import Alarm, AlarmState, BionicModel, SolutionParcel
 
 
 STATE_VERSION = 1
+RUNTIME_STATE_FILENAME = "bionic-runtime-state.json"
 STATE_NAME = re.compile(r"^[\w.-]{1,64}$", re.UNICODE)
 TANK_FIELDS = (
     "volume_l", "inflow_lpm", "outflow_lpm", "total_loss_l", "overflow_l",
@@ -35,6 +36,11 @@ def state_path(directory: Path, name: str) -> Path:
     return directory / f"{validate_state_name(name)}.json"
 
 
+def runtime_state_path(home: Path) -> Path:
+    """Return the automatic physical-state file outside named checkpoints."""
+    return home / RUNTIME_STATE_FILENAME
+
+
 def _health(model: BionicModel, equipment_id: str) -> dict[str, Any]:
     health = model.equipment_health(equipment_id)
     return {field: getattr(health, field) for field in HEALTH_FIELDS}
@@ -45,7 +51,9 @@ def capture_state(model: BionicModel) -> dict[str, Any]:
     return {
         "format_version": STATE_VERSION,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "simulation": {"running": model.running, "paused": model.paused},
+        "simulation": {
+            "running": model.running, "paused": model.paused, "speed": model.speed,
+        },
         "tanks": {
             tank_id: {field: getattr(tank, field) for field in TANK_FIELDS}
             for tank_id, tank in model.tanks.items()
@@ -243,6 +251,7 @@ def restore_state(model: BionicModel, data: dict[str, Any]) -> None:
     simulation = data["simulation"]
     model.running = bool(simulation["running"])
     model.paused = bool(simulation["paused"])
+    model.speed = float(simulation.get("speed", model.speed))
     model._hydraulic_signature = None
     model.sensor_change()
 
@@ -274,7 +283,12 @@ def load_state(path: Path, model: BionicModel) -> None:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"Не удалось прочитать состояние {path.stem}: {exc}") from None
-    restore_state(model, data)
+    try:
+        restore_state(model, data)
+    except ValueError:
+        raise
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise ValueError(f"Состояние повреждено: {exc}") from None
 
 
 def list_states(directory: Path) -> list[str]:

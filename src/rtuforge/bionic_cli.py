@@ -31,7 +31,9 @@ from .bionic_ponics import PONICS_OPTION_NAMES, PONICS_REGISTERS
 from .bionic_render import print_view
 from .bionic_sensor_bridge import SensorRelayBridge, SensorRelayState
 from .bionic_server import ModbusSlaveServer, SerialSlaveTransport
-from .bionic_state import list_states, load_state, save_state, state_path
+from .bionic_state import (
+    list_states, load_state, runtime_state_path, save_state, state_path,
+)
 from .transport import SerialTransport
 
 
@@ -227,13 +229,31 @@ def make_context(home: Path, config_path: Path | None = None, *, console: Consol
     journal = EventJournal(home / "bionic-events.jsonl", settings.retention_days)
     model = BionicModel()
     apply_model_settings(settings, model, initial=True)
+    restored_notice = ""
+    automatic_path = runtime_state_path(home)
+    if automatic_path.exists():
+        try:
+            load_state(automatic_path, model)
+            restored_notice = "Физическое состояние восстановлено после прошлого выхода"
+            journal.add("СИСТЕМА", "simulation-state", restored_notice)
+        except ValueError as exc:
+            model = BionicModel()
+            apply_model_settings(settings, model, initial=True)
+            restored_notice = f"Автосостояние не восстановлено: {exc}; загружено начальное состояние"
+            journal.add("ОШИБКА", "simulation-state", restored_notice)
     ctx = BionicContext(home, path, settings, settings, model, journal, console or Console(), test_mode=test_mode)
     ctx.saved = settings
+    ctx.notice = restored_notice
     ctx.sensor_relay_state = SensorRelayState()
     ctx.model.event = ctx.event
     _bind_ponics_draft(ctx)
     _bind_drive_draft(ctx)
     return ctx
+
+
+def save_runtime_state(ctx: BionicContext) -> None:
+    """Atomically persist physical state without controller-owned commands."""
+    save_state(runtime_state_path(ctx.home), ctx.model)
 
 
 def _bind_ponics_draft(ctx: BionicContext) -> None:
@@ -760,6 +780,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             apply_model_settings(ctx.settings, ctx.model, initial=True)
             _bind_ponics_draft(ctx)
             _bind_drive_draft(ctx)
+            save_runtime_state(ctx)
             ctx.event("ОПЕРАТОР", "simulation", "виртуальное состояние сброшено; физические выходы не изменялись")
             return "reconnect"
         elif len(args) == 3 and args[:2] == ["state", "save"]:
@@ -906,6 +927,7 @@ class BridgeRunner:
         self.ctx.sensor_relay_state = self.bridge.state
         self.ctx.model.sensor_change = self.wake_event.set
         self.last_error: str | None = None
+        self.link_was_lost = False
         self.thread = threading.Thread(target=self._run, name="bionic-sensor-relay", daemon=True)
 
     def start(self) -> None:
@@ -938,6 +960,23 @@ class BridgeRunner:
             state.confirmed != previous_confirmed or not previous_online
         ):
             self.ctx.event("RS485", "USB2", f"FC01 подтверждено 0x{state.confirmed or 0:04X}")
+        if (
+            state.online and self.link_was_lost
+            and state.confirmed == state.desired
+        ):
+            self.ctx.event(
+                "АППАРАТУРА", "USB2",
+                f"связь восстановлена; правильное состояние реле установлено и подтверждено 0x{state.desired:04X}",
+            )
+            self.link_was_lost = False
+        elif not state.online and previous_online:
+            self.ctx.event(
+                "АППАРАТУРА", "USB2",
+                f"потеря связи с физическим реле: {state.error or 'нет подтверждения'}",
+            )
+            self.link_was_lost = True
+        elif not state.online and state.error:
+            self.link_was_lost = True
         if state.error and state.error != self.last_error:
             self.ctx.event("RS485", "USB2", state.error)
         self.last_error = state.error
@@ -975,65 +1014,105 @@ def main() -> int:
     args = _parser().parse_args()
     home = args.home.resolve()
     config = args.config.resolve() if args.config else None
+    ctx: BionicContext | None = None
+    runner: ModelRunner | None = None
+    server: ModbusSlaveServer | None = None
+    bridge_runner: BridgeRunner | None = None
+    exit_code = 0
+
+    def stop_hardware() -> None:
+        nonlocal server, bridge_runner
+        errors: list[str] = []
+        if server is not None:
+            try:
+                server.stop()
+            except (RuntimeError, OSError) as exc:
+                errors.append(f"USB №1: {exc}")
+            finally:
+                server = None
+        if bridge_runner is not None:
+            try:
+                bridge_runner.stop()
+            except (RuntimeError, OSError) as exc:
+                errors.append(f"USB №2: {exc}")
+            finally:
+                bridge_runner = None
+        if errors:
+            raise RuntimeError("; ".join(errors))
+
+    def start_hardware() -> None:
+        nonlocal server, bridge_runner
+        if ctx is None:
+            return
+        if not args.no_controller:
+            bus = build_default_bus(ctx.model, ctx.settings)
+            transport = SerialSlaveTransport(
+                ctx.settings.controller_port, ctx.settings.controller_baudrate,
+                ctx.settings.controller_parity, ctx.settings.controller_stopbits,
+            )
+            server = ModbusSlaveServer(bus, transport, home / f".{ctx.settings.controller_port}.bionic.lock")
+            server.start()
+        bridge_runner = _start_bridge(ctx)
+
+    def reconnect_hardware() -> None:
+        stop_hardware()
+        start_hardware()
+
     try:
         ctx = make_context(home, config, test_mode=args.test_mode)
         if args.command:
-            result = execute_command(ctx, " ".join(args.command))
-            return 0 if result != "exit" else 0
-        runner = ModelRunner(ctx)
-        server: ModbusSlaveServer | None = None
-        bridge_runner: BridgeRunner | None = None
-        runner.start()
-        def stop_hardware() -> None:
-            nonlocal server, bridge_runner
-            if server is not None:
-                server.stop()
-                server = None
-            if bridge_runner is not None:
-                bridge_runner.stop()
-                bridge_runner = None
-
-        def start_hardware() -> None:
-            nonlocal server, bridge_runner
-            if not args.no_controller:
-                bus = build_default_bus(ctx.model, ctx.settings)
-                transport = SerialSlaveTransport(
-                    ctx.settings.controller_port, ctx.settings.controller_baudrate,
-                    ctx.settings.controller_parity, ctx.settings.controller_stopbits,
-                )
-                server = ModbusSlaveServer(bus, transport, home / f".{ctx.settings.controller_port}.bionic.lock")
-                server.start()
-            bridge_runner = _start_bridge(ctx)
-
-        def reconnect_hardware() -> None:
-            stop_hardware()
-            start_hardware()
-
-        start_hardware()
-        if sys.stdin.isatty() and sys.stdout.isatty():
-            from .bionic_tui import run_tui
-            run_tui(ctx, reconnect_hardware)
+            execute_command(ctx, " ".join(args.command))
         else:
-            print_view(ctx.console, ctx.view, ctx.model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
-            while True:
-                try:
-                    line = input("bionic-immitator> ")
-                    result = execute_command(ctx, line)
-                    if result == "exit":
+            runner = ModelRunner(ctx)
+            runner.start()
+            start_hardware()
+            if sys.stdin.isatty() and sys.stdout.isatty():
+                from .bionic_tui import run_tui
+                run_tui(ctx, reconnect_hardware)
+            else:
+                print_view(ctx.console, ctx.view, ctx.model, ctx.journal, ctx.settings, ctx.draft, ctx.saved, ctx.sensor_relay_state)
+                while True:
+                    try:
+                        line = input("bionic-immitator> ")
+                        result = execute_command(ctx, line)
+                        if result == "exit":
+                            break
+                        if result == "reconnect":
+                            reconnect_hardware()
+                    except (ValueError, RuntimeError) as exc:
+                        ctx.console.print(f"[red]Ошибка:[/red] {exc}")
+                    except (EOFError, KeyboardInterrupt):
                         break
-                    if result == "reconnect":
-                        reconnect_hardware()
-                except (ValueError, RuntimeError) as exc:
-                    ctx.console.print(f"[red]Ошибка:[/red] {exc}")
-                except (EOFError, KeyboardInterrupt):
-                    break
-        stop_hardware()
-        runner.stop()
-        ctx.journal.compact()
-        return 0
     except (ValueError, RuntimeError, OSError) as exc:
         Console(stderr=True).print(f"[red]Ошибка:[/red] {exc}")
-        return 1
+        exit_code = 1
+    finally:
+        cleanup_errors: list[str] = []
+        try:
+            stop_hardware()
+        except (ValueError, RuntimeError, OSError) as exc:
+            cleanup_errors.append(f"остановка оборудования: {exc}")
+        try:
+            if runner is not None and runner.thread.is_alive():
+                runner.stop()
+        except (ValueError, RuntimeError, OSError) as exc:
+            cleanup_errors.append(f"остановка физической модели: {exc}")
+        if ctx is not None:
+            try:
+                save_runtime_state(ctx)
+                ctx.event("СИСТЕМА", "simulation-state", "физическое состояние автоматически сохранено при выходе")
+            except (ValueError, RuntimeError, OSError) as exc:
+                cleanup_errors.append(f"сохранение состояния: {exc}")
+            try:
+                ctx.journal.compact()
+            except (ValueError, RuntimeError, OSError) as exc:
+                cleanup_errors.append(f"сохранение журнала: {exc}")
+        if cleanup_errors:
+            Console(stderr=True).print(
+                "[red]Ошибка завершения:[/red] " + "; ".join(cleanup_errors)
+            )
+            exit_code = 1
+    return exit_code
 
 
 if __name__ == "__main__":
