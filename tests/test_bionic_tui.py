@@ -374,6 +374,37 @@ def test_status_output_columns_do_not_shift_between_on_and_off(tmp_path):
     assert before_text.index("|") == after_text.index("|")
 
 
+@pytest.mark.parametrize("width", [50, 80, 120, 160])
+def test_status_level_sensors_use_two_fixed_columns(tmp_path, width):
+    ctx, _ = context(tmp_path)
+    rendered = page(ctx, "status", width)
+
+    def left_text(line):
+        return line.split(" │ ", 1)[0][1:] if rendered.layout_mode != "single" else line
+
+    rows = [
+        left_text(line) for line in rendered.lines
+        if any(left_text(line).startswith(f"{name:<4} MIN ") for name in ("БО", "БП", "БСО1", "БСО2"))
+    ]
+    assert len(rows) == 4
+    assert len({row.index("MIN") for row in rows}) == 1
+    assert len({row.index("|") for row in rows}) == 1
+    assert len({row.index("MAX") for row in rows}) == 1
+    assert len({row.index(" л") for row in rows}) == 1
+    assert len({row.rindex(" л") for row in rows}) == 1
+
+    before = rows[0]
+    ctx.model.force_sensor("bo-min", False)
+    ctx.model.force_sensor("bo-max", True)
+    changed = page(ctx, "status", width)
+    changed_row = next(
+        left_text(line) for line in changed.lines
+        if left_text(line).startswith("БО   MIN ")
+    )
+    assert before.index("|") == changed_row.index("|")
+    assert before.index("MAX") == changed_row.index("MAX")
+
+
 @pytest.mark.parametrize("width", [50, 80, 110, 120, 160])
 def test_status_pump_fields_are_aligned_for_different_state_lengths(tmp_path, width):
     ctx, _ = context(tmp_path)

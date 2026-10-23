@@ -17,7 +17,7 @@ from .bionic_lights import (
     FACTORY_LIGHTS, LightType, ROLE_LABELS, parse_light_profile,
     validate_light_profile,
 )
-from .bionic_model import AlarmState, BionicModel
+from .bionic_model import AlarmState, BionicModel, LevelSensor
 from .bionic_ponics import (
     PONICS_DEMO_LABEL, PONICS_OPTION_NAMES, PONICS_REGISTER_COUNT, PONICS_REGISTERS,
     PONICS_STATE_LABELS, PONICS_TANK_LABEL,
@@ -309,6 +309,29 @@ def _status_tank_gauges(model: BionicModel) -> list[StyledLine]:
     return lines
 
 
+def _status_pair(
+    prefix: str, left: StyledLine, right: StyledLine, width: int,
+) -> StyledLine:
+    """Place two status cells at stable column positions after a fixed prefix."""
+    available = max(2, width - cell_len(prefix) - 3)
+    left_width = available // 2
+    right_width = available - left_width
+    return _styled(
+        prefix,
+        *_fit_fragments(left, left_width, pad=True),
+        " | ",
+        *_fit_fragments(right, right_width),
+    )
+
+
+def _sensor_status_cell(label: str, sensor: LevelSensor) -> StyledLine:
+    state = _state(sensor.value, on_style="sensor_on")
+    state_padding = " " * (4 - cell_len(state[1]))
+    return _styled(
+        f"{label} ", state, state_padding, f" {sensor.threshold_l:>5g} л",
+    )
+
+
 def _status_sensors(
     model: BionicModel, settings: BionicSettings,
     relay_state: SensorRelayState | None, width: int,
@@ -326,15 +349,13 @@ def _status_sensors(
     if settings.hardware_mode and (relay_state is None or not relay_state.online or relay_state.confirmed is None):
         warnings.append("USB №2: НЕТ СВЯЗИ, состояние выходов не подтверждено")
     for tank_id in ("bo", "bp", "bso1", "bso2"):
-        parts: list[tuple[str, object] | object] = [f"{names[tank_id]:<4} "]
-        for kind, label in (("min", "MIN"), ("max", "MAX")):
-            sensor = model.sensors[f"{tank_id}-{kind}"]
-            parts += [f"{label} ", _state(sensor.value, on_style="sensor_on"), f" {sensor.threshold_l:g} л"]
-            if kind == "min":
-                parts.append(" | ")
-        lines.append(_styled(*parts))
+        lines.append(_status_pair(
+            f"{names[tank_id]:<4} ",
+            _sensor_status_cell("MIN", model.sensors[f"{tank_id}-min"]),
+            _sensor_status_cell("MAX", model.sensors[f"{tank_id}-max"]),
+            width,
+        ))
         if settings.hardware_mode:
-            relay_items: list[StyledLine] = []
             relay_values: list[StyledLine] = []
             for kind, label in (("min", "MIN"), ("max", "MAX")):
                 sensor_id = f"{tank_id}-{kind}"
@@ -351,14 +372,9 @@ def _status_sensors(
                         warnings.append(f"{sensor_id}/CH{channel}: треб. {'ВКЛ' if expected else 'ВЫКЛ'}, подтв. {'ВКЛ' if confirmed else 'ВЫКЛ'}")
                 relay_value = _styled(*relay_parts)
                 relay_values.append(relay_value)
-                relay_items.append(_styled("     ", *relay_value))
-            combined = _styled(
-                "     реле: ", *relay_values[0], " | ", *relay_values[1],
-            )
-            if cell_len(_plain(combined)) <= width:
-                lines.append(combined)
-            else:
-                lines.extend(relay_items)
+            lines.append(_status_pair(
+                "     ", relay_values[0], relay_values[1], width,
+            ))
     if not settings.hardware_mode:
         lines.append(_styled(("inactive", "Физическое подтверждение USB №2 отключено")))
     return lines, warnings
