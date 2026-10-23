@@ -406,6 +406,8 @@ def test_status_level_sensors_use_two_fixed_columns(tmp_path, width):
     assert len({row.index("MAX") for row in rows}) == 1
     assert len({row.index(" л") for row in rows}) == 1
     assert len({row.rindex(" л") for row in rows}) == 1
+    assert "MIN ВКЛ  (CH1)" in rows[0]
+    assert "MAX ВЫКЛ (CH2)" in rows[0]
 
     before = rows[0]
     ctx.model.force_sensor("bo-min", False)
@@ -417,6 +419,27 @@ def test_status_level_sensors_use_two_fixed_columns(tmp_path, width):
     )
     assert before.index("|") == changed_row.index("|")
     assert before.index("MAX") == changed_row.index("MAX")
+
+
+def test_status_level_sensor_columns_allow_no_nc_and_two_digit_channels(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.settings = ctx.draft = replace(
+        ctx.settings,
+        sensor_relay_channels=16,
+        sensor_relay_map=(
+            "bo-min:1,bo-max:10,bp-min:3,bp-max:4,"
+            "bso1-min:5,bso1-max:6,bso2-min:7,bso2-max:8"
+        ),
+    )
+    rendered = page(ctx, "status", 80)
+    rows = [
+        line for line in rendered.lines
+        if any(line.startswith(f"{name:<4} MIN ") for name in ("БО", "БП", "БСО1", "БСО2"))
+    ]
+    assert "(CH1)  " in rows[0]
+    assert "(CH10) " in rows[0]
+    assert len({row.index(" л") for row in rows}) == 1
+    assert len({row.rindex(" л") for row in rows}) == 1
 
 
 @pytest.mark.parametrize("width", [50, 80, 110, 120, 160])

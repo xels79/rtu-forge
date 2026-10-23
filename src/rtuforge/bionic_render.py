@@ -328,10 +328,16 @@ def _status_pair(
     )
 
 
-def _sensor_status_cell(label: str, sensor: LevelSensor) -> StyledLine:
+def _sensor_status_cell(
+    label: str, sensor: LevelSensor, channel: int, *, marker_width: int,
+    threshold_width: int,
+) -> StyledLine:
     state = _state(sensor.value, on_style="sensor_on")
+    marker = f"(CH{channel})"
+    threshold = f"{sensor.threshold_l:g} л"
     return _styled(
-        f"{label} ", state, f" {sensor.threshold_l:>5g} л",
+        f"{label} ", state, " ", marker.ljust(marker_width),
+        threshold.rjust(threshold_width),
     )
 
 
@@ -341,6 +347,15 @@ def _status_sensors(
 ) -> tuple[list[StyledLine], list[str]]:
     names = {"bo": "БО", "bp": "БП", "bso1": "БСО1", "bso2": "БСО2"}
     mapping = parse_sensor_relay_map(settings.sensor_relay_map)
+    # Reserve the widest physical marker used here.  This keeps thresholds at
+    # one position for CH1, CH10 and the longer NO/NC notation.
+    marker_width = max(
+        cell_len("(NO/NC)"),
+        *(cell_len(f"(CH{channel})") for channel in mapping.values()),
+    )
+    threshold_width = max(
+        cell_len(f"{sensor.threshold_l:g} л") for sensor in model.sensors.values()
+    )
     desired = sum(
         int(model.sensors[sensor_id].value ^ settings.sensor_relay_active_low) << (channel - 1)
         for sensor_id, channel in mapping.items()
@@ -354,12 +369,19 @@ def _status_sensors(
     for tank_id in ("bo", "bp", "bso1", "bso2"):
         lines.append(_status_pair(
             f"{names[tank_id]:<4} ",
-            _sensor_status_cell("MIN", model.sensors[f"{tank_id}-min"]),
-            _sensor_status_cell("MAX", model.sensors[f"{tank_id}-max"]),
+            _sensor_status_cell(
+                "MIN", model.sensors[f"{tank_id}-min"], mapping[f"{tank_id}-min"],
+                marker_width=marker_width, threshold_width=threshold_width,
+            ),
+            _sensor_status_cell(
+                "MAX", model.sensors[f"{tank_id}-max"], mapping[f"{tank_id}-max"],
+                marker_width=marker_width, threshold_width=threshold_width,
+            ),
             width,
         ))
         if settings.hardware_mode:
             relay_values: list[StyledLine] = []
+            relay_problem = False
             for kind, label in (("min", "MIN"), ("max", "MAX")):
                 sensor_id = f"{tank_id}-{kind}"
                 channel = mapping[sensor_id]
@@ -367,17 +389,20 @@ def _status_sensors(
                 relay_parts: list[tuple[str, object] | object] = [f"{label} CH{channel} "]
                 if relay_state is None or not relay_state.online or relay_state.confirmed is None:
                     relay_parts.append(("warning", "НЕТ СВЯЗИ"))
+                    relay_problem = True
                 else:
                     confirmed = bool(relay_state.confirmed & (1 << (channel - 1)))
                     relay_parts.append(_state(confirmed))
                     if confirmed != expected:
+                        relay_problem = True
                         relay_parts += [("warning", " ≠ ТРЕБ.")]
                         warnings.append(f"{sensor_id}/CH{channel}: треб. {'ВКЛ' if expected else 'ВЫКЛ'}, подтв. {'ВКЛ' if confirmed else 'ВЫКЛ'}")
                 relay_value = _styled(*relay_parts)
                 relay_values.append(relay_value)
-            lines.append(_status_pair(
-                "     ", relay_values[0], relay_values[1], width,
-            ))
+            if relay_problem:
+                lines.append(_status_pair(
+                    "     ", relay_values[0], relay_values[1], width,
+                ))
     if not settings.hardware_mode:
         lines.append(_styled(("inactive", "Физическое подтверждение USB №2 отключено")))
     return lines, warnings
