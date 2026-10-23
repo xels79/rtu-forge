@@ -260,7 +260,9 @@ def _heading(value: str) -> StyledLine:
 
 
 def _state(value: bool, *, on_style: str = "output_on") -> tuple[str, str]:
-    return (on_style if value else "inactive", "ВКЛ" if value else "ВЫКЛ")
+    """Return every binary indication as the same four-cell text field."""
+    text = "ВКЛ" if value else "ВЫКЛ"
+    return (on_style if value else "inactive", text.ljust(4))
 
 
 def _status_tanks(model: BionicModel) -> list[StyledLine]:
@@ -326,9 +328,8 @@ def _status_pair(
 
 def _sensor_status_cell(label: str, sensor: LevelSensor) -> StyledLine:
     state = _state(sensor.value, on_style="sensor_on")
-    state_padding = " " * (4 - cell_len(state[1]))
     return _styled(
-        f"{label} ", state, state_padding, f" {sensor.threshold_l:>5g} л",
+        f"{label} ", state, f" {sensor.threshold_l:>5g} л",
     )
 
 
@@ -390,7 +391,6 @@ def _pump_status_lines(
     name_width = 7
     indent = " " * (name_width + 1)
     command = _state(commanded)
-    command_padding = ("", " " * (4 - cell_len(command[1])))
     motor = (motor_style, motor_text)
     model_note = ("demo", " (МОДЕЛЬ)") if motor_is_modelled else ("", "")
     flow = (flow_style, flow_text)
@@ -398,7 +398,7 @@ def _pump_status_lines(
     failure_parts = tuple(("fault", failure) for failure in failures) or (("inactive", "ОТКАЗ НЕТ"),)
 
     first = _styled(
-        f"{name:<{name_width}} CMD ", command, command_padding,
+        f"{name:<{name_width}} CMD ", command,
         " | МОТОР ", motor, model_note,
     )
     failure_cells: list[StyledLine] = []

@@ -202,8 +202,8 @@ def test_status_semantic_colours_follow_fact_not_only_commands(tmp_path):
     drive.fault = 10
     rendered = page(ctx, "status", 120)
     fragments = [fragment for line in rendered.styled_lines or [] for fragment in line]
-    assert ("sensor_on", "ВКЛ") in fragments
-    assert ("output_on", "ВКЛ") in fragments
+    assert ("sensor_on", "ВКЛ ") in fragments
+    assert ("output_on", "ВКЛ ") in fragments
     assert ("running", "РАБОТАЕТ") in fragments
     hp1_lines = [
         line for line in rendered.styled_lines or []
@@ -247,7 +247,7 @@ def test_status_transfer_pump_separates_command_motor_and_flow(tmp_path):
     rendered = page(ctx, "status", 80)
     block = _pump_block(rendered, "БО→БП")
     command_line, flow_line = block[:2]
-    assert ("output_on", "ВКЛ") in command_line
+    assert ("output_on", "ВКЛ ") in command_line
     assert ("running", "РАБОТАЕТ") in command_line
     assert ("demo", " (МОДЕЛЬ)") in command_line
     assert ("ok", "ЕСТЬ 3.50 л/мин") in flow_line
@@ -292,7 +292,7 @@ def test_status_jammed_transfer_motor_is_stopped(tmp_path):
     pump.health.failure = "jammed"
     rendered = page(ctx, "status", 80)
     command_line = _pump_block(rendered, "БСО1→БП")[0]
-    assert ("output_on", "ВКЛ") in command_line
+    assert ("output_on", "ВКЛ ") in command_line
     assert ("inactive", "СТОП") in command_line
     assert any(
         ("fault", "ЗАКЛИНИВАНИЕ") in line
@@ -312,7 +312,7 @@ def test_status_vfd_trip_keeps_board_run_but_stops_motor_and_flow(tmp_path):
     rendered = page(ctx, "status", 80)
     block = _pump_block(rendered, "HP1")
     command_line = block[0]
-    assert ("output_on", "ВКЛ") in command_line
+    assert ("output_on", "ВКЛ ") in command_line
     assert ("inactive", "СТОП") in command_line
     assert any(("inactive", "НЕТ") in line for line in block)
     assert any(("fault", "IDD 10") in line for line in block)
@@ -370,6 +370,9 @@ def test_status_output_columns_do_not_shift_between_on_and_off(tmp_path):
     ctx.model.set_relay(22, True)
     after = _status_line(page(ctx, "status", 80), "Наполнение")
     after_text = "".join(text for _style, text in after)
+    assert ("inactive", "ВЫКЛ") in before
+    assert ("output_on", "ВКЛ ") in after
+    assert cell_len(before_text) == cell_len(after_text)
     assert before_text.index("Осмос") == after_text.index("Осмос")
     assert before_text.index("|") == after_text.index("|")
 
