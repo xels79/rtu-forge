@@ -172,8 +172,19 @@ def test_status_third_column_uses_one_line_horizontal_gauges_and_live_sensor_mar
     assert "m:ВКЛ" in gauge_text and "M:ВКЛ" in gauge_text
     assert ("sensor_on", "m") in gauge_line
     assert ("sensor_on", "M") in gauge_line
-    assert ("sensor_on", "m:ВКЛ") in gauge_line
-    assert ("sensor_on", "M:ВКЛ") in gauge_line
+    assert gauge_line.count(("sensor_on", "ВКЛ ")) == 2
+
+    ctx.model.force_sensor("bo-min", False)
+    updated = page(ctx, "status", 160)
+    updated_line = next(
+        line for line in updated.styled_lines or []
+        if "БО   [" in "".join(text for _style, text in line)
+    )
+    updated_text = "".join(text for _style, text in updated_line)
+    assert "m:ВЫКЛ M:ВКЛ" in updated_text
+    assert gauge_text.index("M:") == updated_text.index("M:")
+    assert ("inactive", "ВЫКЛ") in updated_line
+    assert ("sensor_on", "ВКЛ ") in updated_line
 
 
 def test_status_single_column_order_is_stable(tmp_path):

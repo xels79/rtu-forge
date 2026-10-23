@@ -301,11 +301,13 @@ def _status_tank_gauges(model: BionicModel) -> list[StyledLine]:
             else:
                 parts.append("█" if position < filled else "░")
         parts += [f"] {tank.percent:>5.1f}% "]
-        for mark in ("m", "M"):
+        for index, mark in enumerate(("m", "M")):
+            if index:
+                parts.append(" ")
             sensor = sensors[mark]
             parts += [
-                ("sensor_on" if sensor.value else "inactive", f"{mark}:{'ВКЛ' if sensor.value else 'ВЫКЛ'}"),
-                " " if mark == "m" else "",
+                f"{mark}:",
+                _state(sensor.value, on_style="sensor_on"),
             ]
         lines.append(_styled(*parts))
     return lines
