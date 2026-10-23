@@ -395,7 +395,7 @@ PonicPilot жёстко обслуживает только общий бак `b
 | serial | `controller_port`, `controller_baudrate`, `controller_parity`, `controller_stopbits`, соответствующие `sensor_relay_*` параметры линии |
 | devices | `relay_address`, `ao1_address`, `ao2_address`, `ao3_address`, `ai_address`, `hp1_address`, `hp2_address`, `sensor_relay_id`, `sensor_relay_channels`, `sensor_relay_active_low`, `sensor_relay_contact`, `sensor_relay_map`, `sensor_relay_loss_behavior` |
 | simulation | `hardware_mode`, `model_interval_ms`, `ui_interval_ms`, `retention_days` |
-| tanks | ёмкости/начальные объёмы четырёх баков, `fill_flow_lpm`, расходы трёх насосов |
+| tanks | ёмкости/начальные объёмы четырёх баков, `fill_flow_lpm`, начальное показание `water_meter_initial_l`, расходы трёх насосов |
 | irrigation | расход ярусов каждого стеллажа, доля и задержка возврата |
 | sensors | восемь независимых абсолютных порогов MIN/MAX, общий гистерезис и задержка |
 | equipment | отдельные профили развития повреждений трёх насосов перекачки и HP1/HP2 |

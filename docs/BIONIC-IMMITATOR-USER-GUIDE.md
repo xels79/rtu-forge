@@ -665,6 +665,7 @@ log export result.csv
 | `sensor_hysteresis_l` | гистерезис датчиков | 0 л | ≥0; ДЕМО-физика |
 | `sensor_delay_s` | задержка датчиков | 0 с | ≥0; ДЕМО-физика |
 | `fill_flow_lpm` | наполнение БО | 3 л/мин | ≥0; ДЕМО-физика |
+| `water_meter_initial_l` | начальное показание счётчика входящей воды | 0 л | ≥0; действует при новой модели и `sim reset --confirm` |
 | `bo_to_bp_flow_lpm` | БО→БП | 10 л/мин | ≥0; ДЕМО-физика |
 | `bso1_to_bp_flow_lpm`, `bso2_to_bp_flow_lpm` | дренажи→БП | 8 л/мин | ≥0; ДЕМО-физика |
 | `rack1_tier_flow_lpm`, `rack2_tier_flow_lpm` | расход яруса | 2 л/мин | ≥0; ДЕМО-физика |

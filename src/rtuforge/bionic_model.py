@@ -562,7 +562,14 @@ class BionicModel:
         old = self.relays[channel - 1]
         self.relays[channel - 1] = bool(enabled)
         if old != enabled:
-            self.event("RS485", f"do-{channel}", f"{int(old)} -> {int(enabled)}")
+            message = f"{int(old)} -> {int(enabled)}"
+            if channel == self.outputs["bo_fill"] and old and not enabled:
+                closure = (
+                    "команда закрытия; клапан заклинил открытым"
+                    if self.fill_valve_stuck_open else "подача закрыта"
+                )
+                message += f"; {closure}; счётчик входящей воды {self.water_meter.total_l:.3f} л"
+            self.event("RS485", f"do-{channel}", message)
 
     def set_analog_output(self, device_address: int, channel: int, value: int) -> None:
         self.analog_outputs[(device_address, channel)] = value

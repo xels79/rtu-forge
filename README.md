@@ -128,6 +128,12 @@ On every exit, the current physical state is also written atomically to
 effect until `sim reset --confirm`; controller-owned DO, AO, frequency, and
 RUN commands are still never restored from this file.
 
+The incoming-water meter starts from the configurable
+`water_meter_initial_l` reading after first launch or `sim reset --confirm`,
+then accumulates only the water physically admitted through the BO fill path.
+Its current reading is preserved in the runtime state and is written to the
+event journal when the controller closes the BO fill output.
+
 It has its own configuration and event journal and does not modify
 `config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,
 verified Stage 7 Modbus maps, USB safety rules, and hardware assumptions are in

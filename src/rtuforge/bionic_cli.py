@@ -105,6 +105,8 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
         if initial:
             model.tanks[tank_id].volume_l = initials[tank_id]
     model.fill_flow_lpm = settings.fill_flow_lpm
+    if initial:
+        model.water_meter.total_l = settings.water_meter_initial_l
     model.pumps["bo-to-bp"].flow_lpm = settings.bo_to_bp_flow_lpm
     model.pumps["bso1-to-bp"].flow_lpm = settings.bso1_to_bp_flow_lpm
     model.pumps["bso2-to-bp"].flow_lpm = settings.bso2_to_bp_flow_lpm

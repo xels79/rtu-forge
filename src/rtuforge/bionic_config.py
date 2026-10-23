@@ -60,6 +60,7 @@ class BionicSettings:
     bso2_min_threshold_l: float = 40.0
     bso2_max_threshold_l: float = 160.0
     fill_flow_lpm: float = 3.0
+    water_meter_initial_l: float = 0.0
     bo_to_bp_flow_lpm: float = 10.0
     bso1_to_bp_flow_lpm: float = 8.0
     bso2_to_bp_flow_lpm: float = 8.0
@@ -188,7 +189,7 @@ def _section(name: str) -> str:
         return "sensors"
     if name == "equipment_profile":
         return "equipment"
-    if name.startswith(("bo_", "bp_", "bso1_", "bso2_", "fill_")):
+    if name.startswith(("bo_", "bp_", "bso1_", "bso2_", "fill_", "water_meter_")):
         return "tanks"
     if name.startswith(("rack", "return_")):
         return "irrigation"
@@ -265,7 +266,8 @@ def validate_settings(settings: BionicSettings, *, validate_lights: bool = True)
             raise ValueError(f"{tank_id}: требуется 0 ≤ MIN < MAX ≤ {capacity:g} л")
     parse_equipment_profile(settings.equipment_profile)
     nonnegative = (
-        settings.fill_flow_lpm, settings.bo_to_bp_flow_lpm, settings.bso1_to_bp_flow_lpm,
+        settings.fill_flow_lpm, settings.water_meter_initial_l,
+        settings.bo_to_bp_flow_lpm, settings.bso1_to_bp_flow_lpm,
         settings.bso2_to_bp_flow_lpm, settings.rack1_tier_flow_lpm, settings.rack2_tier_flow_lpm,
         settings.return_delay_s, settings.sensor_hysteresis_l, settings.sensor_delay_s,
         settings.boost_pressure_bar, settings.boost_rise_s, settings.boost_fall_s,

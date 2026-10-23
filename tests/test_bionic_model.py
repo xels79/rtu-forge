@@ -33,6 +33,22 @@ def test_osmosis_fill_obeys_do22_and_never_closes_it_on_overflow():
     assert model.alarms[("TANK_OVERFLOW", "bo")].state == AlarmState.ACTIVE
 
 
+def test_incoming_water_meter_logs_total_when_fill_output_closes():
+    events = []
+    model = BionicModel(lambda kind, subject, message: events.append((kind, subject, message)))
+    model.running = True
+    model.water_meter.total_l = 120.0
+    model.set_relay(22, True)
+    model.tick(60)
+    model.set_relay(22, False)
+
+    assert model.water_meter.total_l == pytest.approx(123.0)
+    assert events[-1] == (
+        "RS485", "do-22",
+        "1 -> 0; подача закрыта; счётчик входящей воды 123.000 л",
+    )
+
+
 def test_max_sensor_below_capacity_does_not_stop_fill_or_mean_overflow():
     model = running_model()
     model.sensors["bo-max"].threshold_l = 400

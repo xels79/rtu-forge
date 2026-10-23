@@ -187,6 +187,15 @@ def test_status_third_column_uses_one_line_horizontal_gauges_and_live_sensor_mar
     assert ("sensor_on", "ВКЛ ") in updated_line
 
 
+def test_status_third_column_shows_incoming_water_meter_next_to_bo(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.model.water_meter.total_l = 1234.567
+    rendered = page(ctx, "status", 160)
+    meter_line = next(line for line in rendered.lines if "СЧЁТЧИК ВХОДА" in line)
+    right_column = meter_line.split(" │ ", 2)[2].rstrip()
+    assert right_column == "БО   СЧЁТЧИК ВХОДА 1234.567 л"
+
+
 def test_status_single_column_order_is_stable(tmp_path):
     ctx, _ = context(tmp_path)
     expected = (

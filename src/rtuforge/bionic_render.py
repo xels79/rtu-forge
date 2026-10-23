@@ -81,7 +81,9 @@ SETTING_LABELS = {
     "bp_min_threshold_l":("Бульон: порог MIN","л"), "bp_max_threshold_l":("Бульон: порог MAX","л"),
     "bso1_min_threshold_l":("Дренаж 1: порог MIN","л"), "bso1_max_threshold_l":("Дренаж 1: порог MAX","л"),
     "bso2_min_threshold_l":("Дренаж 2: порог MIN","л"), "bso2_max_threshold_l":("Дренаж 2: порог MAX","л"),
-    "fill_flow_lpm":("Осмос: расход наполнения","л/мин"), "bo_to_bp_flow_lpm":("Насос Осмос → Бульон: расход","л/мин"),
+    "fill_flow_lpm":("Осмос: расход наполнения","л/мин"),
+    "water_meter_initial_l":("Счётчик входящей воды: начальное показание после сброса","л"),
+    "bo_to_bp_flow_lpm":("Насос Осмос → Бульон: расход","л/мин"),
     "bso1_to_bp_flow_lpm":("Насос Дренаж 1 → Бульон: расход","л/мин"), "bso2_to_bp_flow_lpm":("Насос Дренаж 2 → Бульон: расход","л/мин"),
     "rack1_tier_flow_lpm":("Стеллаж 1: расход яруса","л/мин"), "rack2_tier_flow_lpm":("Стеллаж 2: расход яруса","л/мин"),
     "return_fraction":("Доля возврата в дренаж","доля"), "return_delay_s":("Задержка возврата в дренаж","с"),
@@ -310,6 +312,11 @@ def _status_tank_gauges(model: BionicModel) -> list[StyledLine]:
                 _state(sensor.value, on_style="sensor_on"),
             ]
         lines.append(_styled(*parts))
+        if tank_id == "bo":
+            lines.append(_styled(
+                "БО   СЧЁТЧИК ВХОДА ",
+                ("ok", f"{model.water_meter.total_l:.3f} л"),
+            ))
     return lines
 
 

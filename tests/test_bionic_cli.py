@@ -137,6 +137,16 @@ def test_physics_settings_are_restored_and_apply_without_resetting_level(tmp_pat
     assert restored.model.tanks["bo"].capacity_l == 600
 
 
+def test_water_meter_initial_reading_applies_only_to_initial_state_and_reset(tmp_path):
+    ctx, _ = context(tmp_path)
+    execute_command(ctx, "settings set water_meter_initial_l 1250.5")
+    execute_command(ctx, "settings apply")
+    assert ctx.model.water_meter.total_l == 0
+
+    assert execute_command(ctx, "sim reset --confirm") == "reconnect"
+    assert ctx.model.water_meter.total_l == 1250.5
+
+
 def test_sim_reset_requires_confirmation_and_does_not_mutate_old_outputs(tmp_path):
     ctx, _ = context(tmp_path)
     ctx.model.set_relay(22, True)
