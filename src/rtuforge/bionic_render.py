@@ -182,7 +182,7 @@ class ScreenPage:
     simulation_status: str = ""
     styled_lines: list[tuple[tuple[str, str], ...]] | None = None
     layout_mode: str = "single"
-    column_widths: tuple[int, int] | None = None
+    column_widths: tuple[int, ...] | None = None
 
 
 StyledLine = tuple[tuple[str, str], ...]
@@ -260,6 +260,43 @@ def _status_tanks(model: BionicModel) -> list[StyledLine]:
     return lines
 
 
+def _status_tank_gauges(model: BionicModel) -> list[StyledLine]:
+    """One-line horizontal gauges with MIN/MAX marks at their real positions."""
+    names = {"bo": "БО", "bp": "БП", "bso1": "БСО1", "bso2": "БСО2"}
+    bar_width = 8
+    lines = [_heading("НАПОЛНЕНИЕ · m=МИН M=МАКС")]
+    for tank_id in ("bo", "bp", "bso1", "bso2"):
+        tank = model.tanks[tank_id]
+        sensors = {
+            "m": model.sensors[f"{tank_id}-min"],
+            "M": model.sensors[f"{tank_id}-max"],
+        }
+        positions: dict[int, tuple[str, object]] = {}
+        for mark, sensor in sensors.items():
+            ratio = sensor.threshold_l / tank.capacity_l if tank.capacity_l else 0.0
+            position = min(bar_width - 1, max(0, round(ratio * (bar_width - 1))))
+            if position in positions:
+                position = min(bar_width - 1, position + (1 if mark == "M" else -1))
+            positions[position] = (mark, sensor)
+        filled = round(max(0.0, min(100.0, tank.percent)) / 100.0 * bar_width)
+        parts: list[tuple[str, object] | object] = [f"{names[tank_id]:<4} ["]
+        for position in range(bar_width):
+            if position in positions:
+                mark, sensor = positions[position]
+                parts.append(("sensor_on" if sensor.value else "inactive", mark))
+            else:
+                parts.append("█" if position < filled else "░")
+        parts += [f"] {tank.percent:>5.1f}% "]
+        for mark in ("m", "M"):
+            sensor = sensors[mark]
+            parts += [
+                ("sensor_on" if sensor.value else "inactive", f"{mark}:{'ВКЛ' if sensor.value else 'ВЫКЛ'}"),
+                " " if mark == "m" else "",
+            ]
+        lines.append(_styled(*parts))
+    return lines
+
+
 def _status_sensors(
     model: BionicModel, settings: BionicSettings,
     relay_state: SensorRelayState | None, width: int,
@@ -334,7 +371,7 @@ def _pump_status_lines(
 
     first = _styled(
         f"{name:<{name_width}} CMD ", command, command_padding,
-        "  МОТОР ", motor, model_note,
+        " | МОТОР ", motor, model_note,
     )
     failure_cells: list[StyledLine] = []
     for style, failure in failure_parts:
@@ -346,13 +383,13 @@ def _pump_status_lines(
             label, value = "ОТКАЗ", failure
         failure_cells.append(_styled(f"{label} ", (style, value)))
 
-    available = max(1, width - cell_len(indent))
-    if available >= 56:
-        column_widths = (23, 14, available - 37)
-    elif available >= 50:
-        column_widths = (21, 14, available - 35)
+    available = max(1, width - cell_len(indent) - 6)
+    if available >= 50:
+        column_widths = (24, 16, available - 40)
+    elif available >= 43:
+        column_widths = (21, 15, available - 36)
     else:
-        column_widths = (16, 14, max(1, available - 30))
+        column_widths = (14, 13, max(1, available - 27))
     cells = [
         _styled("ПОДАЧА ", flow),
         _styled("СУХОЙ ХОД ", dry),
@@ -361,15 +398,17 @@ def _pump_status_lines(
     row_parts: list[tuple[str, object] | object] = [indent]
     overflow: list[StyledLine] = []
     for index, (cell, column_width) in enumerate(zip(cells, column_widths)):
+        if index:
+            row_parts.append(" | ")
         if cell_len(_plain(cell)) <= column_width:
-            row_parts.extend(_fit_fragments(cell, column_width, pad=index < 2))
+            row_parts.extend(_fit_fragments(cell, column_width, pad=True))
         else:
             label = (
                 ("ПОДАЧА", "СУХОЙ ХОД")[index]
                 if index < 2 else cell[0][1].strip()
             )
             marker = _styled(label + " ", (cell[-1][0], "↴"))
-            row_parts.extend(_fit_fragments(marker, column_width, pad=index < 2))
+            row_parts.extend(_fit_fragments(marker, column_width, pad=True))
             overflow.append(_styled(indent, *cell))
     lines = [first, _styled(*row_parts), *overflow]
     lines.extend(_styled(indent, *cell) for cell in failure_cells[1:])
@@ -581,11 +620,38 @@ def _join_status_columns(
     ], (left_width, right_width)
 
 
+def _join_status_three_columns(
+    left: list[StyledLine], middle: list[StyledLine], right: list[StyledLine], width: int,
+) -> tuple[list[StyledLine], tuple[int, int, int]]:
+    content_width = width - 8
+    left_width = floor(content_width * 0.42)
+    middle_width = floor(content_width * 0.31)
+    right_width = content_width - left_width - middle_width
+    count = max(len(left), len(middle), len(right))
+    left = [*left, *([tuple()] * (count - len(left)))]
+    middle = [*middle, *([tuple()] * (count - len(middle)))]
+    right = [*right, *([tuple()] * (count - len(right)))]
+    return [
+        (
+            ("", " "), *_fit_fragments(left[index], left_width, pad=True),
+            ("", " │ "), *_fit_fragments(middle[index], middle_width, pad=True),
+            ("", " │ "), *_fit_fragments(right[index], right_width, pad=True),
+            ("", " "),
+        )
+        for index in range(count)
+    ], (left_width, middle_width, right_width)
+
+
 def _status(
     model: BionicModel, journal: EventJournal, settings: BionicSettings,
     relay_state: SensorRelayState | None, width: int,
-) -> tuple[list[str], list[StyledLine], str, tuple[int, int] | None]:
-    left_content_width = floor((width - 5) * 0.56) if width >= 110 else width
+) -> tuple[list[str], list[StyledLine], str, tuple[int, ...] | None]:
+    if width >= 150:
+        left_content_width = floor((width - 8) * 0.42)
+    elif width >= 110:
+        left_content_width = floor((width - 5) * 0.56)
+    else:
+        left_content_width = width
     sensors, relay_warnings = _status_sensors(
         model, settings, relay_state, left_content_width,
     )
@@ -598,7 +664,15 @@ def _status(
     lights = _status_lights(model)
     alarms = _status_alarms(model, journal, relay_warnings)
     link = _status_link(settings, relay_state)
-    if width >= 110:
+    if width >= 150:
+        left = tanks + [tuple()] + sensors + [tuple()] + pumps + [tuple()] + outputs + [tuple()] + hydraulics
+        middle = ponics + [tuple()] + drives + [tuple()] + lights + [tuple()] + alarms + [tuple()] + link
+        gauges = _status_tank_gauges(model)
+        styled_lines, column_widths = _join_status_three_columns(
+            left, middle, gauges, width,
+        )
+        mode = "triple"
+    elif width >= 110:
         left = tanks + [tuple()] + sensors + [tuple()] + pumps + [tuple()] + outputs + [tuple()] + hydraulics
         right = ponics + [tuple()] + drives + [tuple()] + lights + [tuple()] + alarms + [tuple()] + link
         styled_lines, column_widths = _join_status_columns(left, right, width)

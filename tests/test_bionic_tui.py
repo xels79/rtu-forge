@@ -125,7 +125,8 @@ def test_main_page_lists_all_light_tiers_and_marks_power(tmp_path):
 def test_status_layout_respects_terminal_cells_at_required_widths(tmp_path, width):
     ctx, _ = context(tmp_path)
     rendered = page(ctx, "status", width)
-    assert rendered.layout_mode == ("double" if width >= 110 else "single")
+    expected_mode = "triple" if width >= 150 else ("double" if width >= 110 else "single")
+    assert rendered.layout_mode == expected_mode
     assert all(cell_len(line) <= width for line in rendered.lines)
     text = "\n".join(rendered.lines)
     assert text.count("MIN ") == 4 and text.count("MAX ") == 4
@@ -149,6 +150,30 @@ def test_status_exact_column_boundary_and_120_geometry(tmp_path):
     assert " │ " in at_120.lines[0]
     assert at_120.lines[0].split(" │ ", 1)[1].lstrip().startswith("PONICPILOT · БП")
     assert all(cell_len(line) == 120 for line in at_120.lines)
+    assert page(ctx, "status", 149).layout_mode == "double"
+    at_150 = page(ctx, "status", 150)
+    assert at_150.layout_mode == "triple"
+    assert at_150.column_widths == (59, 44, 39)
+    assert at_150.lines[0].split(" │ ", 2)[2].lstrip().startswith("НАПОЛНЕНИЕ")
+    assert all(cell_len(line) == 150 for line in at_150.lines)
+
+
+def test_status_third_column_uses_one_line_horizontal_gauges_and_live_sensor_marks(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.model.set_tank_level("bo", 450)
+    rendered = page(ctx, "status", 160)
+    assert rendered.layout_mode == "triple"
+    gauge_line = next(
+        line for line in rendered.styled_lines or []
+        if "БО   [" in "".join(text for _style, text in line)
+    )
+    gauge_text = "".join(text for _style, text in gauge_line)
+    assert "[" in gauge_text and "]" in gauge_text
+    assert "m:ВКЛ" in gauge_text and "M:ВКЛ" in gauge_text
+    assert ("sensor_on", "m") in gauge_line
+    assert ("sensor_on", "M") in gauge_line
+    assert ("sensor_on", "m:ВКЛ") in gauge_line
+    assert ("sensor_on", "M:ВКЛ") in gauge_line
 
 
 def test_status_single_column_order_is_stable(tmp_path):
