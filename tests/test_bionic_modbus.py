@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from rtuforge.bionic_config import BionicSettings, changed, load_settings, parse_sensor_relay_map, save_settings
+from rtuforge.bionic_idd import decode_idd_value
 from rtuforge.bionic_lights import LightType
 from rtuforge.bionic_model import BionicModel
 from rtuforge.bionic_modbus import build_default_bus
@@ -15,6 +16,24 @@ def request(bus, payload: str) -> bytes:
     response = bus.handle(append_crc(bytes.fromhex(payload)))
     assert has_valid_crc(response)
     return response[:-2]
+
+
+@pytest.mark.parametrize(
+    ("address", "raw", "decoded"),
+    [
+        (100, 290, "29.0 Гц"),
+        (101, 0, "цифровое задание PB.00"),
+        (101, 8, "ПИД"),
+        (102, 1, "управляющие клеммы"),
+        (210, 160, "16.0 А"),
+        (700, 1, "9600 бит/с"),
+        (701, 3, "RTU 8N1"),
+        (702, 7, "Modbus ID 7"),
+        (816, 1, "включена"),
+    ],
+)
+def test_idd_register_values_have_documented_decoding(address, raw, decoded):
+    assert decode_idd_value(address, raw) == decoded
 
 
 def test_relay_fc0f_write_and_fc01_readback():

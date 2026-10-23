@@ -659,5 +659,13 @@ def test_drive_pages_show_verified_rw_configuration_and_internal_failure_state(t
     ctx, _ = context(tmp_path)
     assert "do-19" in "\n".join(page(ctx, "drives", 160).lines)
     hp1 = "\n".join(page(ctx, "drive-hp1", 160).lines)
-    assert "PB.01" in hp1 and "PH.02" in hp1 and "RAW, RW" in hp1
+    assert "PB.01" in hp1 and "PH.02" in hp1 and "Значение" in hp1
+    assert "RS485" in hp1 and "RTU 8N1" in hp1 and "9600 бит/с" in hp1
+    assert "29.0 Гц" in hp1 and "включена" in hp1
     assert "РАСЧЁТ ИМИТАТОРА" in hp1 and "не передаётся плате" in hp1
+
+    settings_page = page(ctx, "settings", 180)
+    pb01_row = settings_page.row_keys.index("hp1_pb01")
+    ph01_row = settings_page.row_keys.index("hp1_ph01")
+    assert "5 — RS485" in settings_page.lines[pb01_row]
+    assert "3 — RTU 8N1" in settings_page.lines[ph01_row]

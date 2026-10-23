@@ -12,7 +12,7 @@ from .bionic_equipment import (
     remaining_dry_run_s,
 )
 from .bionic_events import EventJournal
-from .bionic_idd import IDD_PARAMETERS, IDD_TELEMETRY
+from .bionic_idd import IDD_PARAMETERS, IDD_TELEMETRY, decode_idd_value
 from .bionic_lights import (
     FACTORY_LIGHTS, LightType, ROLE_LABELS, parse_light_profile,
     validate_light_profile,
@@ -115,23 +115,23 @@ SETTING_LABELS = {
     "nutrient_absorption_fraction":("Поглощение питательных веществ","доля"), "deposition_fraction":("Осаждение компонентов","доля"),
     "ph_drift_per_pass":("Дрейф pH за проход","pH"), "fertilizer_ec_per_ml_at_100l":("Влияние 1 мл удобрения на EC при 100 л","мСм/см"),
     "ph_reagent_delta_per_ml_at_100l":("Влияние 1 мл корректора pH при 100 л","pH"),
-    "hp1_ramp_up_s":("HP1: время разгона","с"), "hp1_ramp_down_s":("HP1: время торможения","с"),
+    "hp1_ramp_up_s":("HP1 PB.07: время разгона","с"), "hp1_ramp_down_s":("HP1 PB.08: время торможения","с"),
     "hp1_pb00":("HP1 PB.00: локальная частота","0.1 Гц"),
-    "hp1_pb01":("HP1 Pb01: источник частоты","RAW"), "hp1_pb02":("HP1 Pb02: источник RUN","RAW"),
+    "hp1_pb01":("HP1 PB.01: источник частоты",""), "hp1_pb02":("HP1 PB.02: источник RUN",""),
     "hp1_pb05":("HP1 PB.05: максимум частоты","0.1 Гц"), "hp1_pb06":("HP1 PB.06: минимум частоты","0.1 Гц"),
     "hp1_pc12":("HP1 PC.12: номинальная скорость","об/мин"), "hp1_pc15":("HP1 PC.15: номинальная частота","0.1 Гц"),
-    "hp1_ph00":("HP1 PH00: связь","RAW"), "hp1_ph01":("HP1 PH01: связь","RAW"),
-    "hp1_nominal_current_a":("HP1: номинальный ток двигателя","А"), "hp1_no_load_current_a":("HP1: ток холостого хода","А"),
+    "hp1_ph00":("HP1 PH.00: скорость связи",""), "hp1_ph01":("HP1 PH.01: формат связи",""),
+    "hp1_nominal_current_a":("HP1 PC.10: номинальный ток двигателя","А"), "hp1_no_load_current_a":("HP1: ток холостого хода","А"),
     "hp1_pump_load_coefficient":("HP1: коэффициент нагрузки насоса","×"), "hp1_jam_current_multiplier":("HP1: ток при заклинивании","×"),
     "hp1_overload_trip_s":("HP1: выдержка перегрузки (модель)","с"), "hp1_overload_protection_enabled":("HP1 Pi.16: защита перегрузки",""),
     "hp1_overload_threshold_multiplier":("HP1: порог перегрузки","×Iном"), "hp1_protection_behavior":("HP1: поведение защиты",""),
-    "hp2_ramp_up_s":("HP2: время разгона","с"), "hp2_ramp_down_s":("HP2: время торможения","с"),
+    "hp2_ramp_up_s":("HP2 PB.07: время разгона","с"), "hp2_ramp_down_s":("HP2 PB.08: время торможения","с"),
     "hp2_pb00":("HP2 PB.00: локальная частота","0.1 Гц"),
-    "hp2_pb01":("HP2 Pb01: источник частоты","RAW"), "hp2_pb02":("HP2 Pb02: источник RUN","RAW"),
+    "hp2_pb01":("HP2 PB.01: источник частоты",""), "hp2_pb02":("HP2 PB.02: источник RUN",""),
     "hp2_pb05":("HP2 PB.05: максимум частоты","0.1 Гц"), "hp2_pb06":("HP2 PB.06: минимум частоты","0.1 Гц"),
     "hp2_pc12":("HP2 PC.12: номинальная скорость","об/мин"), "hp2_pc15":("HP2 PC.15: номинальная частота","0.1 Гц"),
-    "hp2_ph00":("HP2 PH00: связь","RAW"), "hp2_ph01":("HP2 PH01: связь","RAW"),
-    "hp2_nominal_current_a":("HP2: номинальный ток двигателя","А"), "hp2_no_load_current_a":("HP2: ток холостого хода","А"),
+    "hp2_ph00":("HP2 PH.00: скорость связи",""), "hp2_ph01":("HP2 PH.01: формат связи",""),
+    "hp2_nominal_current_a":("HP2 PC.10: номинальный ток двигателя","А"), "hp2_no_load_current_a":("HP2: ток холостого хода","А"),
     "hp2_pump_load_coefficient":("HP2: коэффициент нагрузки насоса","×"), "hp2_jam_current_multiplier":("HP2: ток при заклинивании","×"),
     "hp2_overload_trip_s":("HP2: выдержка перегрузки (модель)","с"), "hp2_overload_protection_enabled":("HP2 Pi.16: защита перегрузки",""),
     "hp2_overload_threshold_multiplier":("HP2: порог перегрузки","×Iном"), "hp2_protection_behavior":("HP2: поведение защиты",""),
@@ -152,6 +152,18 @@ SETTINGS_GROUP_TITLES = {
     "ponics_chemistry": "PONICPILOT — ДЕМОНСТРАЦИОННАЯ ХИМИЯ",
     "drive_hp1": "ЧАСТОТНИК HP1",
     "drive_hp2": "ЧАСТОТНИК HP2",
+}
+
+DRIVE_SETTING_REGISTERS = {
+    "pb00": 100,
+    "pb01": 101,
+    "pb02": 102,
+    "pb05": 105,
+    "pb06": 106,
+    "pc12": 212,
+    "pc15": 215,
+    "ph00": 700,
+    "ph01": 701,
 }
 SETTINGS_GROUP_ORDER = tuple(SETTINGS_GROUP_TITLES)
 EQUIPMENT_SETTING_NAMES = {
@@ -709,7 +721,15 @@ def setting_rows(model:BionicModel,settings:BionicSettings,draft:BionicSettings,
         if name in {"light_profile", "equipment_profile"}:
             continue
         label,unit=SETTING_LABELS.get(name,(name.replace("_"," "),""))
-        value=f"{getattr(draft,name)} {unit}".rstrip()
+        raw_value=getattr(draft,name)
+        register_name=name[4:] if name.startswith(("hp1_", "hp2_")) else ""
+        if register_name in DRIVE_SETTING_REGISTERS:
+            decoded=decode_idd_value(DRIVE_SETTING_REGISTERS[register_name],int(raw_value))
+            value=f"{raw_value} — {decoded}"
+        elif name.endswith("_overload_protection_enabled"):
+            value=f"{int(raw_value)} — {decode_idd_value(816,int(raw_value))}"
+        else:
+            value=f"{raw_value} {unit}".rstrip()
         state=("A" if getattr(draft,name)==getattr(settings,name) else "-")+"/"+("S" if getattr(draft,name)==getattr(saved,name) else "-")
         grouped.setdefault(section,[]).append((_technical(section,name),label,value,state,name))
     applied_equipment=parse_equipment_profile(settings.equipment_profile)
@@ -1077,14 +1097,16 @@ def _drive(model:BionicModel,drive_id:str,width:int)->list[str]:
     drive=model.drives[drive_id]
     telemetry={1:round(drive.target_hz()*10),2:round(drive.actual_hz*10),3:round(drive.calculated_current_a*10),4:drive.speed_rpm,27:drive.fault,28:int(drive.actual_hz>0.1)}
     configuration=drive.configuration
-    lines=["ТЕКУЩАЯ РАБОТА",f"Источник RUN: PB.02={configuration[102]} ({DRIVE_SOURCE_NAMES[drive.control_source]}) | команда платы: {'RUN' if model.drive_input_command(drive) else 'STOP'} | разрешение ПЧ: {'RUN' if model.drive_commanded(drive) else 'STOP'}",f"Команда Modbus: {'RUN' if drive.run_register else 'STOP'} | RUN-клемма do-{drive.run_relay}: {_on_off(model.relay(drive.run_relay))} | выбор do-{drive.selector_relay}: {_on_off(model.relay(drive.selector_relay))}",f"Задание {drive.target_hz():.1f} Гц | выход ПЧ {drive.actual_hz:.1f} Гц | разгон/торможение {drive.ramp_up_s:g}/{drive.ramp_down_s:g} с",f"РАСЧЁТ ИМИТАТОРА: ток {drive.calculated_current_a:.1f}/{drive.nominal_current_a:.1f} А | нагрузка ×{drive.calculated_load:.2f} | защита {PROTECTION_NAMES[drive.protection_state]}",f"Насос: {PUMP_FAILURE_NAMES[drive.mechanical_failure]} | повреждение {drive.mechanical_damage*100:.0f}% | ремонт {'ТРЕБУЕТСЯ' if drive.repair_required else 'не требуется'}",f"Штатный PA.27: {drive.fault} | RESET {'возможен, механику не ремонтирует' if drive.fault else 'не требуется'} | связь {'есть' if drive.online else 'нет'}","","РЕГИСТРЫ","Имя | Адрес | Название                          | RAW   | Масштаб / доступ"]
+    lines=["ТЕКУЩАЯ РАБОТА",f"Источник RUN: PB.02={configuration[102]} ({DRIVE_SOURCE_NAMES[drive.control_source]}) | команда платы: {'RUN' if model.drive_input_command(drive) else 'STOP'} | разрешение ПЧ: {'RUN' if model.drive_commanded(drive) else 'STOP'}",f"Команда Modbus: {'RUN' if drive.run_register else 'STOP'} | RUN-клемма do-{drive.run_relay}: {_on_off(model.relay(drive.run_relay))} | выбор do-{drive.selector_relay}: {_on_off(model.relay(drive.selector_relay))}",f"Задание {drive.target_hz():.1f} Гц | выход ПЧ {drive.actual_hz:.1f} Гц | разгон/торможение {drive.ramp_up_s:g}/{drive.ramp_down_s:g} с",f"РАСЧЁТ ИМИТАТОРА: ток {drive.calculated_current_a:.1f}/{drive.nominal_current_a:.1f} А | нагрузка ×{drive.calculated_load:.2f} | защита {PROTECTION_NAMES[drive.protection_state]}",f"Насос: {PUMP_FAILURE_NAMES[drive.mechanical_failure]} | повреждение {drive.mechanical_damage*100:.0f}% | ремонт {'ТРЕБУЕТСЯ' if drive.repair_required else 'не требуется'}",f"Штатный PA.27: {drive.fault} | RESET {'возможен, механику не ремонтирует' if drive.fault else 'не требуется'} | связь {'есть' if drive.online else 'нет'}","","РЕГИСТРЫ",_row([("Имя",6),("Адрес",6),("Название",33),("RAW",6),("Значение",36),("Доступ",6)],width)]
     for address,value in {**telemetry,**configuration}.items():
         if address in IDD_TELEMETRY:
-            code,label,detail=IDD_TELEMETRY[address]
+            code,label,_detail=IDD_TELEMETRY[address]
+            access="R"
         else:
             spec=IDD_PARAMETERS[address]
-            code,label,detail=spec.code,spec.label,(f"×{spec.scale:g}, RW" if spec.scale != 1 else "RAW, RW")
-        lines.append(_row([(code,6),(address,6),(label,33),(value,6),(detail,18)],width))
+            code,label=spec.code,spec.label
+            access="RW"
+        lines.append(_row([(code,6),(address,6),(label,33),(value,6),(decode_idd_value(address,value),36),(access,6)],width))
     lines += ["","RW-параметры проверяются по документированным диапазонам; PA.* доступны только для чтения.","Внутренний тип поломки показывается только здесь и не передаётся плате отдельным сигналом."]
     return [ellipsize(line,width) for line in lines]
 

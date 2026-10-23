@@ -344,7 +344,7 @@ equipment replace bo-to-bp --confirm
 <a id="drives"></a>
 ## 18. Настройка частотников HP1/HP2
 
-`view drives` сравнивает источник RUN, Modbus, клемму, selector, факт, частоту, ток и ошибку. `view drive hp1` и `view drive hp2` показывают регистры и защиту.
+`view drives` сравнивает источник RUN, Modbus, клемму, selector, факт, частоту, ток и ошибку. `view drive hp1` и `view drive hp2` показывают регистры, RAW, расшифрованные инженерные значения/режимы и защиту. На общей странице `view settings` регистровые настройки частотников также показаны вместе с расшифровкой текущего значения.
 
 ![Реальная страница HP1 TUI](bionic-screenshots/drive-hp1.svg)
 

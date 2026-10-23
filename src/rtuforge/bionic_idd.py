@@ -59,9 +59,71 @@ IDD_FORMATS = {
     5: ("RTU", "O", 1.0),
 }
 
+IDD_FREQUENCY_SOURCES = {
+    0: "цифровое задание PB.00",
+    1: "аналоговый вход AVI",
+    2: "потенциометр внешней клавиатуры",
+    3: "потенциометр панели",
+    4: "контакты UP/DOWN",
+    5: "RS485",
+    6: "предустановленные скорости",
+    7: "простой ПЛК",
+    8: "ПИД",
+}
+
+IDD_RUN_SOURCES = {
+    0: "панель управления",
+    1: "управляющие клеммы",
+    2: "RS485",
+}
+
+IDD_OVERLOAD_PROTECTION = {
+    0: "отключена",
+    1: "включена",
+}
+
+IDD_FAULTS = {
+    0: "нет ошибки",
+    10: "oL2 — перегрузка при работе",
+}
+
 # IDD mini PLUS manual, chapter 8-5: oL2 (decimal code 10) is an overload
 # while the converter is running.  PA.27 exposes the current error code.
 IDD_FAULT_OVERLOAD_RUNNING = 10
+
+
+def decode_idd_value(address: int, value: int) -> str:
+    """Return the documented engineering or enumerated meaning of a RAW value."""
+    if address in {1, 2, 100, 105, 106, 215}:
+        return f"{value / 10:.1f} Гц"
+    if address == 3 or address == 210:
+        return f"{value / 10:.1f} А"
+    if address in {107, 108}:
+        return f"{value / 10:.1f} с"
+    if address in {4, 212}:
+        return f"{value} об/мин"
+    if address == 27:
+        return IDD_FAULTS.get(value, f"код ошибки {value}")
+    if address == 28:
+        return {0: "STOP", 1: "RUN"}.get(value, f"состояние {value}")
+    if address == 101:
+        return IDD_FREQUENCY_SOURCES.get(value, f"неизвестный источник {value}")
+    if address == 102:
+        return IDD_RUN_SOURCES.get(value, f"неизвестный источник {value}")
+    if address == 700:
+        baudrate = IDD_BAUDRATES.get(value)
+        return f"{baudrate} бит/с" if baudrate is not None else f"неизвестная скорость {value}"
+    if address == 701:
+        serial_format = IDD_FORMATS.get(value)
+        if serial_format is None:
+            return f"неизвестный формат {value}"
+        protocol, parity, stopbits = serial_format
+        return f"{protocol} 8{parity}{stopbits:g}"
+    if address == 702:
+        return f"Modbus ID {value}"
+    if address == 816:
+        return IDD_OVERLOAD_PROTECTION.get(value, f"неизвестное состояние {value}")
+    return str(value)
 
 
 def validate_idd_parameter(address: int, value: int, configuration: dict[int, int]) -> None:
