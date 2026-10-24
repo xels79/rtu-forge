@@ -507,12 +507,11 @@ sim state load before-blockage --confirm
 log last 50
 log filter alarms
 log filter rs485
-log filter poinics
+log filter ponics
 log export result.csv
 ```
 
-Фильтры: `alarms`, `rs485`, `tanks`, `pumps`, `poinics`, `all`. Написание
-`ponics` также поддерживается для совместимости. PonicPilot
+Фильтры: `alarms`, `rs485`, `tanks`, `pumps`, `ponics`, `all`. PonicPilot
 фиксирует первое успешное чтение pH, EC, температуры и состояния, затем только
 изменения штатных регистров; одинаковые циклические опросы не засоряют журнал.
 Запись настройки и дозирование содержат русское название, значение с единицей

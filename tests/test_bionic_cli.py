@@ -247,6 +247,20 @@ def test_log_keeps_three_rows_on_main_and_exports_csv(tmp_path):
     assert "event-4" in exported
 
 
+def test_log_filter_ponics_is_accepted_and_exports_only_ponics(tmp_path):
+    ctx, _ = context(tmp_path)
+    ctx.event("PONICS", "ID5/БП", "pH изменился")
+    ctx.event("БАК", "bo", "уровень изменился")
+
+    execute_command(ctx, "log filter ponics")
+    execute_command(ctx, "log export ponics.csv")
+
+    assert ctx.log_filter == "ponics"
+    exported = (tmp_path / "ponics.csv").read_text(encoding="utf-8-sig")
+    assert "pH изменился" in exported
+    assert "уровень изменился" not in exported
+
+
 def test_one_shot_help_uses_entry_without_serial(monkeypatch, tmp_path):
     monkeypatch.setattr(bionic_cli.sys, "argv", ["bionic-immitator", "--home", str(tmp_path), "help"])
     assert bionic_cli.main() == 0

@@ -646,6 +646,7 @@ def test_completion_covers_nested_commands_and_names():
     assert completion_candidates("sensor bo-min ") == ["auto", "force", "threshold"]
     assert "pressure_rise_s" in completion_candidates("settings set pressure_")
     assert completion_candidates("log filter a") == ["alarms", "all"]
+    assert completion_candidates("log filter po") == ["ponics"]
     assert "ai-pressure" in completion_candidates("devices ")
     assert completion_candidates("view light ") == ["settings"]
     assert completion_candidates("light set zone-1 type ") == ["none", "single", "spectral_4"]

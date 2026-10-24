@@ -128,7 +128,7 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
     elif completed == ["log"]:
         candidates = ["last", "filter", "export"]
     elif completed == ["log", "filter"]:
-        candidates = ["alarms", "rs485", "tanks", "pumps", "all"]
+        candidates = ["alarms", "rs485", "tanks", "pumps", "ponics", "all"]
     elif completed == ["relay"] and test_mode:
         candidates = ["force"]
     elif completed == ["relay", "force"] and test_mode:

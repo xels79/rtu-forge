@@ -58,7 +58,7 @@ view light settings | light set <zone> <поле> ... | light apply|save|restore
 view ponics | view ponics settings | view ponics registers
 view drives | view drive hp1 | view drive hp2
 ponics dose <a|b|c|ph_plus|ph_minus> <мл> | set <PDU> <RAW>
-log last <N> | filter alarms|rs485|tanks|pumps|poinics|all | export <файл.csv>
+log last <N> | filter alarms|rs485|tanks|pumps|ponics|all | export <файл.csv>
 settings list | set <имя> <значение> | apply | save
 exit | quit
 
@@ -829,7 +829,9 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             events = ctx.journal.filtered(ctx.log_filter, int(args[1]))
             if not ctx.screen_mode:
                 for event in events: ctx.console.print(f"{event.at} {event.kind} {event.subject}: {event.message}")
-        elif len(args) == 2 and args[0] == "filter" and args[1] in {"alarms", "rs485", "tanks", "pumps", "all"}:
+        elif len(args) == 2 and args[0] == "filter" and args[1] in {
+            "alarms", "rs485", "tanks", "pumps", "ponics", "all",
+        }:
             ctx.log_filter = args[1]
             ctx.view = "log"
         elif len(args) == 2 and args[0] == "export":
@@ -840,7 +842,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             ctx.notice = f"Журнал экспортирован: {path}"
             if not ctx.screen_mode: ctx.console.print(ctx.notice)
         else:
-            raise ValueError("log last <N> | filter alarms|rs485|tanks|pumps|poinics|all | export <файл.csv>")
+            raise ValueError("log last <N> | filter alarms|rs485|tanks|pumps|ponics|all | export <файл.csv>")
         return None
     if command == "settings":
         if args == ["list"]:
