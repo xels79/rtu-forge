@@ -68,6 +68,8 @@ class BionicSettings:
     rack2_tier_flow_lpm: float = 2.0
     return_fraction: float = 0.8
     return_delay_s: float = 5.0
+    plant_water_uptake_fraction: float = 0.005
+    irrigation_evaporation_fraction: float = 0.002
     sensor_hysteresis_l: float = 0.0
     sensor_delay_s: float = 0.0
     boost_pressure_bar: float = 2.0
@@ -191,7 +193,7 @@ def _section(name: str) -> str:
         return "equipment"
     if name.startswith(("bo_", "bp_", "bso1_", "bso2_", "fill_", "water_meter_")):
         return "tanks"
-    if name.startswith(("rack", "return_")):
+    if name.startswith(("rack", "return_", "plant_water_", "irrigation_evaporation_")):
         return "irrigation"
     if name.startswith(("boost_", "pressure_", "valve_pressure_", "transient_pressure_", "closed_head_", "rupture_")):
         return "pressure"
@@ -281,6 +283,13 @@ def validate_settings(settings: BionicSettings, *, validate_lights: bool = True)
         raise ValueError("Физические расходы, времена и пороги не могут быть отрицательными")
     if not 0 <= settings.return_fraction <= 1 or not 0 <= settings.leak_pressure_factor <= 1:
         raise ValueError("Доли возврата и влияния протечки должны быть в диапазоне 0..1")
+    if any(not 0 <= value <= 1 for value in (
+        settings.plant_water_uptake_fraction,
+        settings.irrigation_evaporation_fraction,
+    )):
+        raise ValueError("Доли поглощения воды и испарения должны быть в диапазоне 0..1")
+    if settings.plant_water_uptake_fraction + settings.irrigation_evaporation_fraction > 1:
+        raise ValueError("Сумма долей поглощения воды и испарения не должна превышать 1")
     if not 0 <= settings.blockage_severity <= 100:
         raise ValueError("Степень засора должна быть в диапазоне 0..100")
     if not 0 <= settings.rupture_residual_bar <= 3:

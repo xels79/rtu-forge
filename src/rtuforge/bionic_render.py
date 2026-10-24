@@ -86,6 +86,8 @@ SETTING_LABELS = {
     "bso1_to_bp_flow_lpm":("Насос Дренаж 1 → Бульон: расход","л/мин"), "bso2_to_bp_flow_lpm":("Насос Дренаж 2 → Бульон: расход","л/мин"),
     "rack1_tier_flow_lpm":("Стеллаж 1: расход яруса","л/мин"), "rack2_tier_flow_lpm":("Стеллаж 2: расход яруса","л/мин"),
     "return_fraction":("Доля возврата в дренаж","доля"), "return_delay_s":("Задержка возврата в дренаж","с"),
+    "plant_water_uptake_fraction":("Растения: поглощение воды за проход","доля"),
+    "irrigation_evaporation_fraction":("Полив: испарение воды за проход","доля"),
     "sensor_hysteresis_l":("Гистерезис датчиков уровня","л"), "sensor_delay_s":("Задержка датчиков уровня","с"),
     "boost_pressure_bar":("Давление подпора","бар"), "boost_rise_s":("Время набора подпора","с"), "boost_fall_s":("Время падения подпора","с"),
     "pressure_rise_s":("Время набора давления","с"), "pressure_fall_s":("Время падения давления","с"),
@@ -311,11 +313,22 @@ def _status_tank_gauges(model: BionicModel) -> list[StyledLine]:
                 _state(sensor.value, on_style="sensor_on"),
             ]
         lines.append(_styled(*parts))
-        if tank_id == "bo":
-            lines.append(_styled(
-                "БО   СЧЁТЧИК ВХОДА ",
-                ("ok", f"{model.water_meter.total_l:.3f} л"),
-            ))
+    lines += [
+        tuple(),
+        _heading("ИТОГО ВОДЫ"),
+        _styled("СЧЁТЧИК ВХОДА ", ("ok", f"{model.water_meter.total_l:.3f} л")),
+        _styled(f"БО {model.tanks['bo'].volume_l:.3f} л"),
+        _styled(f"ТРАКТ БП+БСО1+БСО2 {model.irrigation_loop_volume_l:.3f} л"),
+        _styled(f"ВСЕГО В СИСТЕМЕ {model.total_system_water_l:.3f} л"),
+        _styled(f"РАСХОД РАСЧЁТНЫЙ {model.calculated_flow_lpm:.2f} л/мин"),
+        _styled(
+            f"ПРОТЕЧКИ {model.current_leak_flow_lpm:.2f} л/мин · ",
+            ("fault" if model.current_leak_flow_lpm > 0 else "inactive",
+             f"Σ {model.total_leak_l:.3f} л"),
+        ),
+        _styled(f"РАСТЕНИЯ ПОГЛОТИЛИ {model.total_plant_water_uptake_l:.3f} л"),
+        _styled(f"ИСПАРИЛОСЬ {model.total_irrigation_evaporation_l:.3f} л"),
+    ]
     return lines
 
 
@@ -1014,7 +1027,13 @@ def _water(model:BionicModel,width:int)->list[str]:
         lines.append(_row([(tank.id,4),(TANK_NAMES[tank.id],10),(f"{tank.volume_l:.1f}/{tank.capacity_l:.1f}",15),(f"{tank.ec_ms_cm:.3f}",10),(f"{tank.ph:.2f}",5),(f"{tank.temperature_c:.1f}",9),(f"{tank.nutrients_consumed:.3f}",10)],width))
     lines += ["","ТЕКУЩИЕ ПОТОКИ"]
     lines += [ellipsize(f"{PUMP_NAMES[p.id]}: {p.actual_flow_lpm:.2f} л/мин",width) for p in model.pumps.values()]
-    lines += [f"Входящая вода осмоса: EC {model.osmosis_profile['ec']:.2f}, pH {model.osmosis_profile['ph']:.2f}, {model.osmosis_profile['temperature']:.1f} °C",f"Водопровод (справочно, подтверждённого пути нет): EC {model.tap_profile['ec']:.2f}, pH {model.tap_profile['ph']:.2f}, {model.tap_profile['temperature']:.1f} °C",f"Потери полива: {model.total_irrigation_loss_l:.2f} л | протечки: {model.total_leak_l:.2f} л",f"PonicPilot дозировал в БП: {sum(model.ponics.dosing_totals.values()):.1f} мл"]
+    lines += [
+        f"Входящая вода осмоса: EC {model.osmosis_profile['ec']:.2f}, pH {model.osmosis_profile['ph']:.2f}, {model.osmosis_profile['temperature']:.1f} °C",
+        f"Водопровод (справочно, подтверждённого пути нет): EC {model.tap_profile['ec']:.2f}, pH {model.tap_profile['ph']:.2f}, {model.tap_profile['temperature']:.1f} °C",
+        f"Потери полива: {model.total_irrigation_loss_l:.2f} л | растения: {model.total_plant_water_uptake_l:.2f} л | испарение: {model.total_irrigation_evaporation_l:.2f} л",
+        f"Протечки: {model.current_leak_flow_lpm:.2f} л/мин | накоплено: {model.total_leak_l:.2f} л",
+        f"PonicPilot дозировал в БП: {sum(model.ponics.dosing_totals.values()):.1f} мл",
+    ]
     return [ellipsize(line,width) for line in lines]
 
 def _light(model:BionicModel,width:int)->list[str]:

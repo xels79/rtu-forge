@@ -57,6 +57,9 @@ def test_checkpoint_restores_physics_alarms_and_rupture_but_not_controller_comma
     model.drives["hp1"].health.damage = 0.42
     model.pipe_ruptured = True
     model.total_leak_l = 9.5
+    model.current_leak_flow_lpm = 1.5
+    model.total_plant_water_uptake_l = 2.5
+    model.total_irrigation_evaporation_l = 0.75
     model.alarms[("PIPE_RUPTURE", "pipe")] = Alarm("PIPE_RUPTURE", "pipe", AlarmState.ACTIVE)
     model.set_relay(22, True)
     model.set_analog_output(2, 1, 7000)
@@ -68,6 +71,9 @@ def test_checkpoint_restores_physics_alarms_and_rupture_but_not_controller_comma
     model.drives["hp1"].health.damage = 0
     model.pipe_ruptured = False
     model.total_leak_l = 0
+    model.current_leak_flow_lpm = 0
+    model.total_plant_water_uptake_l = 0
+    model.total_irrigation_evaporation_l = 0
     model.alarms.clear()
     model.set_relay(22, False)
     model.set_analog_output(2, 1, 1000)
@@ -78,6 +84,9 @@ def test_checkpoint_restores_physics_alarms_and_rupture_but_not_controller_comma
     assert model.tanks["bp"].solute_mass == 456.7
     assert model.drives["hp1"].health.damage == 0.42
     assert model.pipe_ruptured and model.total_leak_l == 9.5
+    assert model.current_leak_flow_lpm == 1.5
+    assert model.total_plant_water_uptake_l == 2.5
+    assert model.total_irrigation_evaporation_l == 0.75
     assert model.alarms[("PIPE_RUPTURE", "pipe")].state == AlarmState.ACTIVE
     assert not model.relay(22)
     assert model.analog_outputs[(2, 1)] == 1000
@@ -133,6 +142,8 @@ def test_representative_settings_from_every_subsystem_are_applied_after_restart(
         bo_max_threshold_l=420,
         fill_flow_lpm=6.5,
         rack1_tier_flow_lpm=3.25,
+        plant_water_uptake_fraction=0.007,
+        irrigation_evaporation_fraction=0.003,
         pressure_rise_s=8.0,
         blockage_severity=44,
         ponics_ec_target_ms_cm=2.75,
@@ -150,6 +161,8 @@ def test_representative_settings_from_every_subsystem_are_applied_after_restart(
     assert model.sensors["bo-min"].threshold_l == 80
     assert model.fill_flow_lpm == 6.5
     assert model.tiers["tier-1"].flow_lpm == 3.25
+    assert model.plant_water_uptake_fraction == 0.007
+    assert model.irrigation_evaporation_fraction == 0.003
     assert model.pressure_rise_s == 8.0
     assert model.blockage_severity == 44
     assert model.ponics.settings[33] == 275

@@ -285,7 +285,48 @@ def test_leak_loses_water_and_blockage_reduces_flow():
     before = blocked.tanks["bo"].volume_l
     blocked.tick(60)
     assert blocked.total_leak_l > 0
+    assert blocked.current_leak_flow_lpm > 0
     assert blocked.tanks["bo"].volume_l < before
+
+
+def test_irrigation_tracks_small_plant_uptake_evaporation_and_solution_degradation():
+    model = running_model()
+    model.pressure_rise_s = model.boost_rise_s = 0
+    model.rupture_threshold_bar = 100
+    model.drives["hp1"].ramp_up_s = 0
+    model.plant_water_uptake_fraction = 0.005
+    model.irrigation_evaporation_fraction = 0.002
+    model.nutrient_absorption_fraction = 0.9
+    model.deposition_fraction = 0.0
+    model.tanks["bso1"].initialize_solution(
+        ec_ms_cm=2.0, ph=6.0, temperature_c=20.0, buffer_per_l=1.0,
+    )
+    ponics_ec_before = model.ponics.registers()[5]
+    before_loop = model.irrigation_loop_volume_l
+    before_solute = sum(
+        model.tanks[tank_id].solute_mass for tank_id in ("bp", "bso1", "bso2")
+    )
+    for relay in (1, 9, 19, 23, 32):
+        model.set_relay(relay, True)
+
+    model.tick(60)
+
+    irrigated = model.tiers["tier-1"].total_l
+    assert irrigated == pytest.approx(2.0)
+    assert model.total_plant_water_uptake_l == pytest.approx(irrigated * 0.005)
+    assert model.total_irrigation_evaporation_l == pytest.approx(irrigated * 0.002)
+    assert model.irrigation_loop_volume_l < before_loop
+    assert sum(
+        model.tanks[tank_id].solute_mass for tank_id in ("bp", "bso1", "bso2")
+    ) < before_solute
+    assert model.tanks["bso1"].nutrients_consumed > 0
+
+    for relay in (1, 9, 19, 23, 32):
+        model.set_relay(relay, False)
+    model.pumps["bso1-to-bp"].start_s = 0
+    model.set_relay(17, True)
+    model.tick(180)
+    assert model.ponics.registers()[5] < ponics_ec_before
 
 
 def test_blockage_is_downstream_resistance_raising_high_and_reducing_flow():

@@ -114,6 +114,8 @@ def apply_model_settings(settings: BionicSettings, model: BionicModel, *, initia
         tier.flow_lpm = settings.rack1_tier_flow_lpm if tier.rack == 1 else settings.rack2_tier_flow_lpm
         tier.return_fraction = settings.return_fraction
         tier.return_delay_s = settings.return_delay_s
+    model.plant_water_uptake_fraction = settings.plant_water_uptake_fraction
+    model.irrigation_evaporation_fraction = settings.irrigation_evaporation_fraction
     for sensor in model.sensors.values():
         sensor.hysteresis_l = settings.sensor_hysteresis_l
         sensor.delay_s = settings.sensor_delay_s

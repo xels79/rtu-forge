@@ -548,6 +548,7 @@ class BionicModel:
         self.last_pressure_spike_bar = 0.0
         self.max_pressure_bar = 0.0
         self.calculated_flow_lpm = 0.0
+        self.current_leak_flow_lpm = 0.0
         self.hydraulic_resistance = 1.0
         self.blockage_position = "после датчика HIGH"
         self.pipe_ruptured = False
@@ -558,6 +559,10 @@ class BionicModel:
         self.blockage_severity = 70.0
         self.total_leak_l = 0.0
         self.total_irrigation_loss_l = 0.0
+        self.total_plant_water_uptake_l = 0.0
+        self.total_irrigation_evaporation_l = 0.0
+        self.plant_water_uptake_fraction = 0.005
+        self.irrigation_evaporation_fraction = 0.002
         self.osmosis_profile = {"ec": 0.1, "ph": 6.8, "temperature": 20.0, "buffer": 0.3}
         # Reference-only profile: the confirmed stand has no controllable tap-water path.
         self.tap_profile = {"ec": 0.5, "ph": 7.2, "temperature": 18.0, "buffer": 0.8}
@@ -654,6 +659,21 @@ class BionicModel:
     def light_effective(self, zone_id: str) -> bool:
         powered, values = self.light_state(zone_id)
         return powered and any(value > 0 for value in values.values())
+
+    @property
+    def irrigation_loop_volume_l(self) -> float:
+        """Water in BP/drain tanks plus delayed returns still inside the loop."""
+        tanks = sum(self.tanks[tank_id].volume_l for tank_id in ("bp", "bso1", "bso2"))
+        in_transit = sum(
+            parcel.volume_l
+            for tier in self.tiers.values()
+            for _delay, parcel in tier._returns
+        )
+        return tanks + in_transit
+
+    @property
+    def total_system_water_l(self) -> float:
+        return self.tanks["bo"].volume_l + self.irrigation_loop_volume_l
 
     def force_sensor(self, sensor_id: str, value: bool | None) -> None:
         sensor = self.sensors[sensor_id]
@@ -1035,10 +1055,17 @@ class BionicModel:
             tier.actual_flow_lpm = tier.flow_lpm * scale * ratio if tier in active_tiers else 0.0
             amount = tier.actual_flow_lpm * dt_s / 60.0
             tier.total_l += amount
-            returned = amount * tier.return_fraction
+            plant_uptake = amount * self.plant_water_uptake_fraction
+            evaporation = amount * self.irrigation_evaporation_fraction
+            returned = min(
+                amount * tier.return_fraction,
+                max(0.0, amount - plant_uptake - evaporation),
+            )
             loss = amount - returned
             tier.loss_l += loss
             self.total_irrigation_loss_l += loss
+            self.total_plant_water_uptake_l += plant_uptake
+            self.total_irrigation_evaporation_l += evaporation
             if returned and delivered > 1e-12:
                 incoming = delivered_solution.scaled(amount / delivered)
                 return_fraction = returned / max(amount, 1e-12)
@@ -1071,13 +1098,14 @@ class BionicModel:
         if self.pipe_ruptured and self.high_pressure_bar > 0.1:
             leak_flow += max(20.0, requested_l * 60.0 / max(dt_s, 1e-9))
         leak_l = leak_flow * dt_s / 60.0
+        actual_leak = 0.0
         if shares and leak_l:
-            actual_leak = 0.0
             for tank_id in shares:
                 parcel = self.tanks[tank_id].take_solution(leak_l / len(shares))
                 actual_leak += parcel.volume_l
                 self.tanks[tank_id].outflow_lpm += parcel.volume_l * 60.0 / max(dt_s, 1e-9)
             self.total_leak_l += actual_leak
+        self.current_leak_flow_lpm = actual_leak * 60.0 / max(dt_s, 1e-9)
 
         self.refresh_sensors(dt_s)
         for tank_id, tank in self.tanks.items():

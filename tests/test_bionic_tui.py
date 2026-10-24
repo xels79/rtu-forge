@@ -187,13 +187,29 @@ def test_status_third_column_uses_one_line_horizontal_gauges_and_live_sensor_mar
     assert ("sensor_on", "ВКЛ ") in updated_line
 
 
-def test_status_third_column_shows_incoming_water_meter_next_to_bo(tmp_path):
+@pytest.mark.parametrize("width", [150, 160])
+def test_status_third_column_shows_water_totals_flow_and_leaks_at_bottom(tmp_path, width):
     ctx, _ = context(tmp_path)
     ctx.model.water_meter.total_l = 1234.567
-    rendered = page(ctx, "status", 160)
-    meter_line = next(line for line in rendered.lines if "СЧЁТЧИК ВХОДА" in line)
-    right_column = meter_line.split(" │ ", 2)[2].rstrip()
-    assert right_column == "БО   СЧЁТЧИК ВХОДА 1234.567 л"
+    ctx.model.calculated_flow_lpm = 6.25
+    ctx.model.current_leak_flow_lpm = 0.5
+    ctx.model.total_leak_l = 2.75
+    rendered = page(ctx, "status", width)
+    right = [line.split(" │ ", 2)[2].rstrip() for line in rendered.lines]
+    expected = (
+        "СЧЁТЧИК ВХОДА 1234.567 л",
+        "БО 250.000 л",
+        "ТРАКТ БП+БСО1+БСО2 290.000 л",
+        "ВСЕГО В СИСТЕМЕ 540.000 л",
+        "РАСХОД РАСЧЁТНЫЙ 6.25 л/мин",
+        "ПРОТЕЧКИ 0.50 л/мин · Σ 2.750 л",
+        "РАСТЕНИЯ ПОГЛОТИЛИ 0.000 л",
+        "ИСПАРИЛОСЬ 0.000 л",
+    )
+    positions = [right.index(value) for value in expected]
+    assert positions == sorted(positions)
+    bso2_gauge = next(index for index, line in enumerate(right) if line.startswith("БСО2 ["))
+    assert bso2_gauge < positions[0]
 
 
 def test_status_single_column_order_is_stable(tmp_path):

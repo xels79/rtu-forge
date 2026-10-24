@@ -111,6 +111,7 @@ def capture_state(model: BionicModel) -> dict[str, Any]:
             "last_pressure_spike_bar": model.last_pressure_spike_bar,
             "max_pressure_bar": model.max_pressure_bar,
             "calculated_flow_lpm": model.calculated_flow_lpm,
+            "current_leak_flow_lpm": model.current_leak_flow_lpm,
             "hydraulic_resistance": model.hydraulic_resistance,
             "pipe_ruptured": model.pipe_ruptured,
             "leak_enabled": model.leak_enabled,
@@ -120,6 +121,8 @@ def capture_state(model: BionicModel) -> dict[str, Any]:
             "rupture_threshold_bar": model.rupture_threshold_bar,
             "total_leak_l": model.total_leak_l,
             "total_irrigation_loss_l": model.total_irrigation_loss_l,
+            "total_plant_water_uptake_l": model.total_plant_water_uptake_l,
+            "total_irrigation_evaporation_l": model.total_irrigation_evaporation_l,
             "water_meter_flow_lpm": model.water_meter.flow_lpm,
             "water_meter_total_l": model.water_meter.total_l,
             "water_meter_status": model.water_meter.status,
@@ -222,6 +225,11 @@ def restore_state(model: BionicModel, data: dict[str, Any]) -> None:
     model.water_meter.flow_lpm = hydraulics["water_meter_flow_lpm"]
     model.water_meter.total_l = hydraulics["water_meter_total_l"]
     model.water_meter.status = hydraulics["water_meter_status"]
+    model.current_leak_flow_lpm = hydraulics.get("current_leak_flow_lpm", 0.0)
+    model.total_plant_water_uptake_l = hydraulics.get("total_plant_water_uptake_l", 0.0)
+    model.total_irrigation_evaporation_l = hydraulics.get(
+        "total_irrigation_evaporation_l", 0.0,
+    )
     model._valve_response_remaining_s = hydraulics["valve_response_remaining_s"]
     model._spike_remaining_s = hydraulics["spike_remaining_s"]
     model._pressure_pump_running = hydraulics["pressure_pump_running"]

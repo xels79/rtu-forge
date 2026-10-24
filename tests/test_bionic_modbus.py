@@ -210,6 +210,14 @@ def test_settings_roundtrip_validation_and_no_implicit_file(tmp_path: Path):
     assert changed(settings, "water_meter_initial_l", "1234,5").water_meter_initial_l == 1234.5
     with pytest.raises(ValueError, match="не могут быть отрицательными"):
         changed(settings, "water_meter_initial_l", "-1")
+    assert changed(
+        settings, "plant_water_uptake_fraction", "0,007",
+    ).plant_water_uptake_fraction == 0.007
+    with pytest.raises(ValueError, match="не должна превышать 1"):
+        changed(
+            changed(settings, "plant_water_uptake_fraction", "0.6"),
+            "irrigation_evaporation_fraction", "0.5",
+        )
     with pytest.raises(ValueError, match="0..3 бар"):
         changed(settings, "rupture_residual_bar", "3.1")
     with pytest.raises(ValueError, match="Modbus ID 5"):

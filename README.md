@@ -134,6 +134,13 @@ then accumulates only the water physically admitted through the BO fill path.
 Its current reading is preserved in the runtime state and is written to the
 event journal when the controller closes the BO fill output.
 
+The demo irrigation balance separately tracks calculated tier flow, leaks,
+plant water uptake, and evaporation. `plant_water_uptake_fraction` and
+`irrigation_evaporation_fraction` are per-pass model coefficients; they are
+configurable assumptions, not measured broccoli characteristics. Existing
+nutrient uptake, deposition, and pH-drift coefficients continue to degrade the
+recirculating solution only through actual modeled irrigation flow.
+
 It has its own configuration and event journal and does not modify
 `config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,
 verified Stage 7 Modbus maps, USB safety rules, and hardware assumptions are in
