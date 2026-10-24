@@ -134,6 +134,30 @@ then accumulates only the water physically admitted through the BO fill path.
 Its current reading is preserved in the runtime state and is written to the
 event journal when the controller closes the BO fill output.
 
+The same incoming-water reading can optionally be exposed on USB №1 as channel
+1 of the proprietary Pulsar `N00014163` slave. There is no second total:
+the response float32 is calculated at read time as
+`model.water_meter.total_l / 1000` m³. The emulator is passive and disabled by
+default. Configure its eight-digit BCD address explicitly; `17440707` below is
+only an example, not an assertion about the installed meter:
+
+```text
+settings set pulsar_address 17440707
+settings set pulsar_enabled true
+settings apply
+settings save
+```
+
+USB №1 remains a single serial-port owner for both Modbus RTU and Pulsar
+requests. At 1250 litres the example exchange is:
+
+```text
+TX 17 44 07 07 01 0E 01 00 00 00 00 00 A8 F0
+RX 17 44 07 07 01 0E 00 00 A0 3F 00 00 BB 2D
+```
+
+The response payload `00 00 A0 3F` is little-endian float32 `1.25` m³.
+
 The demo irrigation balance separately tracks calculated tier flow, leaks,
 plant water uptake, and evaporation. `plant_water_uptake_fraction` and
 `irrigation_evaporation_fraction` are per-pass model coefficients; they are
