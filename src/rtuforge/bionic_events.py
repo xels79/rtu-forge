@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Iterable
 
@@ -29,7 +29,12 @@ class EventJournal:
         self._load()
 
     def _cutoff(self) -> datetime:
-        return datetime.now(timezone.utc) - timedelta(days=self.retention_days)
+        return datetime.now().astimezone() - timedelta(days=self.retention_days)
+
+    @staticmethod
+    def _local_datetime(value: str) -> datetime:
+        """Convert stored UTC/offset timestamps to the computer's local zone."""
+        return datetime.fromisoformat(value).astimezone()
 
     def _load(self) -> None:
         if not self.path.exists():
@@ -37,9 +42,13 @@ class EventJournal:
         cutoff = self._cutoff()
         for line in self.path.read_text(encoding="utf-8").splitlines():
             try:
-                event = Event(**json.loads(line))
-                if datetime.fromisoformat(event.at) >= cutoff:
-                    self.events.append(event)
+                stored = Event(**json.loads(line))
+                local_at = self._local_datetime(stored.at)
+                if local_at >= cutoff:
+                    self.events.append(Event(
+                        local_at.isoformat(), stored.kind, stored.subject,
+                        stored.message, stored.previous, stored.current,
+                    ))
             except (ValueError, TypeError, json.JSONDecodeError):
                 continue
         self.events = self.events[-self.max_memory :]
@@ -48,7 +57,10 @@ class EventJournal:
         self, kind: str, subject: str, message: str,
         previous: str | None = None, current: str | None = None,
     ) -> Event:
-        event = Event(datetime.now(timezone.utc).isoformat(), kind, subject, message, previous, current)
+        event = Event(
+            datetime.now().astimezone().isoformat(), kind, subject, message,
+            previous, current,
+        )
         self.events.append(event)
         self.events = self.events[-self.max_memory :]
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -78,7 +90,7 @@ class EventJournal:
 
     def compact(self) -> None:
         cutoff = self._cutoff()
-        self.events = [e for e in self.events if datetime.fromisoformat(e.at) >= cutoff]
+        self.events = [e for e in self.events if self._local_datetime(e.at) >= cutoff]
         self.events = self.events[-self.max_memory :]
         self.path.parent.mkdir(parents=True, exist_ok=True)
         content = "".join(json.dumps(asdict(e), ensure_ascii=False) + "\n" for e in self.events)
