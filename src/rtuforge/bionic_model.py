@@ -967,6 +967,7 @@ class BionicModel:
             )
 
         active_tiers = [tier for tier in self.tiers.values() if self.relay(tier.relay)]
+        previous_pressure_target = self.pressure_target_bar
         pressure_target = self._pressure_target(len(active_tiers))
         self.pressure_target_bar = pressure_target
         pump_running = max((drive.actual_hz for drive in self.drives.values()), default=0.0) > 0.1
@@ -981,6 +982,17 @@ class BionicModel:
             and self._pressure_pump_running
             and pump_running
         )
+        turning_up = (
+            previous_pressure_target < self.high_pressure_bar
+            and pressure_target > self.high_pressure_bar
+        )
+        if turning_up:
+            # A new pressurization cycle supersedes the unfinished fall. Drop
+            # only the stale transition; a valve change below can establish a
+            # fresh closing response and spike for the new hydraulic state.
+            self._valve_response_remaining_s = 0.0
+            self._spike_remaining_s = 0.0
+            self.last_pressure_spike_bar = 0.0
         if hydraulic_changed:
             closing = pressure_target > self.high_pressure_bar
             response_ms = (

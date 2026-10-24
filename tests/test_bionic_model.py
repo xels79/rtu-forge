@@ -421,6 +421,56 @@ def test_running_hp_reacts_quickly_to_tier_valves_and_closed_head():
     assert model.high_pressure_bar < three
 
 
+def test_new_pressure_rise_interrupts_fall_and_starts_from_current_value():
+    model = running_model()
+    model.boost_rise_s = 0
+    model.pressure_rise_s = 0
+    model.pressure_fall_s = 4
+    model.valve_pressure_response_ms = 2000
+    model.rupture_threshold_bar = 100
+    model.drives["hp1"].ramp_up_s = 0
+    enable_pressure(model, hz=29)
+    assert model.high_pressure_bar == pytest.approx(30)
+
+    for relay in (12, 13, 14):
+        model.set_relay(relay, True)
+    model.tick(0.2)
+    falling_value = model.high_pressure_bar
+    falling_target = model.pressure_target_bar
+    assert falling_target < falling_value < 30
+    assert model._valve_response_remaining_s == pytest.approx(1.8)
+
+    model.pressure_rise_s = 4
+    model.drives["hp1"].setpoint_hz = 45
+    model.tick(0.2)
+
+    rising_target = model.pressure_target_bar
+    expected = falling_value + (rising_target - falling_value) * (0.2 / 4)
+    assert rising_target > falling_value
+    assert model.high_pressure_bar == pytest.approx(expected)
+    assert model.high_pressure_bar > falling_value
+    assert model._valve_response_remaining_s == 0
+
+
+def test_boost_restart_immediately_reverses_low_pressure_fall():
+    model = running_model()
+    model.boost_rise_s = 2
+    model.boost_fall_s = 2
+    model.set_relay(model.outputs["source_osmosis"], True)
+    model.set_relay(model.outputs["boost"], True)
+    model.low_pressure_bar = model.boost_pressure_bar
+
+    model.set_relay(model.outputs["boost"], False)
+    model.tick(0.5)
+    falling_value = model.low_pressure_bar
+    assert 0 < falling_value < model.boost_pressure_bar
+
+    model.set_relay(model.outputs["boost"], True)
+    model.tick(0.05)
+
+    assert model.low_pressure_bar > falling_value
+
+
 def test_starting_hp_with_all_tiers_closed_reaches_shutoff_head_and_ruptures():
     model = running_model()
     model.pressure_rise_s = model.boost_rise_s = 0
