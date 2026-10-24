@@ -185,6 +185,8 @@ def validate_write_response(request: bytes, response: bytes) -> None:
         )
     function = request[1]
     if response[1] == (function | 0x80):
+        if len(response) != 5:
+            raise RuntimeError("Malformed Modbus exception response")
         raise RuntimeError(f"Modbus exception {response[2]:02X}")
     if response[1] != function:
         raise RuntimeError(
@@ -199,3 +201,30 @@ def validate_write_response(request: bytes, response: bytes) -> None:
             raise RuntimeError("Unexpected FC0F write response")
         return
     raise ValueError(f"Unsupported write function: {function:02X}")
+
+
+def build_read_request(slave: int, function: int, address: int, count: int) -> bytes:
+    _slave(slave)
+    _u16(address, name="address")
+    maximum = 2000 if function == 1 else 125
+    if function not in (1, 3, 4) or not 1 <= count <= maximum or address + count > 65536:
+        raise ValueError("Invalid Modbus read function/address/quantity")
+    return bytes((slave, function)) + address.to_bytes(2, "big") + count.to_bytes(2, "big")
+
+
+def validate_read_response(request: bytes, response: bytes) -> bytes:
+    if not response:
+        raise RuntimeError("Нет ответа Modbus: проверьте соединение и адрес устройства")
+    if len(response) < 5 or not has_valid_crc(response):
+        raise RuntimeError("Неверная длина/CRC ответа Modbus")
+    if response[0] != request[0]:
+        raise RuntimeError("Неверный slave ID ответа Modbus")
+    if response[1] == request[1] | 128:
+        if len(response) != 5:
+            raise RuntimeError("Неверная длина исключения Modbus")
+        raise RuntimeError(f"Modbus exception {response[2]:02X}")
+    count = int.from_bytes(request[4:6], "big")
+    size = (count + 7) // 8 if request[1] == 1 else count * 2
+    if response[1] != request[1] or response[2] != size or len(response) != size + 5:
+        raise RuntimeError("Неверная функция/число байтов/длина ответа Modbus")
+    return response[3:-2]
