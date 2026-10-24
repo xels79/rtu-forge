@@ -188,10 +188,9 @@ def test_status_third_column_uses_one_line_horizontal_gauges_and_live_sensor_mar
 
 
 @pytest.mark.parametrize("width", [150, 160])
-def test_status_third_column_shows_water_totals_flow_and_leaks_at_bottom(tmp_path, width):
+def test_status_third_column_shows_water_totals_and_leaks_at_bottom(tmp_path, width):
     ctx, _ = context(tmp_path)
     ctx.model.water_meter.total_l = 1234.567
-    ctx.model.calculated_flow_lpm = 6.25
     ctx.model.current_leak_flow_lpm = 0.5
     ctx.model.total_leak_l = 2.75
     rendered = page(ctx, "status", width)
@@ -201,7 +200,6 @@ def test_status_third_column_shows_water_totals_flow_and_leaks_at_bottom(tmp_pat
         "БО 250.000 л",
         "ТРАКТ БП+БСО1+БСО2 290.000 л",
         "ВСЕГО В СИСТЕМЕ 540.000 л",
-        "РАСХОД РАСЧЁТНЫЙ 6.25 л/мин",
         "ПРОТЕЧКИ 0.50 л/мин · Σ 2.750 л",
         "РАСТЕНИЯ ПОГЛОТИЛИ 0.000 л",
         "ИСПАРИЛОСЬ 0.000 л",

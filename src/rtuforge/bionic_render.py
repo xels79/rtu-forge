@@ -320,7 +320,6 @@ def _status_tank_gauges(model: BionicModel) -> list[StyledLine]:
         _styled(f"БО {model.tanks['bo'].volume_l:.3f} л"),
         _styled(f"ТРАКТ БП+БСО1+БСО2 {model.irrigation_loop_volume_l:.3f} л"),
         _styled(f"ВСЕГО В СИСТЕМЕ {model.total_system_water_l:.3f} л"),
-        _styled(f"РАСХОД РАСЧЁТНЫЙ {model.calculated_flow_lpm:.2f} л/мин"),
         _styled(
             f"ПРОТЕЧКИ {model.current_leak_flow_lpm:.2f} л/мин · ",
             ("fault" if model.current_leak_flow_lpm > 0 else "inactive",
