@@ -13,6 +13,10 @@ from typing import Callable
 import serial
 
 from .bionic_modbus import ModbusBus, expected_frame_length
+from .bionic_pulsar import (
+    PULSAR_READ_FRAME_LENGTH, PulsarWaterMeterSlave, is_pulsar_read_header,
+)
+from .crc import has_valid_crc
 
 
 class PortInUseError(RuntimeError):
@@ -60,11 +64,96 @@ class SerialSlaveTransport:
             self.serial = None
 
 
+class Usb1RequestDispatcher:
+    """Frame and route Modbus and Pulsar requests read by one UART owner."""
+
+    def __init__(
+        self, bus: ModbusBus, pulsar: PulsarWaterMeterSlave | None = None,
+    ) -> None:
+        self.bus = bus
+        self.pulsar = pulsar
+        self.buffer = bytearray()
+
+    def feed(self, chunk: bytes) -> list[bytes]:
+        self.buffer.extend(chunk)
+        return self._drain(end_of_frame=False)
+
+    def finish_frame(self) -> list[bytes]:
+        """Finish a request at the serial inter-frame timeout."""
+        responses = self._drain(end_of_frame=True)
+        self.buffer.clear()
+        return responses
+
+    def _drain(self, *, end_of_frame: bool) -> list[bytes]:
+        responses: list[bytes] = []
+        while self.buffer:
+            modbus_length = expected_frame_length(self.buffer)
+            pulsar_candidate = (
+                self.pulsar is not None
+                and self.pulsar.enabled
+                and is_pulsar_read_header(self.buffer)
+            )
+
+            if pulsar_candidate:
+                if len(self.buffer) < PULSAR_READ_FRAME_LENGTH:
+                    if (
+                        end_of_frame
+                        and modbus_length is not None
+                        and len(self.buffer) >= modbus_length
+                        and has_valid_crc(bytes(self.buffer[:modbus_length]))
+                    ):
+                        frame = bytes(self.buffer[:modbus_length])
+                        del self.buffer[:modbus_length]
+                        response = self.bus.handle(frame)
+                        if response:
+                            responses.append(response)
+                        continue
+                    break
+
+                frame = bytes(self.buffer[:PULSAR_READ_FRAME_LENGTH])
+                if has_valid_crc(frame):
+                    del self.buffer[:PULSAR_READ_FRAME_LENGTH]
+                    response = self.pulsar.handle(frame) if self.pulsar is not None else b""
+                    if response:
+                        responses.append(response)
+                    continue
+
+                # A rare valid Modbus frame can share the six-byte Pulsar header.
+                # Prefer it only after the complete Pulsar candidate fails CRC.
+                if (
+                    modbus_length is not None
+                    and len(self.buffer) >= modbus_length
+                    and has_valid_crc(bytes(self.buffer[:modbus_length]))
+                ):
+                    frame = bytes(self.buffer[:modbus_length])
+                    self.buffer.clear()
+                    response = self.bus.handle(frame)
+                    if response:
+                        responses.append(response)
+                    continue
+
+                del self.buffer[:PULSAR_READ_FRAME_LENGTH]
+                continue
+
+            if modbus_length is None or len(self.buffer) < modbus_length:
+                break
+            frame = bytes(self.buffer[:modbus_length])
+            del self.buffer[:modbus_length]
+            response = self.bus.handle(frame)
+            if response:
+                responses.append(response)
+        return responses
+
+
 class ModbusSlaveServer:
-    def __init__(self, bus: ModbusBus, transport: SerialSlaveTransport, lock_path: Path) -> None:
+    def __init__(
+        self, bus: ModbusBus, transport: SerialSlaveTransport, lock_path: Path,
+        pulsar: PulsarWaterMeterSlave | None = None,
+    ) -> None:
         self.bus = bus
         self.transport = transport
         self.lock_path = lock_path
+        self.pulsar = pulsar
         self._lock_fd: int | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -98,21 +187,16 @@ class ModbusSlaveServer:
         self._thread.start()
 
     def _run(self) -> None:
-        buffer = bytearray()
+        dispatcher = Usb1RequestDispatcher(self.bus, self.pulsar)
         try:
             while not self._stop.is_set():
                 chunk = self.transport.read(1)
                 if not chunk:
-                    buffer.clear()
-                    continue
-                buffer.extend(chunk)
-                length = expected_frame_length(buffer)
-                if length is not None and len(buffer) >= length:
-                    frame = bytes(buffer[:length])
-                    del buffer[:length]
-                    response = self.bus.handle(frame)
-                    if response:
+                    for response in dispatcher.finish_frame():
                         self.transport.write(response)
+                    continue
+                for response in dispatcher.feed(chunk):
+                    self.transport.write(response)
         except Exception as exc:
             self.error = str(exc)
         finally:

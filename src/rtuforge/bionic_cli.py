@@ -28,6 +28,7 @@ from .bionic_lights import (
 from .bionic_model import BionicModel
 from .bionic_modbus import build_default_bus
 from .bionic_ponics import PONICS_OPTION_NAMES, PONICS_REGISTERS
+from .bionic_pulsar import PulsarWaterMeterSlave
 from .bionic_render import print_view
 from .bionic_sensor_bridge import SensorRelayBridge, SensorRelayState
 from .bionic_server import ModbusSlaveServer, SerialSlaveTransport
@@ -856,6 +857,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             reconnect = any(getattr(ctx.settings, name) != getattr(ctx.draft, name) for name in (
                 "controller_port", "controller_baudrate", "controller_parity", "controller_stopbits",
                 "relay_address", "ao1_address", "ao2_address", "ao3_address", "ponics_address", "ai_address", "hp1_address", "hp2_address",
+                "pulsar_enabled", "pulsar_address",
                 "sensor_relay_port", "sensor_relay_baudrate", "sensor_relay_parity", "sensor_relay_stopbits",
                 "sensor_relay_id", "sensor_relay_channels", "sensor_relay_active_low", "sensor_relay_map",
                 "sensor_relay_loss_behavior", "hardware_mode",
@@ -1059,7 +1061,13 @@ def main() -> int:
                 ctx.settings.controller_port, ctx.settings.controller_baudrate,
                 ctx.settings.controller_parity, ctx.settings.controller_stopbits,
             )
-            server = ModbusSlaveServer(bus, transport, home / f".{ctx.settings.controller_port}.bionic.lock")
+            pulsar = PulsarWaterMeterSlave(
+                ctx.model, ctx.settings.pulsar_address, ctx.settings.pulsar_enabled,
+            )
+            server = ModbusSlaveServer(
+                bus, transport, home / f".{ctx.settings.controller_port}.bionic.lock",
+                pulsar,
+            )
             server.start()
         bridge_runner = _start_bridge(ctx)
 
