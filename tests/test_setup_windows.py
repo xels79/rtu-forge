@@ -25,6 +25,7 @@ def test_setup_ps1_uses_uv_tool_reported_executable_and_user_environment():
     assert "uv tool update-shell" in text
     assert "uv tool dir --bin" in text
     assert 'Join-Path -Path $ToolBin -ChildPath "rtuforge.exe"' in text
+    assert 'Join-Path -Path $ToolBin -ChildPath "bionic-immitator.exe"' in text
     assert '[Environment]::SetEnvironmentVariable("RTUFORGE_HOME", $DataDir, "User")' in text
     assert 'SetEnvironmentVariable("RTUFORGE_HOME", $DataDir, "Machine")' not in text
     assert "Administrator" not in text
@@ -47,6 +48,8 @@ def test_setup_ps1_shortcut_and_self_check_are_explicit():
     assert "$Shortcut.WorkingDirectory = $WorkingDir" in text
     assert "& $RtuForgeExe --help" in text
     assert "& $RtuForgeExe paths" in text
+    assert "$BionicShortcut.TargetPath = $BionicImmitatorExe" in text
+    assert "& $BionicImmitatorExe --help" in text
 
 
 def test_setup_ps1_parses_when_pwsh_is_available():

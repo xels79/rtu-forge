@@ -60,8 +60,12 @@ if ($LASTEXITCODE -ne 0) {
 }
 $ToolBin = ConvertTo-AbsolutePath (($ToolBinOutput | Select-Object -Last 1).Trim())
 $RtuForgeExe = Join-Path -Path $ToolBin -ChildPath "rtuforge.exe"
-if (-not (Test-Path -LiteralPath $RtuForgeExe -PathType Leaf)) {
-    throw "Installed executable was not found: $RtuForgeExe"
+$StandForgeExe = Join-Path -Path $ToolBin -ChildPath "standforge.exe"
+$BionicImmitatorExe = Join-Path -Path $ToolBin -ChildPath "bionic-immitator.exe"
+foreach ($Executable in @($RtuForgeExe, $StandForgeExe, $BionicImmitatorExe)) {
+    if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+        throw "Installed executable was not found: $Executable"
+    }
 }
 
 [Environment]::SetEnvironmentVariable("RTUFORGE_HOME", $DataDir, "User")
@@ -80,6 +84,7 @@ if (-not $NoMigrate) {
 }
 
 $ShortcutPath = "not created"
+$BionicShortcutPath = "not created"
 if (-not $NoShortcut) {
     $DesktopDir = [Environment]::GetFolderPath([Environment+SpecialFolder]::DesktopDirectory)
     if (-not $DesktopDir) {
@@ -93,6 +98,16 @@ if (-not $NoShortcut) {
     $Shortcut.WorkingDirectory = $WorkingDir
     $Shortcut.Description = "RTU Forge Modbus RTU console"
     $Shortcut.Save()
+
+    $BionicHome = Join-Path -Path $DataDir -ChildPath "bionic-data"
+    New-Item -ItemType Directory -Force -Path $BionicHome | Out-Null
+    $BionicShortcutPath = Join-Path -Path $DesktopDir -ChildPath "Bionic Immitator.lnk"
+    $BionicShortcut = $WshShell.CreateShortcut($BionicShortcutPath)
+    $BionicShortcut.TargetPath = $BionicImmitatorExe
+    $BionicShortcut.Arguments = '--home "' + $BionicHome + '"'
+    $BionicShortcut.WorkingDirectory = $WorkingDir
+    $BionicShortcut.Description = "Bionic Mini physical imitator"
+    $BionicShortcut.Save()
 }
 
 Write-Host "Running self-check..."
@@ -104,6 +119,14 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "rtuforge paths self-check failed with exit code $LASTEXITCODE"
 }
+& $StandForgeExe --help | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "standforge --help self-check failed with exit code $LASTEXITCODE"
+}
+& $BionicImmitatorExe --help | Out-Null
+if ($LASTEXITCODE -ne 0) {
+    throw "bionic-immitator --help self-check failed with exit code $LASTEXITCODE"
+}
 
 Write-Host ""
 Write-Host "Repository:    $RepoRoot"
@@ -111,5 +134,8 @@ Write-Host "Data/Home:     $DataDir"
 Write-Host "Working dir:   $WorkingDir"
 Write-Host "Tool bin:      $ToolBin"
 Write-Host "Executable:    $RtuForgeExe"
+Write-Host "StandForge:    $StandForgeExe"
+Write-Host "Bionic:        $BionicImmitatorExe"
 Write-Host "RTUFORGE_HOME: $env:RTUFORGE_HOME"
 Write-Host "Shortcut:      $ShortcutPath"
+Write-Host "Bionic link:   $BionicShortcutPath"

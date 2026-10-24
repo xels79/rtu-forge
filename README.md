@@ -30,7 +30,8 @@ Defaults:
 - `RepoRoot`: directory containing `setup.ps1`;
 - `DataDir`: `%APPDATA%\RTUForge`;
 - `WorkingDir`: DataDir;
-- executable: the actual `rtuforge.exe` reported by the uv tool bin directory.
+- executables: `rtuforge.exe`, `standforge.exe`, and `bionic-immitator.exe` in
+  the actual uv tool bin directory.
 
 Explicit relative `-RepoRoot`, `-DataDir`, and `-WorkingDir` values are resolved against the PowerShell invocation directory, even when the destination does not exist yet:
 
@@ -39,7 +40,13 @@ Explicit relative `-RepoRoot`, `-DataDir`, and `-WorkingDir` values are resolved
 .\setup.ps1 -NoShortcut
 ```
 
-Unless `-NoShortcut` is used, the installer creates a per-user `RTU Forge.lnk` whose target is the installed `rtuforge.exe`, whose arguments contain the absolute DataDir as `--home`, and whose working directory is WorkingDir. Unless `-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are copied from RepoRoot only when the source exists and the destination does not. Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1` to update the editable installation after dependency or packaging changes.
+Unless `-NoShortcut` is used, the installer creates per-user `RTU Forge.lnk`
+and `Bionic Immitator.lnk` shortcuts. The Bionic shortcut uses
+`<DataDir>\bionic-data`; it does not share or overwrite RTU Forge files. Unless
+`-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are
+copied from RepoRoot only when the source exists and the destination does not.
+Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1`
+to update the editable installation after dependency or packaging changes.
 
 `-NoMigrate` means only that these three files are not copied from RepoRoot. With a pre-existing config in DataDir, the installation is fully operational. With a new empty DataDir, setup and its `--help`/`paths` self-check succeed, but config-dependent commands report a missing config until you provide `config.ini`.
 
@@ -58,6 +65,86 @@ uv sync --extra dev
 uv run rtuforge --home .
 uv run rtuforge --home . send 01 03 00 65 00 01
 ```
+
+The separate Russian-language Bionic Mini physical imitator is launched with:
+
+```powershell
+uv run bionic-immitator --home .\bionic-data
+uv run bionic-immitator --home .\bionic-data --no-controller
+```
+
+Its full-screen interface uses separate status, device, port, settings, help,
+log, RS-485, tank, water-composition, pump, equipment-health, pressure, irrigation, light,
+sensor, PonicPilot, and drive pages. PonicPilot ID 5 is permanently bound to
+the shared BP (broth) tank; all of its calculated measurements and doses use
+that tank only. Use
+`view <page>` or `F1`–`F6` to navigate, the mouse wheel or `PgUp`/`PgDn` to
+scroll, `Tab` for contextual completion, and `Up`/`Down` for persistent command
+history. See [BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md) for the complete key map.
+The step-by-step Russian installation, wiring, operation, test-scenario, command,
+and configuration reference is in
+[docs/BIONIC-IMMITATOR-USER-GUIDE.md](docs/BIONIC-IMMITATOR-USER-GUIDE.md).
+
+Lighting is configured independently per tier through `view light settings`.
+The mutable `light_profile` option stores the six `NONE`, `SINGLE`, or
+`SPECTRAL_4` assignments, their power DOs, physical Modbus AO IDs/channels,
+voltage ranges, brightness ranges, names, and enabled flags. `light apply`
+changes only the active interpretation, `light save` changes only the saved
+lighting profile, and `light restore-defaults` restores the Bionic Mini factory
+map in the draft. These operations never write controller-owned DO or AO
+outputs.
+
+The pressure model exposes mutable `pressure_rise_s`,
+`valve_pressure_response_ms`, `valve_pressure_close_response_ms`,
+`transient_pressure_spike_coefficient`,
+`transient_pressure_spike_duration_ms`, `closed_head_pressure_bar`,
+`rupture_threshold_bar`, and `rupture_residual_bar` options. Valve response
+times are model parameters in milliseconds; the default transient spike
+coefficient is zero because no measured water-hammer characteristic is being
+claimed.
+
+The Bionic level sensors drive a separately connected physical Waveshare Relay
+8/16CH on USB/RS-485 №2; they are not exposed as extra virtual devices on USB
+№1. The default CH1..CH8 map, configurable NO/NC installation contact, relay
+polarity, edge-triggered FC0F writes, and separate FC01 confirmation are
+documented in the Bionic guide. Every MIN/MAX sensor has its own persisted
+absolute threshold; MAX is independent of physical tank capacity and never
+stops filling by itself.
+
+Transfer pumps and HP1/HP2 accumulate heat and wear automatically when their
+real fluid path is unavailable. `view equipment` separates controller command,
+actual operation, flow/pressure, damage, VFD fault, and repair requirement.
+These internal diagnostics add no controller inputs or private Modbus alarm
+registers; repair and replacement require an explicit `--confirm` command.
+The settings page groups parameters by subsystem and sorts each group by its
+Russian display name. It exposes all five independent equipment profiles,
+including the direct dry-run threshold, cumulative wear rate, effective
+lifetime, current wear, and applied/saved state. `--sync-wear` aligns a new
+pump's wear lifetime with `failure_s` without repairing existing damage.
+Named `sim state` checkpoints persist physical test state separately from the
+INI and never restore controller-owned DO, AO, or RUN commands.
+On every exit, the current physical state is also written atomically to
+`bionic-runtime-state.json` and restored on the next launch. It remains in
+effect until `sim reset --confirm`; controller-owned DO, AO, frequency, and
+RUN commands are still never restored from this file.
+
+The incoming-water meter starts from the configurable
+`water_meter_initial_l` reading after first launch or `sim reset --confirm`,
+then accumulates only the water physically admitted through the BO fill path.
+Its current reading is preserved in the runtime state and is written to the
+event journal when the controller closes the BO fill output.
+
+The demo irrigation balance separately tracks calculated tier flow, leaks,
+plant water uptake, and evaporation. `plant_water_uptake_fraction` and
+`irrigation_evaporation_fraction` are per-pass model coefficients; they are
+configurable assumptions, not measured broccoli characteristics. Existing
+nutrient uptake, deposition, and pH-drift coefficients continue to degrade the
+recirculating solution only through actual modeled irrigation flow.
+
+It has its own configuration and event journal and does not modify
+`config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,
+verified Stage 7 Modbus maps, USB safety rules, and hardware assumptions are in
+[BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md).
 
 Linux development launch uses the same explicit checkout-local home:
 
@@ -106,7 +193,11 @@ All installer paths are normalized to absolute paths before files are created. M
 
 `--no-migrate` means only that config, scripts, and history are not copied from RepoRoot. It is suitable when DataDir already contains the intended user files. For a new empty DataDir, installer self-checks `--help` and `paths` still succeed, while config-dependent commands report a missing `config.ini` until one is supplied.
 
-The generated `<BinDir>/rtuforge` launcher exports the absolute DataDir as `RTUFORGE_HOME`, uses `exec`, forwards all arguments, and preserves the caller's current directory. `--desktop` is optional and uses WorkingDir only for graphical launch.
+The generated `<BinDir>/rtuforge`, `<BinDir>/standforge`, and
+`<BinDir>/bionic-immitator` launchers use `exec`, forward all arguments, and
+preserve the caller's current directory. The RTU Forge launcher additionally
+exports the absolute DataDir as `RTUFORGE_HOME`. `--desktop` is optional and
+uses WorkingDir only for graphical RTU Forge launch.
 
 ## Runtime path and user-data model
 
@@ -116,7 +207,7 @@ The generated `<BinDir>/rtuforge` launcher exports the absolute DataDir as `RTUF
 | DataDir / RTUFORGE_HOME | `config.ini`, `scripts.ini`, history | `%APPDATA%\RTUForge` | `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge` |
 | WorkingDir | Starting directory for shortcut/desktop launch | DataDir | DataDir |
 | InstallDir | Installation environment | managed by `uv tool` | `${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge` |
-| Executable / BinDir | User shell executable/launcher | value from `uv tool dir --bin` | `$HOME/.local/bin/rtuforge` |
+| Executable / BinDir | User shell executables/launchers | value from `uv tool dir --bin` | `$HOME/.local/bin/{rtuforge,standforge,bionic-immitator}` |
 
 These roles are independent: DataDir, WorkingDir, and RepoRoot may coincide, but none is derived from another after setup. Inspect active application paths with:
 
@@ -940,3 +1031,35 @@ Run tests:
 ```bash
 uv run --extra dev pytest -q
 ```
+
+## Pulsar water meters (proprietary RS-485 protocol)
+
+The `pulsar` subcommand is deliberately separate from Modbus RTU `send` / `scan` and Stand Forge. It uses its own fully formed CRC16 frames, validating BCD address, function, frame length, request ID, and CRC of responses. No `config.ini` change is needed. Tested using a real discovery frame from the electronic water meter Pulsar model 1, N00014163, address `17440707`, and the Wiren Board protocol vectors.
+
+Use a separate RS-485 test adapter or ensure the existing Bionic controller is not operating on this bus. Do **not** run two masters on the same physical RS-485 line. Use 9600 8N1; override your usual even-parity Modbus settings with `--parity N`. The software does not change serial/parity configuration automatically.
+
+```powershell
+rtuforge.exe --port COM4 --baudrate 9600 --parity N pulsar read 17440707
+rtuforge.exe --port COM4 --baudrate 9600 --parity N pulsar read 17440707 --format raw
+rtuforge.exe --port COM4 --parity N pulsar param get 17440707 0x000A
+rtuforge.exe --port COM4 --parity N pulsar time get 17440707
+rtuforge.exe pulsar decode 17 44 07 07 0A 12 C3 1F 0A 01 00 00 00 00 79 E6 B4 7B
+rtuforge.exe --port COM4 --parity N pulsar discover --single
+```
+
+Channel 1 defaults to little-endian float32 (Pulsar Water model 1). For other Pulsar models use `--format s32`, `--format u32`, `--format f64`, or `--format raw` as appropriate. Parameter indices and value encodings are model-dependent; `param get` prints all 8 raw value bytes by default, with optional `--format u8|u16|u32|s32|float|f64`. Do **not** infer parameter names, permissions or scalings without the manufacturer's model-specific table.
+
+Parameter and clock writes default to dry-run, showing the complete frame **without opening the port**. Writing requires `--execute`:
+
+```powershell
+rtuforge.exe pulsar param set 17440707 0x0010 0102030405060708
+rtuforge.exe --port COM4 --parity N pulsar param set 17440707 0x0010 0102030405060708 --execute
+rtuforge.exe pulsar time set 17440707 2026-10-12T15:34:56
+rtuforge.exe --port COM4 --parity N pulsar time set 17440707 2026-10-12T15:34:56 --execute
+```
+
+**WARNING:** The example parameter index and bytes are synthetic placeholders, **not** validated settings for N00014163. Parameter writes can alter calibration, configuration, accounting, or communications, and may be refused pending authorization. Changing clock impacts archives. Do not use `--execute` without confirming parameter mapping and implications on a test device. `discover --single` is a broadcast-style probe and is unsafe on a bus with several Pulsar devices.
+
+The existing Modbus transport remains single-owner. `pulsar` always uses `crc_mode_override="none"` on frames that already contain CRC16; it does not mutate `runtime.crc_mode`, `decode_rx`, or other runtime options. Ordinary `send`, `scan`, and `standforge` work as before.
+
+References: [Pulsar application-layer functions](https://docs.pulsarm.ru/spaces/PULSARPROTOCOLS/pages/75759667/), [Wiren Board Pulsar driver](https://github.com/wirenboard/wb-mqtt-serial/blob/master/src/devices/pulsar_device.cpp), [Pulsar Water model 1 template](https://github.com/wirenboard/wb-mqtt-serial/blob/master/templates/config-pulsar-water.json).

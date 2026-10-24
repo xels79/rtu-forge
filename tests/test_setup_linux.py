@@ -114,6 +114,8 @@ def test_real_setup_migration_launcher_paths_and_rerun_preserve_data(tmp_path):
     run_setup(bash, invocation_cwd, environment, *arguments)
     launcher = bin_dir / "rtuforge"
     assert launcher.is_file()
+    assert (bin_dir / "standforge").is_file()
+    assert (bin_dir / "bionic-immitator").is_file()
     assert (install / "venv" / "bin" / "python").is_file()
     for name in ("config.ini", "scripts.ini"):
         assert (data / name).read_bytes() == (Path.cwd() / name).read_bytes()
@@ -122,6 +124,11 @@ def test_real_setup_migration_launcher_paths_and_rerun_preserve_data(tmp_path):
         [str(launcher), "--help"], env=environment, capture_output=True, text=True, check=False
     )
     assert help_result.returncode == 0, help_result.stderr
+    bionic_help = subprocess.run(
+        [str(bin_dir / "bionic-immitator"), "--help"],
+        env=environment, capture_output=True, text=True, check=False,
+    )
+    assert bionic_help.returncode == 0, bionic_help.stderr
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     paths_result = subprocess.run(

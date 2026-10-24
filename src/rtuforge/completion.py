@@ -11,7 +11,7 @@ from .scripts import ScriptStore
 
 
 TOP_LEVEL_COMMANDS: tuple[str, ...] = (
-    "connect", "disconnect", "ports", "status", "paths", "scan", "send", "add", "run",
+    "connect", "disconnect", "ports", "status", "paths", "scan", "send", "pulsar", "add", "run",
     "scripts", "ls", "list", "show", "delete", "record", "options", "set", "pause",
     "export", "import", "history", "clear", "cls", "help", "exit", "quit",
 )
@@ -71,6 +71,12 @@ def completion_candidates(
         choices = tuple(help_topics()) + ("record", "export", "import")
     elif completed == ["history"]:
         choices = ("clear",)
+    elif completed == ["pulsar"]:
+        choices = ("discover", "read", "param", "time", "decode", "help")
+    elif completed == ["pulsar", "param"]:
+        choices = ("get", "set")
+    elif completed == ["pulsar", "time"]:
+        choices = ("get", "set")
     elif completed == ["send"]:
         choices = DECODE_FLAGS
     elif completed and completed[0] == "scan":
