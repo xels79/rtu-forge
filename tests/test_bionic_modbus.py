@@ -164,6 +164,51 @@ def test_ponics_reads_full_map_scales_bp_measurements_and_writes_only_confirmed_
     assert request(bus, "05 06 00 04 02 BC") == bytes.fromhex("05 86 02")
 
 
+def test_ponics_logs_first_telemetry_read_and_only_visible_changes():
+    events: list[tuple[str, str, str]] = []
+    model = BionicModel(lambda kind, subject, message: events.append((kind, subject, message)))
+    bus = build_default_bus(model, BionicSettings())
+
+    request(bus, "05 03 00 04 00 04")
+    ponics_events = [event for event in events if event[0] == "PONICS"]
+    assert len(ponics_events) == 1
+    assert "первое успешное чтение" in ponics_events[0][2]
+    assert "pH раствора: 6.00 pH" in ponics_events[0][2]
+    assert "EC раствора: 2.00 мСм/см" in ponics_events[0][2]
+    assert "Температура раствора: 20.0 °C" in ponics_events[0][2]
+    assert "Состояние прибора: выключен" in ponics_events[0][2]
+
+    request(bus, "05 03 00 04 00 04")
+    assert len([event for event in events if event[0] == "PONICS"]) == 1
+
+    model.tanks["bp"].initialize_solution(
+        ec_ms_cm=3.21, ph=5.7, temperature_c=22.4, buffer_per_l=1,
+    )
+    model.ponics.configure({23: 2})
+    request(bus, "05 03 00 04 00 04")
+    message = [event for event in events if event[0] == "PONICS"][-1][2]
+    assert "прочитанные данные изменились" in message
+    assert "6.00 pH → 5.70 pH" in message
+    assert "2.00 мСм/см → 3.21 мСм/см" in message
+    assert "20.0 °C → 22.4 °C" in message
+    assert "выключен → полив отключён" in message
+
+
+def test_ponics_write_log_has_human_name_value_and_source():
+    events: list[tuple[str, str, str]] = []
+    model = BionicModel(lambda kind, subject, message: events.append((kind, subject, message)))
+    bus = build_default_bus(model, BionicSettings())
+
+    request(bus, "05 06 00 1B 00 3D")
+
+    kind, subject, message = events[-1]
+    assert (kind, subject) == ("PONICS", "PDU-27")
+    assert "Нижняя точка pH: 5.5 pH → 6.1 pH" in message
+    assert "RAW 61" in message
+    assert "источник: Modbus FC06" in message
+    assert "Бак: БП (Бульон)" in message
+
+
 def test_ponics_fc10_and_manual_dose_affect_only_bp():
     model = BionicModel()
     bus = build_default_bus(model, BionicSettings())

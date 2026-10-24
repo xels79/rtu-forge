@@ -55,7 +55,7 @@ HELP_GROUPS = (
     ("ДАТЧИКИ", "sensor list; sensor <id> threshold <л>; force on|off; auto. Порог MAX — положение датчика, а не физическая ёмкость бака."),
     ("ДАВЛЕНИЕ", "pressure target <бар>; range <мин> <макс>; rise-time <с>; fall-time <с>; pipe status|repair"),
     ("ЗАСОР И ПРОТЕЧКИ", "fault list — внутренние отказы модели; fault leak on|off|rate — протечка; fault blockage on|off|severity — засор после HIGH; fault pump hp1|hp2 <тип> — механический отказ без дополнительного сигнала плате; alarm list; alarm reset all"),
-    ("ЖУРНАЛ", "log last <N>; log filter alarms|rs485|tanks|pumps|all; log export <файл.csv>"),
+    ("ЖУРНАЛ", "log last <N>; log filter alarms|rs485|tanks|pumps|ponics|all; log export <файл.csv>"),
     ("НАСТРОЙКИ", "settings list; settings set <имя> <значение>; settings apply; settings save"),
     ("КЛАВИШИ", "F1 help · F2 settings · F3 status · F4 devices · F5 ports · F6 log · PgUp/PgDn прокрутка"),
 )

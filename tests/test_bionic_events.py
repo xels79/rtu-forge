@@ -36,3 +36,11 @@ def test_utc_journal_entries_are_loaded_and_exported_in_local_time(tmp_path):
     journal.export_csv(export)
     with export.open(encoding="utf-8-sig", newline="") as stream:
         assert next(csv.DictReader(stream))["at"] == expected
+
+
+def test_ponics_filter_selects_ponics_events(tmp_path):
+    journal = EventJournal(tmp_path / "events.jsonl")
+    journal.add("RS485", "do-22", "подача закрыта")
+    expected = journal.add("PONICS", "ID5/БП", "pH изменился")
+
+    assert journal.filtered("ponics") == [expected]

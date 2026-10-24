@@ -71,7 +71,7 @@ class EventJournal:
     def filtered(self, category: str = "all", limit: int | None = None) -> list[Event]:
         aliases = {
             "alarms": "АВАРИЯ", "rs485": "RS485", "tanks": "БАК",
-            "pumps": "НАСОС",
+            "pumps": "НАСОС", "ponics": "PONICS",
         }
         events: Iterable[Event] = self.events
         if category != "all":

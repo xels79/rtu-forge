@@ -153,6 +153,7 @@ class PonicsPilot:
         self.register_sources = ["модель" for _ in range(PONICS_REGISTER_COUNT)]
         self.register_changed_at = ["при запуске" for _ in range(PONICS_REGISTER_COUNT)]
         self.setting_changed: Callable[[int, int], None] = lambda _index, _value: None
+        self._last_logged_readings: dict[int, int] = {}
 
     @property
     def tank(self) -> Tank:
@@ -223,6 +224,38 @@ class PonicsPilot:
         self.responses += 1
         self.last_read_range = (start, start + count - 1)
         self.last_success_at = datetime.now(timezone.utc).isoformat()
+        self._log_reading_changes(start, count)
+
+    def _log_reading_changes(self, start: int, count: int) -> None:
+        """Log visible telemetry once and then only when a read value changes."""
+        observed = range(max(start, 4), min(start + count, 8))
+        values = self.registers()
+        initial: list[str] = []
+        changed: list[str] = []
+        for index in observed:
+            value = values[index]
+            previous = self._last_logged_readings.get(index)
+            name = PONICS_REGISTERS[index].name
+            if previous is None:
+                initial.append(f"{name}: {self.engineering_value(index, value)}")
+            elif previous != value:
+                changed.append(
+                    f"{name}: {self.engineering_value(index, previous)}"
+                    f" → {self.engineering_value(index, value)}"
+                )
+            self._last_logged_readings[index] = value
+        if initial:
+            self.event(
+                "PONICS", "ID5/БП",
+                f"первое успешное чтение: {'; '.join(initial)}; "
+                f"{PONICS_TANK_LABEL}; {PONICS_DEMO_LABEL}",
+            )
+        if changed:
+            self.event(
+                "PONICS", "ID5/БП",
+                f"прочитанные данные изменились: {'; '.join(changed)}; "
+                f"{PONICS_TANK_LABEL}; {PONICS_DEMO_LABEL}",
+            )
 
     def note_error(self, *, address: bool = False) -> None:
         self.requests += 1
@@ -252,6 +285,7 @@ class PonicsPilot:
                 raise ValueError("Сумма долей удобрений A/B/C должна быть больше нуля")
 
     def write(self, index: int, value: int, *, source: str = "Modbus FC06") -> None:
+        previous = self.registers()[index]
         if index in PONICS_DOSING_REGISTERS:
             self._validate(index, value)
             reagent = PONICS_DOSING_REGISTERS[index]
@@ -267,7 +301,18 @@ class PonicsPilot:
         self.last_written_register = index
         self.register_sources[index] = source
         self.register_changed_at[index] = self.last_success_at
-        self.event("PONICS", f"PDU-{index}", f"записано RAW {value}; {PONICS_TANK_LABEL}")
+        register = PONICS_REGISTERS[index]
+        if index in PONICS_DOSING_REGISTERS:
+            change = f"команда {self.engineering_value(index, value)}"
+        else:
+            change = (
+                f"{self.engineering_value(index, previous)}"
+                f" → {self.engineering_value(index, value)}"
+            )
+        self.event(
+            "PONICS", f"PDU-{index}",
+            f"{register.name}: {change}; RAW {value}; источник: {source}; {PONICS_TANK_LABEL}",
+        )
 
     def dose(self, reagent: str, millilitres: float, *, source: str = "оператор") -> None:
         if reagent not in self.dosing_totals:
