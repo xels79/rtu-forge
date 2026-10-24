@@ -58,7 +58,7 @@ view light settings | light set <zone> <поле> ... | light apply|save|restore
 view ponics | view ponics settings | view ponics registers
 view drives | view drive hp1 | view drive hp2
 ponics dose <a|b|c|ph_plus|ph_minus> <мл> | set <PDU> <RAW>
-log last <N> | filter alarms|rs485|tanks|pumps|ponics|all | export <файл.csv>
+log last <N> | filter alarms|rs485|tanks|pumps|poinics|all | export <файл.csv>
 settings list | set <имя> <значение> | apply | save
 exit | quit
 
@@ -840,7 +840,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             ctx.notice = f"Журнал экспортирован: {path}"
             if not ctx.screen_mode: ctx.console.print(ctx.notice)
         else:
-            raise ValueError("log last <N> | filter alarms|rs485|tanks|pumps|ponics|all | export <файл.csv>")
+            raise ValueError("log last <N> | filter alarms|rs485|tanks|pumps|poinics|all | export <файл.csv>")
         return None
     if command == "settings":
         if args == ["list"]:
