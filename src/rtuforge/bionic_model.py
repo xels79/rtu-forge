@@ -453,6 +453,32 @@ DEFAULT_OUTPUTS: dict[str, int] = {
     "hp1_run": 32,
 }
 
+OUTPUT_NAMES: dict[int, str] = {
+    1: "Насос подпора",
+    2: "Перекачка: осмос → бульон",
+    3: "Питание света: стеллаж 1, ярус 1",
+    4: "Питание света: стеллаж 1, ярус 2",
+    5: "Питание света: стеллаж 1, ярус 3",
+    6: "Питание света: стеллаж 2, ярус 1",
+    7: "Питание света: стеллаж 2, ярус 2",
+    8: "Питание света: стеллаж 2, ярус 3",
+    9: "Полив: стеллаж 1, ярус 1",
+    10: "Полив: стеллаж 1, ярус 2",
+    11: "Полив: стеллаж 1, ярус 3",
+    12: "Полив: стеллаж 2, ярус 1",
+    13: "Полив: стеллаж 2, ярус 2",
+    14: "Полив: стеллаж 2, ярус 3",
+    17: "Возврат: дренаж 1 → бульон",
+    18: "Возврат: дренаж 2 → бульон",
+    19: "Выбор HP1",
+    20: "Выбор HP2",
+    21: "Клапан источника: Осмос",
+    22: "Клапан наполнения осмоса",
+    23: "Клапан источника: Бульон",
+    31: "RUN частотника HP2",
+    32: "RUN частотника HP1",
+}
+
 
 class BionicModel:
     """Four-tank plant driven exclusively by externally supplied commands."""
@@ -556,13 +582,28 @@ class BionicModel:
     def relay(self, channel: int) -> bool:
         return self.relays[channel - 1]
 
+    def output_name(self, channel: int) -> str:
+        """Return the current human-readable purpose of a physical DO."""
+        lights = [
+            light.name for light in self.lights.values()
+            if light.enabled and light.light_type != LightType.NONE
+            and light.power_relay == channel
+        ]
+        if lights:
+            return "Питание света: " + ", ".join(lights)
+        if 3 <= channel <= 8:
+            return "Резервный выход (свет не назначен)"
+        return OUTPUT_NAMES.get(channel, "Резервный выход")
+
     def set_relay(self, channel: int, enabled: bool) -> None:
         if not 1 <= channel <= len(self.relays):
             raise ValueError("Канал реле должен быть в диапазоне 1..32")
         old = self.relays[channel - 1]
         self.relays[channel - 1] = bool(enabled)
         if old != enabled:
-            message = f"{int(old)} -> {int(enabled)}"
+            old_text = "ВКЛ" if old else "ВЫКЛ"
+            new_text = "ВКЛ" if enabled else "ВЫКЛ"
+            message = f"{self.output_name(channel)}: {old_text} → {new_text}"
             if channel == self.outputs["bo_fill"] and old and not enabled:
                 closure = (
                     "команда закрытия; клапан заклинил открытым"

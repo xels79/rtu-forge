@@ -17,7 +17,7 @@ from .bionic_lights import (
     FACTORY_LIGHTS, LightType, ROLE_LABELS, parse_light_profile,
     validate_light_profile,
 )
-from .bionic_model import AlarmState, BionicModel, LevelSensor
+from .bionic_model import AlarmState, BionicModel, LevelSensor, OUTPUT_NAMES
 from .bionic_ponics import (
     PONICS_DEMO_LABEL, PONICS_OPTION_NAMES, PONICS_REGISTER_COUNT, PONICS_REGISTERS,
     PONICS_STATE_LABELS, PONICS_TANK_LABEL,
@@ -32,7 +32,6 @@ DRIVE_SOURCE_NAMES = {"panel":"панель", "terminals":"клеммы", "modbu
 PUMP_FAILURE_NAMES = {"none":"исправен", "jammed":"заклинивание", "impeller_damage":"повреждение рабочего колеса", "motor_failure":"отказ двигателя", "dry_run_wear":"износ после сухого хода", "loss_of_prime":"потеря заливки"}
 PROTECTION_NAMES = {"READY":"готова", "TIMING":"выдержка", "TRIPPED":"авария", "DISABLED":"отключена"}
 EQUIPMENT_STATE_NAMES = {"HEALTHY":"ИСПРАВНО", "DRY_RUNNING":"СУХОЙ ХОД", "OVERHEATED":"ПЕРЕГРЕВ", "DEGRADED":"ДЕГРАДАЦИЯ", "FAILED":"ОТКАЗ"}
-OUTPUT_NAMES = {1:"Насос подпора",2:"Перекачка: осмос → бульон",17:"Возврат: дренаж 1 → бульон",18:"Возврат: дренаж 2 → бульон",19:"Выбор HP1",20:"Выбор HP2",21:"Клапан источника: Осмос",22:"Клапан наполнения осмоса",23:"Клапан источника: Бульон",31:"RUN частотника HP2",32:"RUN частотника HP1"}
 HELP_GROUPS = (
     ("УПРАВЛЕНИЕ СИМУЛЯЦИЕЙ", "\n".join((
         "sim start            Запустить расчёт физики",

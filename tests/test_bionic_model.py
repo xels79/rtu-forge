@@ -45,8 +45,26 @@ def test_incoming_water_meter_logs_total_when_fill_output_closes():
     assert model.water_meter.total_l == pytest.approx(123.0)
     assert events[-1] == (
         "RS485", "do-22",
-        "1 -> 0; подача закрыта; счётчик входящей воды 123.000 л",
+        "Клапан наполнения осмоса: ВКЛ → ВЫКЛ; подача закрыта; "
+        "счётчик входящей воды 123.000 л",
     )
+
+
+@pytest.mark.parametrize(
+    ("channel", "description"),
+    (
+        (1, "Насос подпора"),
+        (3, "Питание света: Стеллаж 1, ярус 1"),
+        (10, "Полив: стеллаж 1, ярус 2"),
+        (15, "Резервный выход"),
+        (32, "RUN частотника HP1"),
+    ),
+)
+def test_every_do_log_has_a_human_readable_description(channel, description):
+    events = []
+    model = BionicModel(lambda kind, subject, message: events.append((kind, subject, message)))
+    model.set_relay(channel, True)
+    assert events[-1] == ("RS485", f"do-{channel}", f"{description}: ВЫКЛ → ВКЛ")
 
 
 def test_max_sensor_below_capacity_does_not_stop_fill_or_mean_overflow():

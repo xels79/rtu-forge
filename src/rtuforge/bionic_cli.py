@@ -873,7 +873,10 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             raise ValueError("Ручное изменение выходов запрещено; перезапустите с --test-mode")
         channel = int(args[1])
         model.set_relay(channel, _on_off(args[2]))
-        ctx.event("ОПЕРАТОР", f"do-{channel}", f"ТЕСТОВОЕ ПРИНУДИТЕЛЬНОЕ {args[2]}")
+        ctx.event(
+            "ОПЕРАТОР", f"do-{channel}",
+            f"{model.output_name(channel)}: ТЕСТОВОЕ ПРИНУДИТЕЛЬНОЕ {args[2]}",
+        )
         return None
     raise ValueError(f"Неизвестная команда: {command}. Используйте help")
 
