@@ -158,6 +158,19 @@ RX 17 44 07 07 01 0E 00 00 A0 3F 00 00 BB 2D
 
 The response payload `00 00 A0 3F` is little-endian float32 `1.25` m³.
 
+Observe the controller's existing USB №1 traffic without sending requests or
+opening the port a second time:
+
+```text
+counter check start
+counter check status
+counter check stop
+```
+
+The session records frames in memory. `stop` writes one JSON report under
+`counter-check-reports`. An absent observed response is reported separately;
+the observer does not claim that firmware itself reached a timeout.
+
 The demo irrigation balance separately tracks calculated tier flow, leaks,
 plant water uptake, and evaporation. `plant_water_uptake_fraction` and
 `irrigation_evaporation_fraction` are per-pass model coefficients; they are

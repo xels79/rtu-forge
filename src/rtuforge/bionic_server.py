@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -17,6 +18,7 @@ from .bionic_pulsar import (
     PULSAR_READ_FRAME_LENGTH, PulsarWaterMeterSlave, is_pulsar_read_header,
 )
 from .crc import has_valid_crc
+from .counter_check import CounterCheck
 
 
 class PortInUseError(RuntimeError):
@@ -69,12 +71,17 @@ class Usb1RequestDispatcher:
 
     def __init__(
         self, bus: ModbusBus, pulsar: PulsarWaterMeterSlave | None = None,
+        counter_check: CounterCheck | None = None,
     ) -> None:
         self.bus = bus
         self.pulsar = pulsar
+        self.counter_check = counter_check
         self.buffer = bytearray()
+        self.frame_started_ns: int | None = None
 
     def feed(self, chunk: bytes) -> list[bytes]:
+        if not self.buffer and chunk:
+            self.frame_started_ns = time.perf_counter_ns()
         self.buffer.extend(chunk)
         return self._drain(end_of_frame=False)
 
@@ -82,7 +89,36 @@ class Usb1RequestDispatcher:
         """Finish a request at the serial inter-frame timeout."""
         responses = self._drain(end_of_frame=True)
         self.buffer.clear()
+        self.frame_started_ns = None
         return responses
+
+    def _observe(self, protocol: str, frame: bytes, response: bytes,
+                 response_started_ns: int, response_completed_ns: int) -> None:
+        if self.counter_check is not None:
+            completed = response_started_ns
+            self.counter_check.observe(
+                protocol, frame, response,
+                rx_started_ns=self.frame_started_ns or completed,
+                rx_completed_ns=completed,
+                response_started_ns=response_started_ns,
+                response_completed_ns=response_completed_ns,
+                model=self.pulsar.model if self.pulsar is not None else None,
+            )
+        self.frame_started_ns = time.perf_counter_ns() if self.buffer else None
+
+    def _modbus(self, frame: bytes) -> bytes:
+        started = time.perf_counter_ns()
+        response = self.bus.handle(frame)
+        completed = time.perf_counter_ns()
+        self._observe("Modbus", frame, response, started, completed)
+        return response
+
+    def _pulsar(self, frame: bytes) -> bytes:
+        started = time.perf_counter_ns()
+        response = self.pulsar.handle(frame) if self.pulsar is not None else b""
+        completed = time.perf_counter_ns()
+        self._observe("Pulsar", frame, response, started, completed)
+        return response
 
     def _drain(self, *, end_of_frame: bool) -> list[bytes]:
         responses: list[bytes] = []
@@ -104,7 +140,7 @@ class Usb1RequestDispatcher:
                     ):
                         frame = bytes(self.buffer[:modbus_length])
                         del self.buffer[:modbus_length]
-                        response = self.bus.handle(frame)
+                        response = self._modbus(frame)
                         if response:
                             responses.append(response)
                         continue
@@ -113,7 +149,7 @@ class Usb1RequestDispatcher:
                 frame = bytes(self.buffer[:PULSAR_READ_FRAME_LENGTH])
                 if has_valid_crc(frame):
                     del self.buffer[:PULSAR_READ_FRAME_LENGTH]
-                    response = self.pulsar.handle(frame) if self.pulsar is not None else b""
+                    response = self._pulsar(frame)
                     if response:
                         responses.append(response)
                     continue
@@ -127,19 +163,21 @@ class Usb1RequestDispatcher:
                 ):
                     frame = bytes(self.buffer[:modbus_length])
                     self.buffer.clear()
-                    response = self.bus.handle(frame)
+                    response = self._modbus(frame)
                     if response:
                         responses.append(response)
                     continue
 
                 del self.buffer[:PULSAR_READ_FRAME_LENGTH]
+                now = time.perf_counter_ns()
+                self._observe("Pulsar", frame, b"", now, now)
                 continue
 
             if modbus_length is None or len(self.buffer) < modbus_length:
                 break
             frame = bytes(self.buffer[:modbus_length])
             del self.buffer[:modbus_length]
-            response = self.bus.handle(frame)
+            response = self._modbus(frame)
             if response:
                 responses.append(response)
         return responses
@@ -149,11 +187,13 @@ class ModbusSlaveServer:
     def __init__(
         self, bus: ModbusBus, transport: SerialSlaveTransport, lock_path: Path,
         pulsar: PulsarWaterMeterSlave | None = None,
+        counter_check: CounterCheck | None = None,
     ) -> None:
         self.bus = bus
         self.transport = transport
         self.lock_path = lock_path
         self.pulsar = pulsar
+        self.counter_check = counter_check
         self._lock_fd: int | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -187,7 +227,7 @@ class ModbusSlaveServer:
         self._thread.start()
 
     def _run(self) -> None:
-        dispatcher = Usb1RequestDispatcher(self.bus, self.pulsar)
+        dispatcher = Usb1RequestDispatcher(self.bus, self.pulsar, self.counter_check)
         try:
             while not self._stop.is_set():
                 chunk = self.transport.read(1)

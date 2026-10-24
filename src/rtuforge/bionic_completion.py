@@ -10,7 +10,7 @@ from .bionic_render import VIEW_NAMES
 
 
 COMMANDS = sorted({
-    "alarm", "devices", "equipment", "exit", "fault", "help", "irrigation", "log",
+    "alarm", "counter", "devices", "equipment", "exit", "fault", "help", "irrigation", "log",
     "light", "pipe", "ponics", "ports", "pressure", "pump", "quit", "relay", "sensor",
     "settings", "sim", "status", "tank", "view",
 })
@@ -39,6 +39,10 @@ def completion_candidates(text: str, *, test_mode: bool = False) -> list[str]:
         candidates = ["settings"]
     elif completed == ["help"]:
         candidates = ["search"]
+    elif completed == ["counter"]:
+        candidates = ["check"]
+    elif completed == ["counter", "check"]:
+        candidates = ["start", "status", "stop"]
     elif completed == ["devices"]:
         candidates = DEVICES
     elif completed == ["tank"]:

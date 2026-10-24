@@ -39,6 +39,9 @@ uv run bionic-immitator --home .\bionic-data help
 
 ```text
 sim start            Запустить расчёт физики
+counter check start  Начать пассивную диагностику счётчика на существующем USB №1
+counter check status Показать состояние диагностической сессии
+counter check stop   Остановить только диагностику и сохранить JSON-отчёт
 sim pause            Приостановить расчёт физики
 sim resume           Продолжить расчёт
 sim speed 1          Нормальная скорость

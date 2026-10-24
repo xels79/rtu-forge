@@ -36,6 +36,9 @@ EQUIPMENT_STATE_NAMES = {"HEALTHY":"ИСПРАВНО", "DRY_RUNNING":"СУХОЙ
 HELP_GROUPS = (
     ("УПРАВЛЕНИЕ СИМУЛЯЦИЕЙ", "\n".join((
         "sim start            Запустить расчёт физики",
+        "counter check start  Пассивно наблюдать Modbus/Pulsar на USB №1",
+        "counter check status Показать счётчики текущей диагностической сессии",
+        "counter check stop   Завершить наблюдение и сохранить JSON-отчёт",
         "sim pause            Приостановить расчёт физики",
         "sim resume           Продолжить расчёт",
         "sim speed 1          Нормальная скорость",
