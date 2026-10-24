@@ -497,6 +497,7 @@ def test_status_pump_fields_are_aligned_for_different_state_lengths(tmp_path, wi
     assert len({line[1].index("СУХОЙ ХОД") for line in before_blocks}) == 1
     assert len({line[1].index("ОТКАЗ") for line in before_blocks}) == 1
     assert all(line[0].index("CMD") == line[1].index("ПОДАЧА") for line in before_blocks)
+    assert all(line[0].index("МОТОР") == line[1].index("СУХОЙ ХОД") for line in before_blocks)
     assert before_blocks[0][0].index("МОТОР") == after_block[0].index("МОТОР")
     assert before_blocks[0][1].index("СУХОЙ ХОД") == after_block[1].index("СУХОЙ ХОД")
     assert before_blocks[0][1].index("ОТКАЗ") == after_block[1].index("ОТКАЗ")

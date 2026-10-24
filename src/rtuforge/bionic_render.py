@@ -452,10 +452,6 @@ def _pump_status_lines(
     dry = ("fault", "ДА") if dry_running else ("inactive", "НЕТ")
     failure_parts = tuple(("fault", failure) for failure in failures) or (("inactive", "ОТКАЗ НЕТ"),)
 
-    first = _styled(
-        f"{name:<{name_width}} CMD ", command,
-        " | МОТОР ", motor, model_note,
-    )
     failure_cells: list[StyledLine] = []
     for style, failure in failure_parts:
         if failure.startswith("ОТКАЗ "):
@@ -473,6 +469,12 @@ def _pump_status_lines(
         column_widths = (21, 15, available - 36)
     else:
         column_widths = (14, 13, max(1, available - 27))
+    command_cell = _styled("CMD ", command)
+    first = _styled(
+        f"{name:<{name_width}} ",
+        *_fit_fragments(command_cell, column_widths[0], pad=True),
+        " | МОТОР ", motor, model_note,
+    )
     cells = [
         _styled("ПОДАЧА ", flow),
         _styled("СУХОЙ ХОД ", dry),
