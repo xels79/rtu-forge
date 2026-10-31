@@ -18,6 +18,7 @@ GENERAL_HELP: dict[str, str] = {
   scan [start [end]] [options]    Find Modbus RTU devices by slave ID
   send [-d|--decode|-r|--raw] <hex...>
                                   Send one Modbus RTU frame
+  pulsar ...                      Read/manage proprietary Pulsar RS-485 meters
   add script <name>               Capture commands until 'end script'
   run script <name> [-d|-r]       Run a stored script
   run file <file> [options]        Run a portable script file without importing
@@ -54,6 +55,7 @@ Use 'help run', 'help export' and 'help import' for portable file details.
   scan [начало [конец]] [опции]   Найти Modbus RTU устройства по slave ID
   send [-d|--decode|-r|--raw] <hex...>
                                   Отправить один Modbus RTU кадр
+  pulsar ...                      Чтение и параметры счётчиков «Пульсар»
   add script <name>               Записать скрипт до команды 'end script'
   run script <name> [-d|-r]       Запустить сохранённый скрипт
   run file <файл> [опции]          Запустить переносимый файл без импорта
@@ -778,3 +780,7 @@ for _language in SUPPORTED_LANGUAGES:
         HELP[_language][_topic] = _script_help
     HELP[_language]["scripts"] += "\n" + _script_help
     CLI_TEXT[_language]["epilog"] += "  rtuforge --scripts pump.ini run script pump-test\n  rtuforge help script\n"
+
+
+HELP["en"]["pulsar"] = "Pulsar proprietary RS-485 protocol; use help pulsar for all commands."
+HELP["ru"]["pulsar"] = "Собственный RS-485 протокол «Пульсар»; все команды: help pulsar."

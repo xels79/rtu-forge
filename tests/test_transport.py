@@ -17,9 +17,7 @@ class FakeSerial:
 
     def write(self, data: bytes):
         self.written = data
-
-    def flush(self):
-        pass
+        return len(data)
 
     @property
     def in_waiting(self):
@@ -69,3 +67,56 @@ def test_exchange_append_override_handles_scan_probe_crc_collision():
     assert exchange.tx == append_crc(probe)
     assert len(exchange.tx) == 8
     assert fake_serial.written == append_crc(probe)
+
+
+def test_connect_sets_read_and_write_timeouts(monkeypatch):
+    config = load_config(Path("config.ini"))
+    config["connection"]["timeout_ms"] = "25"
+    created = []
+
+    class OpeningSerial:
+        def __init__(self, **kwargs):
+            created.append((self, kwargs))
+            self.is_open = False
+            self.port = None
+
+        def open(self):
+            self.is_open = True
+
+        def close(self):
+            self.is_open = False
+
+    monkeypatch.setattr("rtuforge.transport.serial.Serial", OpeningSerial)
+    transport = SerialTransport(config)
+
+    transport.connect()
+
+    assert transport.connected
+    _, kwargs = created[0]
+    assert kwargs["port"] is None
+    assert kwargs["timeout"] == 0.025
+    assert kwargs["write_timeout"] == 0.025
+
+
+def test_exchange_disconnects_after_serial_write_error():
+    import serial
+
+    config = load_config(Path("config.ini"))
+    fake_serial = FakeSerial(b"")
+
+    def fail_write(data: bytes):
+        raise serial.SerialTimeoutException("write timeout")
+
+    fake_serial.write = fail_write
+    transport = SerialTransport(config)
+    transport.serial = fake_serial
+
+    try:
+        transport.exchange(build_probe(1), timeout_ms=1, crc_mode_override="append")
+    except serial.SerialTimeoutException:
+        pass
+    else:
+        raise AssertionError("expected SerialTimeoutException")
+
+    assert not transport.connected
+    assert transport.serial is None

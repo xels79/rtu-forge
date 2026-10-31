@@ -155,6 +155,17 @@ def main() -> int:
         )
         return 1
 
+    if args.command and args.command[0].lower() == "aircon":
+        from .aircon_cli import run_aircon
+
+        return run_aircon(
+            args.command[1:],
+            home=paths.home,
+            base_config=config,
+            overrides=overrides,
+            console=_console(),
+        )
+
     console = _console()
     ctx = CommandContext(
         config_path=config_path,
