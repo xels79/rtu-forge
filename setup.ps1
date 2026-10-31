@@ -119,6 +119,12 @@ if ($LASTEXITCODE -ne 0) {
 if ($LASTEXITCODE -ne 0) {
     throw "rtuforge paths self-check failed with exit code $LASTEXITCODE"
 }
+if (Test-Path -LiteralPath (Join-Path $DataDir "config.ini") -PathType Leaf) {
+    & $RtuForgeExe aircon --demo --snapshot | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        throw "rtuforge aircon demo self-check failed with exit code $LASTEXITCODE"
+    }
+}
 & $StandForgeExe --help | Out-Null
 if ($LASTEXITCODE -ne 0) {
     throw "standforge --help self-check failed with exit code $LASTEXITCODE"

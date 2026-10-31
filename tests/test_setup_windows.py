@@ -48,6 +48,7 @@ def test_setup_ps1_shortcut_and_self_check_are_explicit():
     assert "$Shortcut.WorkingDirectory = $WorkingDir" in text
     assert "& $RtuForgeExe --help" in text
     assert "& $RtuForgeExe paths" in text
+    assert "& $RtuForgeExe aircon --demo --snapshot" in text
     assert "$BionicShortcut.TargetPath = $BionicImmitatorExe" in text
     assert "& $BionicImmitatorExe --help" in text
 

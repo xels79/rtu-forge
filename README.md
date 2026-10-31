@@ -14,6 +14,7 @@ RTU Forge is a compact Python console for raw Modbus RTU work, reusable scripts,
 - Recording of TX+RX or RX-only data to clipboard or UTF-8 files.
 - One-command script recording with decode and clean-output flags.
 - Windows COM and Linux `/dev/tty*` serial paths.
+- Full-screen Russian Hisense/ONOKOM air-conditioner console with a hardware-free demo mode.
 
 ## Windows setup
 
@@ -55,6 +56,24 @@ Verify the active locations from any directory:
 ```powershell
 rtuforge paths
 ```
+
+## Hisense air-conditioner console
+
+The separate full-screen application for Hisense AUC-18HR4SAA1 with the
+ONOKOM HS-A6 / HS-6-MB-B gateway is started from CMD with:
+
+```cmd
+rtuforge.exe aircon
+rtuforge.exe --port COM7 --baudrate 9600 --bytesize 8 --parity N --stopbits 2 aircon
+rtuforge.exe aircon --demo
+```
+
+It uses the existing `SerialTransport`, keeps its settings in a separate
+`aircon.ini` under the RTU Forge DataDir, and never writes to the gateway until
+the user explicitly enters `on`, `off`, `temp`, `mode`, or `fan`. CLI connection
+parameters take precedence over `aircon.ini`. The complete Russian installation,
+wiring, settings, commands, register list, and first-connection guide is in
+[docs/AIRCON-RU.md](docs/AIRCON-RU.md).
 
 ## Development launch
 
