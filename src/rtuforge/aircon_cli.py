@@ -7,7 +7,7 @@ import configparser
 import copy
 import shlex
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -43,20 +43,22 @@ class AirconContext:
     notice: str = "Готово"
     ports: list[str] | None = None
     _last_log_signature: tuple[bool, bool, str | None] | None = None
+    operation_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def refresh(self) -> AirconState:
-        draft = replace(self.state)
-        updated = self.client.refresh(draft)
-        self.state = updated
-        signature = (updated.gateway_online, updated.aircon_online, updated.last_error)
-        if signature != self._last_log_signature:
-            self._last_log_signature = signature
-            self.log_event(
-                f"связь: шлюз={'да' if updated.gateway_online else 'нет'}, "
-                f"кондиционер={'да' if updated.aircon_online else 'нет'}, "
-                f"ошибка={updated.last_error or 'нет'}"
-            )
-        return updated
+        with self.operation_lock:
+            draft = replace(self.state)
+            updated = self.client.refresh(draft)
+            self.state = updated
+            signature = (updated.gateway_online, updated.aircon_online, updated.last_error)
+            if signature != self._last_log_signature:
+                self._last_log_signature = signature
+                self.log_event(
+                    f"связь: шлюз={'да' if updated.gateway_online else 'нет'}, "
+                    f"кондиционер={'да' if updated.aircon_online else 'нет'}, "
+                    f"ошибка={updated.last_error or 'нет'}"
+                )
+            return updated
 
     def show(self, view: str) -> None:
         if self.view != view:
@@ -174,19 +176,21 @@ def execute_command(ctx: AirconContext, line: str) -> str | None:
     if command == "connect":
         if args:
             raise ValueError("использование: connect")
-        ctx.client.connect()
-        state = ctx.refresh()
+        with ctx.operation_lock:
+            ctx.client.connect()
+            state = ctx.refresh()
         ctx.notice = "Подключено, состояние прочитано" if state.gateway_online else f"Подключено, но {state.last_error}"
         ctx.log_event("команда connect")
         return None
     if command == "disconnect":
         if args:
             raise ValueError("использование: disconnect")
-        ctx.client.disconnect()
-        ctx.state.gateway_online = False
-        ctx.state.aircon_online = False
-        ctx.state.fresh = False
-        ctx.state.clear_measurements()
+        with ctx.operation_lock:
+            ctx.client.disconnect()
+            ctx.state.gateway_online = False
+            ctx.state.aircon_online = False
+            ctx.state.fresh = False
+            ctx.state.clear_measurements()
         ctx.notice = "Отключено"
         ctx.log_event("команда disconnect")
         return None
@@ -201,15 +205,16 @@ def execute_command(ctx: AirconContext, line: str) -> str | None:
     if command == "set":
         if len(args) != 2:
             raise ValueError("использование: set <имя> <значение>")
-        candidate = changed_setting(ctx.persisted_settings, args[0], args[1])
-        connection_fields = {"port", "baudrate", "bytesize", "parity", "stopbits", "timeout_ms"}
-        if args[0].replace("-", "_").casefold() in connection_fields and ctx.transport.connected:
-            ctx.client.disconnect()
-        save_aircon_settings(ctx.settings_path, candidate)
-        ctx.persisted_settings = candidate
-        ctx.settings = _effective_settings(candidate, ctx.overrides)
-        ctx.client.settings = ctx.settings
-        _apply_connection(ctx.config, ctx.settings)
+        with ctx.operation_lock:
+            candidate = changed_setting(ctx.persisted_settings, args[0], args[1])
+            connection_fields = {"port", "baudrate", "bytesize", "parity", "stopbits", "timeout_ms"}
+            if args[0].replace("-", "_").casefold() in connection_fields and ctx.transport.connected:
+                ctx.client.disconnect()
+            save_aircon_settings(ctx.settings_path, candidate)
+            ctx.persisted_settings = candidate
+            ctx.settings = _effective_settings(candidate, ctx.overrides)
+            ctx.client.settings = ctx.settings
+            _apply_connection(ctx.config, ctx.settings)
         ctx.notice = f"Сохранено: {args[0]}={args[1]}"
         ctx.log_event(f"изменена настройка {args[0]}")
         return None
@@ -219,7 +224,7 @@ def execute_command(ctx: AirconContext, line: str) -> str | None:
         if args:
             raise ValueError(f"использование: {command}")
         expected = command == "on"
-        with ctx.client.lock:
+        with ctx.operation_lock:
             ctx.client.write_coil(1, expected)
             state = _confirmed(ctx)
         if state.power is not expected:
@@ -236,7 +241,7 @@ def execute_command(ctx: AirconContext, line: str) -> str | None:
             raise ValueError("температура должна быть целым числом 16..30") from None
         if not temperature.is_integer() or not 16 <= temperature <= 30:
             raise ValueError("температура должна быть целым числом 16..30")
-        with ctx.client.lock:
+        with ctx.operation_lock:
             ctx.client.write_register(5, int(temperature * 100))
             state = _confirmed(ctx)
         if state.target_temperature_c != temperature:
@@ -248,7 +253,7 @@ def execute_command(ctx: AirconContext, line: str) -> str | None:
         if len(args) != 1 or args[0].casefold() not in MODE_VALUES:
             raise ValueError("использование: mode heat|cool|auto|dry|fan")
         expected = MODE_VALUES[args[0].casefold()]
-        with ctx.client.lock:
+        with ctx.operation_lock:
             ctx.client.write_register(1, expected)
             state = _confirmed(ctx)
         if state.mode != expected:
@@ -260,7 +265,7 @@ def execute_command(ctx: AirconContext, line: str) -> str | None:
         if len(args) != 1 or args[0].casefold() not in {"auto", "1", "2", "3", "авто"}:
             raise ValueError("использование: fan auto|1|2|3")
         expected = 0 if args[0].casefold() in {"auto", "авто"} else int(args[0])
-        with ctx.client.lock:
+        with ctx.operation_lock:
             ctx.client.write_register(7, expected)
             state = _confirmed(ctx)
         if state.fan != expected:
@@ -283,12 +288,17 @@ class Poller:
 
     def stop(self) -> None:
         self.stop_event.set()
-        self.thread.join(timeout=max(1.0, self.ctx.settings.timeout_ms / 1000 + 0.2))
+        self.thread.join()
 
     def _run(self) -> None:
         while not self.stop_event.wait(self.ctx.settings.poll_interval_ms / 1000):
-            if self.ctx.transport.connected:
+            with self.ctx.operation_lock:
+                if self.stop_event.is_set():
+                    break
+                if not self.ctx.transport.connected:
+                    continue
                 self.ctx.refresh()
+            if not self.stop_event.is_set():
                 self.invalidate()
 
 
@@ -319,4 +329,5 @@ def run_aircon(
         Console(stderr=True, highlight=False).print(f"Ошибка aircon: {exc}", markup=False)
         return 1
     finally:
-        ctx.client.disconnect()
+        with ctx.operation_lock:
+            ctx.client.disconnect()

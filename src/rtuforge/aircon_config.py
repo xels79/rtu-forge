@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+import math
 from dataclasses import dataclass, fields, replace
 from pathlib import Path
 
@@ -74,7 +75,11 @@ def validate_aircon_settings(settings: AirconSettings) -> None:
         raise ValueError("тип регистра влажности: holding или input")
     if not 0 <= settings.humidity_address <= 65535:
         raise ValueError("адрес регистра влажности должен быть в диапазоне 0..65535")
-    if settings.humidity_scale <= 0 or settings.humidity_stale_ms <= 0:
+    if (
+        not math.isfinite(settings.humidity_scale)
+        or settings.humidity_scale <= 0
+        or settings.humidity_stale_ms <= 0
+    ):
         raise ValueError("коэффициент и срок свежести влажности должны быть больше нуля")
     if not settings.diagnostic_log.strip():
         raise ValueError("путь диагностического журнала не может быть пустым")

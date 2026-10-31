@@ -24,6 +24,8 @@ def _value(value: object | None, fallback: str = "НЕТ СВЕЖИХ ДАННЫ
 def humidity_text(state: AirconState, settings: AirconSettings, *, now: datetime | None = None) -> str:
     if not settings.humidity_enabled:
         return "НЕТ ДАТЧИКА"
+    if state.humidity_error is not None:
+        return "НЕТ СВЕЖИХ ДАННЫХ"
     if state.humidity_percent is None or state.humidity_updated_at is None:
         return "НЕТ СВЕЖИХ ДАННЫХ"
     current = datetime.now() if now is None else now

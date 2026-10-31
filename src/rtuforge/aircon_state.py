@@ -35,6 +35,7 @@ class AirconState:
     exchanger_temperature_c: float | None = None
     humidity_percent: float | None = None
     humidity_updated_at: datetime | None = None
+    humidity_error: str | None = None
     last_response_at: datetime | None = None
     timeout_count: int = 0
     crc_error_count: int = 0

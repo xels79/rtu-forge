@@ -201,22 +201,32 @@ class AirconModbusClient:
         if not self.settings.humidity_enabled:
             state.humidity_percent = None
             state.humidity_updated_at = None
+            state.humidity_error = None
             return
         function = 3 if self.settings.humidity_register_type == "holding" else 4
         try:
             raw = self.read_registers(
                 self.settings.humidity_slave_id, function, self.settings.humidity_address
             )[0]
-            state.humidity_percent = signed(raw) * self.settings.humidity_scale
+            value = signed(raw) * self.settings.humidity_scale
+            if not 0 <= value <= 100:
+                state.humidity_error = f"влажность вне диапазона 0..100 %: {value:g}"
+                state.exchange_error_count += 1
+                return
+            state.humidity_percent = value
             state.humidity_updated_at = datetime.now()
-        except ModbusTimeout:
+            state.humidity_error = None
+        except ModbusTimeout as exc:
+            state.humidity_error = str(exc)
             state.exchange_error_count += 1
             state.timeout_count += 1
-        except ModbusCrcError:
+        except ModbusCrcError as exc:
+            state.humidity_error = str(exc)
             state.exchange_error_count += 1
             state.crc_error_count += 1
-        except (ModbusError, OSError, RuntimeError):
+        except (ModbusError, OSError, RuntimeError) as exc:
             # A humidity sensor failure must not turn a healthy AC gateway offline.
+            state.humidity_error = str(exc)
             state.exchange_error_count += 1
 
 
