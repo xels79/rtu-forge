@@ -17,6 +17,7 @@ from rich.console import Console
 from rtuforge import aircon_cli, cli
 from rtuforge.aircon_cli import Poller, execute_command, make_context, run_aircon
 from rtuforge.aircon_config import AirconSettings, changed_setting, load_aircon_settings, save_aircon_settings
+from rtuforge.aircon_diag import collect_diagnostics, run_diagnostics
 from rtuforge.aircon_modbus import (
     AirconModbusClient,
     DemoTransport,
@@ -168,6 +169,48 @@ def test_gateway_and_aircon_link_are_distinct(tmp_path: Path):
     assert ctx.state.aircon_online is False
     assert ctx.state.fresh is False
     assert ctx.state.room_temperature_c is None
+
+
+def test_read_only_diagnostics_continue_after_coil_twenty_is_zero(tmp_path: Path):
+    ctx = demo_context(tmp_path)
+    ctx.transport.coils[20] = False
+    results = collect_diagnostics(ctx.client)
+
+    assert [request.hex(" ").upper() for request in ctx.transport.requests] == [
+        "01 01 00 14 00 01",
+        "01 01 00 01 00 01",
+        "01 03 00 01 00 03",
+        "01 03 00 05 00 03",
+    ]
+    assert all(request[1] in {1, 3} for request in ctx.transport.requests)
+    assert all(result.error is None for result in results)
+    assert results[0].decoded == "Coil 20 = 0 — кондиционер НЕТ СВЯЗИ"
+    assert "Holding 1=2" in (results[2].decoded or "")
+    assert "23.00 °C" in (results[3].decoded or "")
+
+
+def test_diagnostics_show_modbus_exception_and_write_log(tmp_path: Path):
+    ctx = demo_context(tmp_path)
+    ctx.demo = False
+    original_exchange = ctx.transport.exchange
+
+    def exception_on_operation(request, **kwargs):
+        if request[1] == 3 and request[2:4] == bytes.fromhex("00 01"):
+            from rtuforge.transport import Exchange
+            response = append_crc(bytes.fromhex("01 83 02"))
+            return Exchange(append_crc(request), response, 2.5)
+        return original_exchange(request, **kwargs)
+
+    ctx.transport.exchange = exception_on_operation
+    stream = io.StringIO()
+    console = Console(file=stream, force_terminal=False, highlight=False)
+    assert not run_diagnostics(ctx.client, console, log_event=ctx.log_event)
+    output = stream.getvalue()
+    assert "RX: 01 83 02 C0 F1" in output
+    assert "исключение Modbus 02" in output
+    log = (tmp_path / "aircon.log").read_text(encoding="utf-8")
+    assert "TX=01 03 00 01 00 03 54 0B" in log
+    assert "RX=01 83 02 C0 F1" in log
 
 
 def test_gateway_stays_online_when_a_later_state_read_times_out(tmp_path: Path):
@@ -436,6 +479,20 @@ def test_rtuforge_aircon_demo_snapshot_launches_without_hardware(tmp_path: Path,
     assert "HISENSE AUC-18HR4SAA1" in output
     assert "НА СВЯЗИ" in output
     assert not (tmp_path / "aircon.ini").exists()
+
+
+def test_rtuforge_aircon_diag_is_available_as_read_only_command(
+    tmp_path: Path, monkeypatch, capsys
+):
+    (tmp_path / "config.ini").write_bytes(Path("config.ini").read_bytes())
+    monkeypatch.setattr(
+        sys, "argv", ["rtuforge", "--home", str(tmp_path), "aircon", "--demo", "diag"]
+    )
+    assert cli.main() == 0
+    output = capsys.readouterr().out
+    assert "AIRCON DIAG" in output
+    assert "TX: 01 01 00 14 00 01 BD CE" in output
+    assert "CRC: OK" in output
 
 
 def test_demo_snapshot_is_safe_when_windows_code_page_lacks_box_drawing(tmp_path: Path):

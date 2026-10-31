@@ -66,6 +66,7 @@ ONOKOM HS-A6 / HS-6-MB-B gateway is started from CMD with:
 rtuforge.exe aircon
 rtuforge.exe --port COM7 --baudrate 9600 --bytesize 8 --parity N --stopbits 2 aircon
 rtuforge.exe aircon --demo
+rtuforge.exe --port COM4 --baudrate 9600 --bytesize 8 --parity N --stopbits 2 aircon diag
 ```
 
 It uses the existing `SerialTransport`, keeps its settings in a separate
@@ -74,6 +75,10 @@ the user explicitly enters `on`, `off`, `temp`, `mode`, or `fan`. CLI connection
 parameters take precedence over `aircon.ini`. The complete Russian installation,
 wiring, settings, commands, register list, and first-connection guide is in
 [docs/AIRCON-RU.md](docs/AIRCON-RU.md).
+
+`aircon diag` is read-only. It sends the documented FC01/FC03 probes for Coil 20,
+Coil 1, Holding 1..3, and Holding 5..7, prints complete TX/RX/CRC/timing details,
+and appends the same results to the configured diagnostic log.
 
 ## Development launch
 

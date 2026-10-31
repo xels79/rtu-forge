@@ -310,11 +310,19 @@ def run_aircon(
     parser.add_argument("--aircon-config", type=Path)
     parser.add_argument("--demo", "--mock", action="store_true", dest="demo")
     parser.add_argument("--snapshot", action="store_true", help="показать один экран и выйти")
+    parser.add_argument("command", nargs="?", choices=("diag",))
     args = parser.parse_args(argv)
     settings_path = args.aircon_config.resolve() if args.aircon_config else None
     output = console or Console(highlight=False)
     ctx = make_context(home, base_config, overrides, settings_path=settings_path, demo=args.demo)
     try:
+        if args.command == "diag":
+            from .aircon_diag import run_diagnostics
+
+            ctx.client.connect()
+            return int(not run_diagnostics(
+                ctx.client, output, log_event=ctx.log_event
+            ))
         if args.demo or ctx.settings.auto_connect:
             ctx.client.connect()
             ctx.refresh()
