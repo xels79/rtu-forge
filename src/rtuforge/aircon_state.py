@@ -33,6 +33,8 @@ class AirconState:
     thermostat: int | None = None
     fan: int | None = None
     exchanger_temperature_c: float | None = None
+    temperature_placeholder_count: int = 0
+    temperature_telemetry_note: str | None = None
     humidity_percent: float | None = None
     humidity_updated_at: datetime | None = None
     humidity_error: str | None = None
@@ -63,3 +65,5 @@ class AirconState:
         self.thermostat = None
         self.fan = None
         self.exchanger_temperature_c = None
+        self.temperature_placeholder_count = 0
+        self.temperature_telemetry_note = None

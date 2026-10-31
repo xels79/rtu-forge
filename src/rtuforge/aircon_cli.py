@@ -42,7 +42,7 @@ class AirconContext:
     previous_view: str = "status"
     notice: str = "Готово"
     ports: list[str] | None = None
-    _last_log_signature: tuple[bool, bool, str | None] | None = None
+    _last_log_signature: tuple[bool, bool, str | None, str | None] | None = None
     operation_lock: threading.RLock = field(default_factory=threading.RLock, repr=False)
 
     def refresh(self) -> AirconState:
@@ -50,13 +50,19 @@ class AirconContext:
             draft = replace(self.state)
             updated = self.client.refresh(draft)
             self.state = updated
-            signature = (updated.gateway_online, updated.aircon_online, updated.last_error)
+            signature = (
+                updated.gateway_online,
+                updated.aircon_online,
+                updated.last_error,
+                updated.temperature_telemetry_note,
+            )
             if signature != self._last_log_signature:
                 self._last_log_signature = signature
                 self.log_event(
                     f"связь: шлюз={'да' if updated.gateway_online else 'нет'}, "
                     f"кондиционер={'да' if updated.aircon_online else 'нет'}, "
-                    f"ошибка={updated.last_error or 'нет'}"
+                    f"ошибка={updated.last_error or 'нет'}, "
+                    f"телеметрия={updated.temperature_telemetry_note or 'без предупреждений'}"
                 )
             return updated
 

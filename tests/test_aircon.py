@@ -101,6 +101,46 @@ def test_demo_refresh_reads_power_temperature_mode_and_no_writes(tmp_path: Path)
     assert all(request[1] in {1, 3, 4} for request in ctx.transport.requests)
 
 
+def test_confirmed_temperature_placeholder_pair_becomes_no_data(tmp_path: Path):
+    ctx = demo_context(tmp_path)
+    ctx.demo = False
+    ctx.transport.registers[3] = 0
+    ctx.transport.registers[23] = 0xF830
+
+    ctx.refresh()
+    ctx.refresh()
+    assert ctx.state.room_temperature_c == 0.0
+    assert ctx.state.exchanger_temperature_c == -20.0
+    assert ctx.state.temperature_telemetry_note is None
+
+    ctx.refresh()
+    assert ctx.state.room_temperature_c is None
+    assert ctx.state.exchanger_temperature_c is None
+    assert "validity-флага" in (ctx.state.temperature_telemetry_note or "")
+    screen = "\n".join(render_status_lines(ctx.state, ctx.settings, width=90, height=30))
+    assert "Температура сейчас: НЕТ ДАННЫХ" in screen
+    assert "Теплообменник:       НЕТ ДАННЫХ" in screen
+    log = (tmp_path / "aircon.log").read_text(encoding="utf-8")
+    assert "Holding 3=0x0000" in log
+    assert "Holding 23=0xF830" in log
+
+
+def test_individual_zero_and_minus_twenty_remain_valid_temperatures(tmp_path: Path):
+    ctx = demo_context(tmp_path)
+    ctx.transport.registers[3] = 100
+    ctx.transport.registers[23] = 0xF830
+    ctx.refresh()
+    assert ctx.state.room_temperature_c == 1.0
+    assert ctx.state.exchanger_temperature_c == -20.0
+
+    ctx.transport.registers[3] = 0
+    ctx.transport.registers[23] = 100
+    ctx.refresh()
+    assert ctx.state.room_temperature_c == 0.0
+    assert ctx.state.exchanger_temperature_c == 1.0
+    assert ctx.state.temperature_telemetry_note is None
+
+
 @pytest.mark.parametrize("value", ["15", "16.5", "31", "bad"])
 def test_temperature_command_rejects_invalid_value_before_write(tmp_path: Path, value: str):
     ctx = demo_context(tmp_path)
@@ -178,15 +218,38 @@ def test_read_only_diagnostics_continue_after_coil_twenty_is_zero(tmp_path: Path
 
     assert [request.hex(" ").upper() for request in ctx.transport.requests] == [
         "01 01 00 14 00 01",
+        "01 01 00 64 00 01",
         "01 01 00 01 00 01",
         "01 03 00 01 00 03",
         "01 03 00 05 00 03",
+        "01 03 00 15 00 01",
+        "01 03 00 17 00 01",
+        "01 03 00 20 00 01",
+        "01 03 00 C8 00 14",
+        "01 03 00 FA 00 10",
+        "01 03 01 22 00 0C",
     ]
     assert all(request[1] in {1, 3} for request in ctx.transport.requests)
     assert all(result.error is None for result in results)
     assert results[0].decoded == "Coil 20 = 0 — кондиционер НЕТ СВЯЗИ"
-    assert "Holding 1=2" in (results[2].decoded or "")
-    assert "23.00 °C" in (results[3].decoded or "")
+    assert "Holding 1=2" in (results[3].decoded or "")
+    assert "23.00 °C" in (results[4].decoded or "")
+
+
+def test_diagnostics_explain_ambiguous_temperature_pair(tmp_path: Path):
+    ctx = demo_context(tmp_path)
+    ctx.transport.registers[3] = 0
+    ctx.transport.registers[23] = 0xF830
+    stream = io.StringIO()
+    console = Console(file=stream, force_terminal=False, highlight=False)
+
+    assert run_diagnostics(ctx.client, console)
+    output = stream.getvalue()
+    assert "Holding 3=0x0000 (0; 0.00 °C)" in output
+    assert "Holding 23=0xF830 (-2000; -20.00 °C)" in output
+    assert "Holding 21=0x0000 (0 %)" in output
+    assert "Holding 32=0x0000 (0; фактическая скорость 1..3)" in output
+    assert "validity-флага в протоколе нет" in output
 
 
 def test_diagnostics_show_modbus_exception_and_write_log(tmp_path: Path):

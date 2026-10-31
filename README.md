@@ -76,9 +76,11 @@ parameters take precedence over `aircon.ini`. The complete Russian installation,
 wiring, settings, commands, register list, and first-connection guide is in
 [docs/AIRCON-RU.md](docs/AIRCON-RU.md).
 
-`aircon diag` is read-only. It sends the documented FC01/FC03 probes for Coil 20,
-Coil 1, Holding 1..3, and Holding 5..7, prints complete TX/RX/CRC/timing details,
-and appends the same results to the configured diagnostic log.
+`aircon diag` is read-only. It sends documented FC01/FC03 probes for connection,
+temperature, thermostat, configured/actual fan speed, compressor power, and
+gateway identity/version data. It prints complete TX/RX/CRC/timing details,
+records raw signed values and temperature-availability notes, and appends the
+same results to the configured diagnostic log.
 
 ## Development launch
 

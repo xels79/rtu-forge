@@ -52,6 +52,7 @@ def render_status_lines(
     room = None if not fresh or state.room_temperature_c is None else f"{state.room_temperature_c:+.2f} °C"
     target = None if not fresh or state.target_temperature_c is None else f"{state.target_temperature_c:+.1f} °C"
     exchanger = None if not fresh or state.exchanger_temperature_c is None else f"{state.exchanger_temperature_c:+.2f} °C"
+    temperature_fallback = "НЕТ ДАННЫХ" if fresh else "НЕТ СВЕЖИХ ДАННЫХ"
     displayed_mode = state.active_mode if fresh else None
     lines = [
         _fit("HISENSE AUC-18HR4SAA1 | ONOKOM HS-6-MB-B", width),
@@ -64,9 +65,9 @@ def render_status_lines(
         _fit(f"Термостат:     {_value(THERMOSTAT_NAMES.get(state.thermostat) if fresh else None)}", width),
         _fit(f"Вентилятор:    {_value(FAN_NAMES.get(state.fan) if fresh else None)}", width),
         _section("КЛИМАТ", width),
-        _fit(f"Температура сейчас: {_value(room)}", width),
+        _fit(f"Температура сейчас: {_value(room, temperature_fallback)}", width),
         _fit(f"Температура задана: {_value(target)}", width),
-        _fit(f"Теплообменник:       {_value(exchanger)}", width),
+        _fit(f"Теплообменник:       {_value(exchanger, temperature_fallback)}", width),
         _fit(f"Влажность, %:        {humidity_text(state, settings)}", width),
         _section("ДИАГНОСТИКА", width),
         _fit(f"Последний ответ: {_value(state.last_response_at.strftime('%d.%m.%Y %H:%M:%S') if state.last_response_at else None, '—')}", width),

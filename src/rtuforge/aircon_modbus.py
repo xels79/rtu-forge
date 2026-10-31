@@ -15,6 +15,13 @@ from .aircon_state import AirconState
 from .crc import append_crc, has_valid_crc
 
 
+# On the diagnosed AUC-18HR4SAA1 + HS-A6 C combination, the gateway repeats
+# this pair while live setpoint and fan data continue to change.  Neither value
+# alone is a sentinel: 0.00 C and -20.00 C are both inside documented ranges.
+_UNAVAILABLE_TEMPERATURE_PAIR = (0, -2000)
+_UNAVAILABLE_TEMPERATURE_CONFIRMATIONS = 3
+
+
 class Transport(Protocol):
     connected: bool
 
@@ -95,6 +102,29 @@ def signed(raw: int) -> int:
     return raw - 0x10000 if raw & 0x8000 else raw
 
 
+def update_aircon_temperatures(
+    state: AirconState, room_raw: int, exchanger_raw: int
+) -> None:
+    """Decode temperatures and suppress only the confirmed placeholder pair."""
+    values = (signed(room_raw), signed(exchanger_raw))
+    if values == _UNAVAILABLE_TEMPERATURE_PAIR:
+        state.temperature_placeholder_count += 1
+        if state.temperature_placeholder_count >= _UNAVAILABLE_TEMPERATURE_CONFIRMATIONS:
+            state.room_temperature_c = None
+            state.exchanger_temperature_c = None
+            state.temperature_telemetry_note = (
+                "Holding 3=0x0000 и Holding 23=0xF830 повторились "
+                f"{state.temperature_placeholder_count} раза: телеметрия температур "
+                "не подтверждена, отдельного validity-флага в протоколе нет"
+            )
+            return
+    else:
+        state.temperature_placeholder_count = 0
+        state.temperature_telemetry_note = None
+    state.room_temperature_c = values[0] * 0.01
+    state.exchanger_temperature_c = values[1] * 0.01
+
+
 class AirconModbusClient:
     """Single-owner transaction layer shared by polling and UI commands."""
 
@@ -171,11 +201,11 @@ class AirconModbusClient:
             climate = self.read_registers(slave, 3, 5, 3)
             state.mode = operation[0]
             state.active_mode = operation[1]
-            state.room_temperature_c = signed(operation[2]) * 0.01
             state.target_temperature_c = signed(climate[0]) * 0.01
             state.thermostat = climate[1]
             state.fan = climate[2]
-            state.exchanger_temperature_c = signed(self.read_registers(slave, 3, 23)[0]) * 0.01
+            exchanger_raw = self.read_registers(slave, 3, 23)[0]
+            update_aircon_temperatures(state, operation[2], exchanger_raw)
             state.fresh = True
             self._read_humidity(state)
         except ModbusTimeout as exc:
