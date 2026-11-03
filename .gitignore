@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 .rtuforge_history
 .DS_Store
+.uv-cache/
+.pytest-tmp*/
+.pytest-check*/
+.test-cache/
