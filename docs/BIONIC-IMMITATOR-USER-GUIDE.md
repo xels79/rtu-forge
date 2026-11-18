@@ -1,6 +1,6 @@
 # Bionic Immitator — инструкция пользователя
 
-Инструкция относится к ветке `feature/standforge`. Команды и значения по умолчанию сверены с текущим исходным кодом. Значения физической модели являются демонстрационными, если прямо не указано обратное.
+Инструкция относится к рабочей ветке `main`. Команды и значения по умолчанию сверены с текущим исходным кодом. Значения физической модели являются демонстрационными, если прямо не указано обратное.
 
 ## Оглавление
 
@@ -94,7 +94,7 @@ Bionic Mini (master) <====================> ПК: виртуальные slave
 ## 5. Установка в Windows
 
 ```powershell
-git clone --branch feature/standforge git@github.com:xels79/rtu-forge.git
+git clone --branch main git@github.com:xels79/rtu-forge.git
 Set-Location rtu-forge
 .\setup.ps1
 rtuforge paths
@@ -106,7 +106,7 @@ SSH можно заменить HTTPS. Установка выполняется
 Обновление:
 
 ```powershell
-git switch feature/standforge
+git switch main
 git pull --ff-only
 .\setup.ps1
 ```
@@ -122,7 +122,7 @@ bionic-immitator --home C:\Bionic\test-01 --no-controller
 ## 6. Установка в Linux
 
 ```bash
-git clone --branch feature/standforge git@github.com:xels79/rtu-forge.git
+git clone --branch main git@github.com:xels79/rtu-forge.git
 cd rtu-forge
 chmod +x setup.sh
 ./setup.sh

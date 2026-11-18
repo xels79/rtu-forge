@@ -1,1364 +1,204 @@
-# RTU Forge
+# RTU Forge: установка, запуск и справка
 
-RTU Forge is a compact Python console for raw Modbus RTU work, reusable scripts, localized help, response decoding, clean copy-friendly output, and exchange recording.
+Единая точка входа для RTU Forge, Stand Forge, Bionic Immitator и Hisense Aircon. **Рабочая ветка: `main`.** Старое полное содержимое README сохранено в [docs/REFERENCE-LEGACY.md](docs/REFERENCE-LEGACY.md), чтобы не потерялись параметры команд и технические детали.
 
-## Highlights
+> **Порядок:** установить `uv` → установить Python 3.11 или новее → получить код из `main` → выполнить `setup` → проверить команды → настроить RS-485 и только затем работать с оборудованием. Установщик не требует прав администратора.
 
-- Interactive shell with persistent history and Tab completion.
-- One-shot mode for terminal commands and stored scripts.
-- Raw HEX `send` with configurable Modbus CRC handling.
-- Named scripts stored in `scripts.ini`.
-- English and Russian help/UI selected by `ui.language`.
-- Optional Modbus RX decoding with per-send and per-script overrides.
-- Clean output mode with plain HEX only.
-- Recording of TX+RX or RX-only data to clipboard or UTF-8 files.
-- One-command script recording with decode and clean-output flags.
-- Windows COM and Linux `/dev/tty*` serial paths.
-- Full-screen Russian Hisense/ONOKOM air-conditioner console with a hardware-free demo mode.
+## 1. Подготовка среды: uv и Python
 
-## Windows setup
+`uv` — менеджер Python, окружений и пакетов от Astral. Отдельный системный Python **не обязателен**: `uv python install` устанавливает управляемую версию Python.
 
-Install for the current Windows user from PowerShell in the Git checkout:
+### Windows 10/11 (PowerShell)
+
+Откройте PowerShell обычным пользователем:
+
+```powershell
+irm https://astral.sh/uv/install.ps1 | iex
+```
+
+Закройте и снова откройте PowerShell (для обновления PATH), затем:
+
+```powershell
+uv --version
+uv python install 3.11
+uv python list --only-installed
+```
+
+Если команда `uv` не найдена, перезапустите терминал и проверьте PATH. Не отключайте защиту PowerShell ради установки. При ограничениях корпоративной сети см. [официальные варианты установки uv](https://docs.astral.sh/uv/getting-started/installation/).
+
+### Linux (bash)
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Откройте новый терминал или подключите путь из сообщения установщика, затем:
+
+```bash
+uv --version
+uv python install 3.11
+uv python list --only-installed
+```
+
+Для установки потребуется доступ к сети; `curl` должен быть установлен. Не запускайте `setup.sh` с `sudo`.
+
+### Проверка Git
+
+```bash
+git --version
+```
+
+Если Git не найден, установите [Git](https://git-scm.com/downloads) под свою ОС. `python --version` в системном PATH **может не показывать** Python, установленный через uv; для разработки проверяйте `uv run python --version` из каталога проекта.
+
+## 2. Клонирование актуального проекта
+
+**Windows PowerShell:**
+
+```powershell
+git clone https://github.com/xels79/rtu-forge.git
+cd rtu-forge
+git switch main
+git pull --ff-only origin main
+```
+
+**Linux:**
+
+```bash
+git clone https://github.com/xels79/rtu-forge.git
+cd rtu-forge
+git switch main
+git pull --ff-only origin main
+```
+
+Не используйте старые инструкции с `feature/standforge`: функциональность всех рабочих веток объединена в `main`.
+
+## 3. Установка приложения
+
+### Windows
+
+Из корня репозитория:
 
 ```powershell
 .\setup.ps1
 ```
 
-The installer does not require Administrator rights. It performs an editable `uv tool` installation, asks `uv tool dir --bin` for the actual executable directory, updates the user shell PATH through `uv tool update-shell`, and sets the user-level `RTUFORGE_HOME` to the absolute DataDir. Open a new terminal after installation to use the updated PATH.
-
-Defaults:
-
-- `RepoRoot`: directory containing `setup.ps1`;
-- `DataDir`: `%APPDATA%\RTUForge`;
-- `WorkingDir`: DataDir;
-- executables: `rtuforge.exe`, `standforge.exe`, and `bionic-immitator.exe` in
-  the actual uv tool bin directory.
-
-Explicit relative `-RepoRoot`, `-DataDir`, and `-WorkingDir` values are resolved against the PowerShell invocation directory, even when the destination does not exist yet:
-
-```powershell
-.\setup.ps1 -DataDir .\rtu-data -WorkingDir .\rs485
-.\setup.ps1 -NoShortcut
-```
-
-Unless `-NoShortcut` is used, the installer creates per-user `RTU Forge.lnk`
-and `Bionic Immitator.lnk` shortcuts. The Bionic shortcut uses
-`<DataDir>\bionic-data`; it does not share or overwrite RTU Forge files. Unless
-`-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are
-copied from RepoRoot only when the source exists and the destination does not.
-Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1`
-to update the editable installation after dependency or packaging changes.
-
-`-NoMigrate` means only that these three files are not copied from RepoRoot. With a pre-existing config in DataDir, the installation is fully operational. With a new empty DataDir, setup and its `--help`/`paths` self-check succeed, but config-dependent commands report a missing config until you provide `config.ini`.
-
-Verify the active locations from any directory:
+Откройте **новый PowerShell** и проверьте:
 
 ```powershell
 rtuforge paths
+rtuforge --help
+standforge --help
+bionic-immitator --help
 ```
 
-## Hisense air-conditioner console
+Установщик делает editable `uv tool` установку, настраивает пользовательские PATH и RTUFORGE_HOME. Данные по умолчанию: `%APPDATA%\RTUForge`. При наличии существующих `config.ini`, `scripts.ini` и истории они не перезаписываются. Варианты: `.\setup.ps1 -NoShortcut` и `.\setup.ps1 -DataDir .\rtu-data -WorkingDir .\rs485`.
 
-The separate full-screen application for Hisense AUC-18HR4SAA1 with the
-ONOKOM HS-A6 / HS-6-MB-B gateway is started from CMD with:
-
-```cmd
-rtuforge.exe aircon
-rtuforge.exe --port COM7 --baudrate 9600 --bytesize 8 --parity N --stopbits 2 aircon
-rtuforge.exe aircon --demo
-rtuforge.exe --port COM4 --baudrate 9600 --bytesize 8 --parity N --stopbits 2 aircon diag
-```
-
-It uses the existing `SerialTransport`, keeps its settings in a separate
-`aircon.ini` under the RTU Forge DataDir, and never writes to the gateway until
-the user explicitly enters `on`, `off`, `temp`, `mode`, or `fan`. CLI connection
-parameters take precedence over `aircon.ini`. The complete Russian installation,
-wiring, settings, commands, register list, and first-connection guide is in
-[docs/AIRCON-RU.md](docs/AIRCON-RU.md).
-
-`aircon diag` is read-only. It sends documented FC01/FC03 probes for connection,
-temperature, thermostat, configured/actual fan speed, compressor power, and
-gateway identity/version data. It prints complete TX/RX/CRC/timing details,
-records raw signed values and temperature-availability notes, and appends the
-same results to the configured diagnostic log.
-
-## Development launch
-
-For development without the user installer:
-
-```powershell
-uv sync --extra dev
-uv run rtuforge --home .
-uv run rtuforge --home . send 01 03 00 65 00 01
-```
-
-The separate Russian-language Bionic Mini physical imitator is launched with:
-
-```powershell
-uv run bionic-immitator --home .\bionic-data
-uv run bionic-immitator --home .\bionic-data --no-controller
-```
-
-Its full-screen interface uses separate status, device, port, settings, help,
-log, RS-485, tank, water-composition, pump, equipment-health, pressure, irrigation, light,
-sensor, PonicPilot, and drive pages. PonicPilot ID 5 is permanently bound to
-the shared BP (broth) tank; all of its calculated measurements and doses use
-that tank only. Use
-`view <page>` or `F1`–`F6` to navigate, the mouse wheel or `PgUp`/`PgDn` to
-scroll, `Tab` for contextual completion, and `Up`/`Down` for persistent command
-history. See [BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md) for the complete key map.
-The step-by-step Russian installation, wiring, operation, test-scenario, command,
-and configuration reference is in
-[docs/BIONIC-IMMITATOR-USER-GUIDE.md](docs/BIONIC-IMMITATOR-USER-GUIDE.md).
-
-Lighting is configured independently per tier through `view light settings`.
-The mutable `light_profile` option stores the six `NONE`, `SINGLE`, or
-`SPECTRAL_4` assignments, their power DOs, physical Modbus AO IDs/channels,
-voltage ranges, brightness ranges, names, and enabled flags. `light apply`
-changes only the active interpretation, `light save` changes only the saved
-lighting profile, and `light restore-defaults` restores the Bionic Mini factory
-map in the draft. These operations never write controller-owned DO or AO
-outputs.
-
-The pressure model exposes mutable `pressure_rise_s`,
-`valve_pressure_response_ms`, `valve_pressure_close_response_ms`,
-`transient_pressure_spike_coefficient`,
-`transient_pressure_spike_duration_ms`, `closed_head_pressure_bar`,
-`rupture_threshold_bar`, and `rupture_residual_bar` options. Valve response
-times are model parameters in milliseconds; the default transient spike
-coefficient is zero because no measured water-hammer characteristic is being
-claimed.
-
-The Bionic level sensors drive a separately connected physical Waveshare Relay
-8/16CH on USB/RS-485 №2; they are not exposed as extra virtual devices on USB
-№1. The default CH1..CH8 map, configurable NO/NC installation contact, relay
-polarity, edge-triggered FC0F writes, and separate FC01 confirmation are
-documented in the Bionic guide. Every MIN/MAX sensor has its own persisted
-absolute threshold; MAX is independent of physical tank capacity and never
-stops filling by itself.
-
-Transfer pumps and HP1/HP2 accumulate heat and wear automatically when their
-real fluid path is unavailable. `view equipment` separates controller command,
-actual operation, flow/pressure, damage, VFD fault, and repair requirement.
-These internal diagnostics add no controller inputs or private Modbus alarm
-registers; repair and replacement require an explicit `--confirm` command.
-The settings page groups parameters by subsystem and sorts each group by its
-Russian display name. It exposes all five independent equipment profiles,
-including the direct dry-run threshold, cumulative wear rate, effective
-lifetime, current wear, and applied/saved state. `--sync-wear` aligns a new
-pump's wear lifetime with `failure_s` without repairing existing damage.
-Named `sim state` checkpoints persist physical test state separately from the
-INI and never restore controller-owned DO, AO, or RUN commands.
-On every exit, the current physical state is also written atomically to
-`bionic-runtime-state.json` and restored on the next launch. It remains in
-effect until `sim reset --confirm`; controller-owned DO, AO, frequency, and
-RUN commands are still never restored from this file.
-
-The incoming-water meter starts from the configurable
-`water_meter_initial_l` reading after first launch or `sim reset --confirm`,
-then accumulates only the water physically admitted through the BO fill path.
-Its current reading is preserved in the runtime state and is written to the
-event journal when the controller closes the BO fill output.
-
-The same incoming-water reading can optionally be exposed on USB №1 as channel
-1 of the proprietary Pulsar `N00014163` slave. There is no second total:
-the response float32 is calculated at read time as
-`model.water_meter.total_l / 1000` m³. The emulator is passive and disabled by
-default. Configure its eight-digit BCD address explicitly; `17440707` below is
-only an example, not an assertion about the installed meter:
-
-```text
-settings set pulsar_address 17440707
-settings set pulsar_enabled true
-settings apply
-settings save
-```
-
-USB №1 remains a single serial-port owner for both Modbus RTU and Pulsar
-requests. At 1250 litres the example exchange is:
-
-```text
-TX 17 44 07 07 01 0E 01 00 00 00 00 00 A8 F0
-RX 17 44 07 07 01 0E 00 00 A0 3F 00 00 BB 2D
-```
-
-The response payload `00 00 A0 3F` is little-endian float32 `1.25` m³.
-
-Observe the controller's existing USB №1 traffic without sending requests or
-opening the port a second time:
-
-```text
-counter check start
-counter check status
-counter check stop
-```
-
-The session records frames in memory. `stop` writes one JSON report under
-`counter-check-reports`. An absent observed response is reported separately;
-the observer does not claim that firmware itself reached a timeout.
-
-The demo irrigation balance separately tracks calculated tier flow, leaks,
-plant water uptake, and evaporation. `plant_water_uptake_fraction` and
-`irrigation_evaporation_fraction` are per-pass model coefficients; they are
-configurable assumptions, not measured broccoli characteristics. Existing
-nutrient uptake, deposition, and pH-drift coefficients continue to degrade the
-recirculating solution only through actual modeled irrigation flow.
-
-It has its own configuration and event journal and does not modify
-`config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,
-verified Stage 7 Modbus maps, USB safety rules, and hardware assumptions are in
-[BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md).
-
-Linux development launch uses the same explicit checkout-local home:
-
-```bash
-uv run rtuforge --home .
-```
-
-`--home .` is only for development launches from the checkout. A normally installed program uses installer-provided `RTUFORGE_HOME` or the platform DataDir.
-
-One-shot auto-connect is silent: it does not print `Connected COM...` before command output.
-
-## Linux user installation
-
-Install for the current Linux user from the Git checkout:
+### Linux
 
 ```bash
 chmod +x setup.sh
 ./setup.sh
 ```
 
-Do not use `sudo`. The installer refuses root, never writes to `/usr`, `/opt`, or `/etc`, and never runs `sudo` or `usermod`. It creates a dedicated virtual environment and performs an editable install from RepoRoot.
-
-Examples:
-
-```bash
-./setup.sh \
-    --data-dir ~/rtu-data \
-    --working-dir ~/rs485
-
-./setup.sh --desktop
-```
-
-Options:
-
-- `--repo-root PATH`: Git/source directory; defaults to the directory containing `setup.sh`.
-- `--data-dir PATH`: persistent RTUFORGE_HOME; defaults to `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge`.
-- `--working-dir PATH`: desktop launch directory; defaults to DataDir.
-- `--install-dir PATH`: venv location; defaults to `${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge`.
-- `--bin-dir PATH`: launcher directory; defaults to `$HOME/.local/bin`.
-- `--no-migrate`: do not copy existing `config.ini`, `scripts.ini`, or history from RepoRoot.
-- `--desktop`: create `~/.local/share/applications/rtu-forge.desktop` with `Terminal=true`.
-- `--no-path-update`: do not add the managed RTU Forge block to `.bashrc` or `.zshrc`.
-- `-h`, `--help`: show installer help.
-
-All installer paths are normalized to absolute paths before files are created. Migration is copy-only: a source is copied only when it exists and its destination does not. Existing user data is never overwritten, moved, or deleted.
-
-`--no-migrate` means only that config, scripts, and history are not copied from RepoRoot. It is suitable when DataDir already contains the intended user files. For a new empty DataDir, installer self-checks `--help` and `paths` still succeed, while config-dependent commands report a missing `config.ini` until one is supplied.
-
-The generated `<BinDir>/rtuforge`, `<BinDir>/standforge`, and
-`<BinDir>/bionic-immitator` launchers use `exec`, forward all arguments, and
-preserve the caller's current directory. The RTU Forge launcher additionally
-exports the absolute DataDir as `RTUFORGE_HOME`. `--desktop` is optional and
-uses WorkingDir only for graphical RTU Forge launch.
-
-## Runtime path and user-data model
-
-| Term | Purpose | Windows default | Linux default |
-|---|---|---|---|
-| RepoRoot | Git/source directory used by the editable install | directory containing `setup.ps1` | directory containing `setup.sh` |
-| DataDir / RTUFORGE_HOME | `config.ini`, `scripts.ini`, history | `%APPDATA%\RTUForge` | `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge` |
-| WorkingDir | Starting directory for shortcut/desktop launch | DataDir | DataDir |
-| InstallDir | Installation environment | managed by `uv tool` | `${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge` |
-| Executable / BinDir | User shell executables/launchers | value from `uv tool dir --bin` | `$HOME/.local/bin/{rtuforge,standforge,bionic-immitator}` |
-
-These roles are independent: DataDir, WorkingDir, and RepoRoot may coincide, but none is derived from another after setup. Inspect active application paths with:
+Затем откройте новый терминал:
 
 ```bash
 rtuforge paths
+rtuforge --help
+standforge --help
+bionic-immitator --help
 ```
 
-Runtime config/scripts priority is:
+Установщик размещает виртуальное окружение и исполняемые файлы в каталогах пользователя, не использует `sudo`. Если команда не найдена, проверьте `$HOME/.local/bin` в PATH. Дополнительно: `./setup.sh --desktop`, `./setup.sh --data-dir ~/rtu-data --working-dir ~/rs485`.
 
-```text
-explicit --config / --scripts
-> --home
-> RTUFORGE_HOME
-> platform default
-```
-
-`--home` changes DataDir only for the current process and does not modify the environment or config. Relative `--home`, `--config`, and `--scripts` values are resolved against the invocation CWD and immediately made absolute. `RTUFORGE_HOME` must already be absolute. Without explicit paths or `RTUFORGE_HOME`, Windows uses `%APPDATA%\RTUForge` and Linux uses `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge`.
-
-Under Linux, relative `XDG_CONFIG_HOME` and `XDG_DATA_HOME` values are invalid XDG roots and are ignored. Their fallbacks remain `$HOME/.config` and `$HOME/.local/share`, so implicit DataDir and InstallDir never depend on CWD.
-
-CWD is not an implicit DataDir and never determines default config or scripts locations. It affects only explicitly relative CLI paths. A relative history filename inside `config.ini` is resolved against the directory containing that config file.
-
-Examples:
-
-```powershell
-rtuforge --home C:\temp\rtu paths
-rtuforge --config C:\profiles\drive-a.ini --scripts C:\profiles\scripts.ini paths
-```
+### Режим разработчика (без пользовательского установщика)
 
 ```bash
-rtuforge --home /tmp/rtu paths
-```
-
-## Working directory
-
-A shell launch preserves the caller's CWD:
-
-```bash
-cd /tmp
-rtuforge
-```
-
-The optional desktop entry starts in configured WorkingDir. In both cases, RTUFORGE_HOME continues to point to DataDir.
-
-## Temporary connection overrides
-
-Global startup flags temporarily replace effective serial settings for one process:
-
-```text
---port PORT
---baudrate RATE
---bytesize BITS
---parity N|E|O|M|S
---stopbits 1|1.5|2
---timeout-ms MS
-```
-
-Windows examples:
-
-```bash
-rtuforge --port COM7 --baudrate 19200
-rtuforge --port COM7 --baudrate 19200 --parity N send 01 03 00 65 00 01
-```
-
-Linux example:
-
-```bash
-rtuforge \
-    --port /dev/ttyUSB0 \
-    --baudrate 9600 \
-    --bytesize 8 \
-    --parity E \
-    --stopbits 1 \
-    scan
-```
-
-Overrides never modify `config.ini`. `options connection` shows persistent values; `status` and the interactive toolbar show effective values, with overridden fields marked `[CLI]` in status. CLI values retain priority until exit—even if `set options port ...` changes the saved value. A new launch without overrides uses config.ini again.
-
-`--timeout-ms` is the effective serial connection timeout. It is distinct from `scan --timeout`, which temporarily controls each scan probe:
-
-```bash
-rtuforge --timeout-ms 1000 scan 1 32 --timeout 100
-```
-
-## Serial permissions on Linux
-
-The installer prints current groups and warns when no common serial group is detected. It does not change permissions automatically. Access to `/dev/ttyUSB*`, `/dev/ttyACM*`, or `/dev/ttyS*` commonly requires membership in `dialout` on Debian/Ubuntu:
-
-```bash
-sudo usermod -aG dialout "$USER"
-```
-
-Run that command yourself only when appropriate for your distribution, then start a new login session. Other distributions may use `uucp`, `tty`, or another group.
-
-## Updating editable installation
-
-Python source changes from the Git checkout are visible immediately because installation is editable:
-
-```bash
-git pull
-```
-
-If dependencies or `pyproject.toml` changed, rerun:
-
-```bash
-./setup.sh
-```
-
-## Command reference
-
-```text
-connect
-disconnect
-ports
-status
-paths
-scan [start [end]] [--timeout ms] [--function 01|02|03|04] [--address address]
-
-send [-d|--decode|-r|--raw] <hex...>
-
-add script <name>
-  ...commands...
-end script
-
-run script <name> [-d|--decode|-r|--raw]
-run file <file> [--script <name>] [-d|--decode|-r|--raw]
-scripts | ls | list
-show script <name>
-delete script <name>
-export script <name> --file <path> [--overwrite]
-export scripts --file <path> [--overwrite]
-import script <file> [--overwrite]
-import scripts <file> [--overwrite]
-
-show record
-record start [all|rx]
-record stop buffer
-record stop clipboard
-record stop file <path>
-record status
-record cancel
-record script <name> <all|rx> <buffer|clipboard|file PATH> [-d|--decode|-r|--raw] [-c|--clean]
-
-options
-options <section>
-set options <name> <value>
-
-pause <ms>
-
-history
-history clear
-
-clear | cls
-
-help
-help <command>
-
-exit | quit
-```
-
-Global one-shot flag:
-
-```text
--c, --clean
-```
-
-It temporarily enables clean output for the current CLI invocation and does not change `config.ini`.
-
-## Tab completion
-
-Examples:
-
-```text
-co<TAB>                                   -> connect
-show <TAB>                                -> record, script
-run script <TAB>                          -> stored script names
-run script idd-status <TAB>               -> --decode, --raw, -d, -r
-set options <TAB>                         -> mutable option names
-set options language <TAB>                -> en, ru
-history <TAB>                             -> clear
-record <TAB>                              -> cancel, script, start, status, stop
-record start <TAB>                        -> all, rx
-record stop <TAB>                         -> buffer, clipboard, file
-record script <TAB>                       -> stored script names
-record script idd-status <TAB>            -> all, rx
-record script idd-status rx <TAB>         -> buffer, clipboard, file
-record script idd-status rx file x <TAB>  -> --clean, --decode, --raw, -c, -d, -r
-send --d<TAB>                             -> --decode
-scan <TAB>                                -> --address, --function, --timeout
-scan 1 32 --function <TAB>                -> 01, 02, 03, 04
-```
-
-## Device scanning
-
-`scan` searches the Modbus RTU bus for slave IDs using a read-only request. The default probe is function `03` (Read Holding Registers), address `0`, quantity `1`.
-
-```text
-scan
-scan 1
-scan 1 32
-scan 1 247 --timeout 200
-scan 1 32 --function 04 --address 0
-scan 1 32 --function 03 --address 0x0065
-rtuforge scan -c
-```
-
-The default range is `1..247`. Functions `01`, `02`, `03`, and `04` are supported; write functions are never used. `--address` accepts decimal and `0x`-prefixed hexadecimal values.
-
-A normal response is reported only when its Modbus RTU CRC, slave ID, function, byte count, and exact frame length are all valid. For quantity `1`, FC01/FC02 require one data byte and FC03/FC04 require two data bytes. A standard-length response with the expected exception function and a valid CRC counts as a found device; malformed exceptions, bad CRC, unrelated frames, short data, extra data, and serial noise do not.
-
-The default per-device timeout is `runtime.scan_timeout_ms` (100 ms). `--timeout` overrides it for one scan without changing `connection.timeout_ms`, `runtime.scan_timeout_ms`, or `config.ini`. The scanner builds each six-byte request without a CRC, and the transport always adds one CRC through a temporary `append` override. Scan does not change or depend on `runtime.crc_mode`.
-
-In an interactive terminal, Rich keeps progress on one stable fixed-width line and prints discovered devices above it. Redirected output omits Live progress and ANSI cursor control. One-shot `rtuforge scan -c` prints only found slave IDs, one per line, without progress, summaries, TX/RX lines, or ANSI formatting. Ctrl+C stops a standalone scan cleanly and returns to the shell; inside a stored script it also prevents the remaining commands in that script from running, including through nested scripts.
-
-## Sending frames
-
-Basic raw request:
-
-```text
-send 01 03 00 65 00 01
-```
-
-CRC handling is controlled by `runtime.crc_mode`:
-
-```text
-auto    Preserve a valid supplied CRC, otherwise append one
-append  Always append CRC
-none    Send exactly the bytes entered
-```
-
-### Response decoding
-
-Global default:
-
-```ini
-[runtime]
-decode_rx = true
-```
-
-Force decoding for one request:
-
-```text
-send --decode 01 03 00 65 00 01
-send -d 01 03 00 65 00 01
-```
-
-Suppress decoding for one request:
-
-```text
-send --raw 01 03 00 65 00 01
-send -r 01 03 00 65 00 01
-```
-
-For a script:
-
-```text
-run script idd-status -d
-run script idd-status --decode
-run script idd-status -r
-run script idd-status --raw
-```
-
-Decode priority is:
-
-```text
-flag on individual send > flag on run script > runtime.decode_rx
-```
-
-For example, `run script idd-status -r` suppresses decoding for ordinary `send` lines in that script, while a stored `send --decode ...` still enables decoding for that specific exchange.
-
-## Clean output
-
-Persistent setting:
-
-```text
-set options clean_output true
-```
-
-or:
-
-```ini
-[runtime]
-clean_output = true
-```
-
-Temporary one-shot mode:
-
-```bash
-uv run rtuforge -c send 01 03 00 65 00 01
-uv run rtuforge run script idd-status -c -r
-```
-
-The global `-c/--clean` flag can be placed before or after the one-shot command. RTU Forge promotes it to the CLI level internally.
-
-Normal output:
-
-```text
-TX 01 03 00 65 00 01 94 15
-RX 01 03 02 00 05 78 47 (12.4 ms)
-```
-
-Clean output:
-
-```text
-01 03 00 65 00 01 94 15
-01 03 02 00 05 78 47
-```
-
-In clean mode:
-
-- `TX` / `RX` labels are hidden;
-- timestamps are hidden;
-- elapsed response time is hidden;
-- automatic response decoding is hidden;
-- `show_tx` and `show_rx` still determine which raw frame lines are printed;
-- explicit `-d/--decode` still has priority and can restore decoding.
-
-## Recording
-
-Recording is process-local. It stores raw Modbus frames, not decoded explanatory text.
-
-### Session recording
-
-Start request + response recording:
-
-```text
-record start all
-```
-
-Start RX-only recording:
-
-```text
-record start rx
-```
-
-Inspect the current in-memory buffer without stopping recording:
-
-```text
-show record
-```
-
-Show recording state:
-
-```text
-record status
-```
-
-Discard the current buffer:
-
-```text
-record cancel
-```
-
-### Stop and save/copy
-
-Copy to the system clipboard:
-
-```text
-record stop buffer
-record stop clipboard
-```
-
-`buffer` and `clipboard` are aliases.
-
-Save to a UTF-8 file:
-
-```text
-record stop file capture.txt
-record stop file captures/idd-status.txt
-```
-
-Relative paths are resolved relative to the directory containing `config.ini`. Parent directories are created automatically.
-
-### Recording format
-
-`record start rx` always stores only response HEX lines:
-
-```text
-01 03 02 00 05 78 47
-01 03 02 00 02 39 85
-```
-
-`record start all` follows the active output style.
-
-Normal mode:
-
-```text
-TX 01 03 00 65 00 01 94 15
-RX 01 03 02 00 05 78 47
-```
-
-Clean mode (`runtime.clean_output=true`, one-shot `-c/--clean`, or `record script ... -c`):
-
-```text
-01 03 00 65 00 01 94 15
-01 03 02 00 05 78 47
-```
-
-The recording buffer therefore matches the visible clean format when clean output is active.
-
-## Record a script in one command
-
-Syntax:
-
-```text
-record script <name> <all|rx> <buffer|clipboard|file PATH> [-d|--decode|-r|--raw] [-c|--clean]
-```
-
-This command performs the complete sequence internally:
-
-1. starts a fresh recording;
-2. runs the named script;
-3. applies the selected recording mode;
-4. applies optional decode/clean overrides;
-5. saves or copies the result;
-6. restores the previous `clean_output` setting.
-
-Examples:
-
-```text
-record script idd-status rx file captures/idd-status.txt -r
-record script idd-status all buffer -c -r
-record script idd-status all clipboard --decode
-```
-
-One-shot examples:
-
-```bash
-uv run rtuforge record script idd-status rx file capture.txt -r
-uv run rtuforge record script idd-status all file capture.txt -c -r
-```
-
-Recording modes:
-
-```text
-all   Record both transmitted and received frames
-rx    Record received frames only
-```
-
-Destinations:
-
-```text
-buffer       Copy to system clipboard
-clipboard    Same as buffer
-file PATH    Save to a UTF-8 text file
-```
-
-Flags:
-
-```text
--d, --decode   Force Modbus response decoding while the script runs
--r, --raw      Suppress Modbus response decoding while the script runs
--c, --clean    Temporarily enable clean screen output and clean 'all' recording format
-```
-
-`-c/--clean` used by `record script` is temporary and does not persist to `config.ini`.
-
-If the script fails, the temporary recording is discarded and the previous clean-output setting is restored.
-
-## Scripts
-
-Create interactively:
-
-```text
-rtu> add script read-basic
-... send 01 03 00 65 00 01
-... pause 100
-... send --decode 01 03 00 66 00 01
-... end script
-```
-
-Run:
-
-```text
-run script read-basic
-```
-
-Inspect:
-
-```text
-show script read-basic
-```
-
-Delete:
-
-```text
-delete script read-basic
-```
-
-### Commands useful inside scripts
-
-```text
-send ...
-send --decode ...
-send --raw ...
-pause <ms>
-connect
-disconnect
-status
-ports
-scan [start [end]] [--timeout ms] [--function 01|02|03|04] [--address address]
-run script <name> [-d|-r]
-scripts | ls | list
-show script <name>
-show record
-record start [all|rx]
-record stop <buffer|clipboard|file PATH>
-record status
-record cancel
-record script <name> ...
-options [section]
-set options <name> <value>
-help [command]
-```
-
-For example, a script can contain its own RX capture:
-
-```text
-record start rx
-send 01 03 00 65 00 01
-send 01 03 00 66 00 01
-show record
-record stop file capture.txt
-```
-
-Commands not allowed inside scripts:
-
-```text
-add script ...
-import script ... | import scripts ...
-export script ... | export scripts ...
-run file ...
-history
-history clear
-clear | cls
-exit | quit
-```
-
-Empty lines and lines beginning with `#` are ignored.
-
-`runtime.inter_command_delay_ms` is applied between executed ordinary commands. `pause <ms>` adds an explicit additional delay. Labels, jumps, conditions, comments and empty lines add no automatic delays.
-
-Nested `run script` calls are supported. Recursive/cyclic script calls should be avoided.
-
-### Script control flow
-
-```text
-label <name>
-goto <name>
-if <expression>
-else
-end if
-```
-
-Labels match `[A-Za-z_][A-Za-z0-9_.-]*`, are case-sensitive and local to each script invocation. `goto` jumps forward or backward to the command after a label. Nested `if` blocks and optional `else` branches are supported. The entire script's labels, block structure and expressions are checked before its commands execute. Errors identify the script and its script-body line (not the physical INI file line). Existing INI loaders omit empty lines and INI comments.
-
-Simple if/else:
-
-```text
-send 05 03 00 0C 00 01
-if last.timeout
-    pause 250
-else
-    send 05 03 00 0F 00 01
-end if
-```
-
-Expressions support decimal and `0x` hexadecimal integers, `true`/`false`, comparisons `== != < <= > >=`, `and or not`, bitwise `& | ^ << >>`, and parentheses. Boolean operators short-circuit; use parentheses around bit masks. Shift counts are restricted to 0..4096. Expressions use a whitelisted AST evaluator without Python `eval`; function calls, strings and arbitrary Python attributes are rejected.
-
-| Value | Meaning |
-|---|---|
-| `last.timeout` | True when the last `send` received no bytes |
-| `last.rx_len` | Complete RX length in bytes |
-| `last.address` | Response slave address |
-| `last.function` | Raw response function byte, including the exception bit |
-| `last.exception` | Modbus exception code, or 0 for a normal response |
-| `last.reg[N]` | Zero-based register from the existing FC03/FC04 decoder |
-| `last.byte[N]` | Zero-based byte of the complete raw RX frame, including CRC |
-
-`last` is shared by nested scripts and updated by every completed `send`, even with `-r` or hidden RX output. Access before the first `send`, an absent address/function or an unavailable register/byte index raises a localized runtime error; missing registers never become zero. Register decoding follows the existing parser, including its best-effort handling of malformed frames; it does not imply CRC validation.
-
-Poll until bit 1 clears before continuing to the next command:
-
-```text
-send 05 06 00 0F 00 1E
-label wait_b
-pause 100
-send 05 03 00 0C 00 01
-if last.timeout
-    pause 250
-    goto wait_b
-end if
-if (last.reg[0] & 0x0002) != 0
-    goto wait_b
-end if
-send 05 03 00 0F 00 01
-```
-
-`last.reg[0]` is the first register of the most recent response. Loops have no iteration limit and do not grow the Python call stack. Ctrl+C stops execution and closes the transport; one-shot execution returns 130.
-
-The acceptance example is in `examples/ponic-test.ini`:
-
-```bash
-uv run rtuforge --scripts examples/ponic-test.ini run script ponic-test -r -c
-```
-
-Control flow works in the main `scripts.ini`, external `--scripts` files and portable `run file` scripts. Control instructions print no extra output. Explicit `help` still prints in clean mode. Use `help script`, `help if`, `help label` or `help goto` for EN/RU help; `help scripts` includes the same language reference. UI language changes help and diagnostics, never script keywords.
-
-## Portable script files
-
-RTU Forge can export, import, and directly run human-readable UTF-8 `.rtus` files. The extension is recommended but optional; the `scripts-v1` marker identifies the format.
-
-Single-script example:
-
-```ini
-[rtuforge]
-format = scripts-v1
-
-[scripts]
-status =
-    send 01 03 00 65 00 01
-```
-
-A bundle uses the same format with more entries:
-
-```ini
-[rtuforge]
-format = scripts-v1
-
-[scripts]
-status =
-    send 01 03 00 65 00 01
-
-errors =
-    send 01 03 00 1B 00 01
-```
-
-```text
-export script idd-status --file idd-status.rtus
-export scripts --file backup.rtus
-import script idd-status.rtus
-import scripts backup.rtus
-run file idd-status.rtus
-run file backup.rtus --script idd-status
-```
-
-Import merges scripts into `scripts.ini`; it does not remove unrelated stored scripts. `run file` executes directly and does not import. Relative paths are based on the process CWD, and paths with spaces should be quoted. Existing destination files and stored scripts are not overwritten without `--overwrite`.
-
-Portable-file commands are not allowed inside scripts. In one-shot mode, `-c/--clean` remains a global flag and may be placed before or after the whole command; it is not a `run file` flag in the interactive shell.
-
-## Options
-
-Show all mutable options:
-
-```text
-options
-```
-
-Show one section:
-
-```text
-options connection
-options runtime
-options history
-options ui
-```
-
-Change an option:
-
-```text
-set options port COM6
-set options timeout_ms 1000
-set options crc_mode auto
-set options decode_rx false
-set options clean_output true
-set options language ru
-```
-
-Changing a connection option while connected forces a disconnect.
-
-Boolean values accept:
-
-```text
-true / false
-yes / no
-on / off
-1 / 0
-```
-
-### Connection options
-
-- `port`
-- `baudrate`
-- `bytesize`
-- `parity`
-- `stopbits`
-- `timeout_ms`
-
-### Runtime options
-
-- `inter_command_delay_ms`
-- `post_write_delay_ms`
-- `response_silence_ms`
-- `max_response_bytes`
-- `crc_mode`
-- `auto_connect`
-- `show_tx`
-- `show_rx`
-- `decode_rx`
-- `clean_output`
-- `scan_timeout_ms`: per-device scan timeout; must be greater than zero (default `100`).
-- `timestamps`
-- `uppercase_hex`
-
-### History options
-
-- `file`
-- `max_entries`
-
-### UI options
-
-- `language`: `en` or `ru`
-
-## Language
-
-Configuration:
-
-```ini
-[ui]
-language = en
-```
-
-Switch to Russian:
-
-```text
-set options language ru
-```
-
-Supported values:
-
-```text
-en
-ru
-```
-
-Localization covers:
-
-- general and command-specific help;
-- option table headings and descriptions;
-- status output;
-- common shell messages and errors;
-- recording messages;
-- Modbus response decoding labels, function names and exception names;
-- CLI `--help` descriptions/examples.
-
-Technical command names and option identifiers are intentionally not translated.
-
-## Help
-
-General help:
-
-```text
-help
-```
-
-Detailed topics:
-
-```text
-help connect
-help disconnect
-help ports
-help status
-help paths
-help scan
-help send
-help add
-help run
-help scripts
-help export
-help import
-help show
-help delete
-help record
-help options
-help set
-help pause
-help history
-help clear
-help help
-help exit
-```
-
-The detailed help is available in both interactive and one-shot mode:
-
-```bash
-uv run rtuforge help record
-uv run rtuforge help scripts
-```
-
-## One-shot behavior and errors
-
-Examples:
-
-```bash
-uv run rtuforge send 01 03 00 65 00 01
-uv run rtuforge -c send 01 03 00 65 00 01
-uv run rtuforge run script idd-status -r
-uv run rtuforge record script idd-status rx file capture.txt -r
-```
-
-One-shot mode suppresses the automatic `Connected ...` message.
-
-Expected user/runtime errors are returned as concise messages with exit code `1`, without a Python traceback.
-
-## Stand Forge: полив и давление
-
-`standforge` сохраняет ручные команды тестового стенда и добавляет опциональный
-полив в отдельном цикле с непрерывным контролем давления. Автопуск отключён до
-проверки реального оборудования; приложение само не запускает насосы.
-
-```text
-standforge --home . help start
-standforge --home . idd 7 status
-standforge --home . idd 7 setup
-standforge --home . idd 7 frequency 29
-standforge --home . idd 7 monitor
-standforge --home . idd 7 feedback
-standforge --home . idd all setup
-standforge --home . idd all monitor
-standforge --home . test-pressure low 10
-standforge --home . start check 1 1 broth 29
-standforge --home . start step 1 1 broth 29
-```
-
-В интерактивной консоли: `start 1 1 broth 29`, `stop`, `emergency-stop`,
-`pressure`, `test-pressure stop`, `reset fault`. `help`, `help idd`, `help ai`,
-`help start`, `help stop`, `help pressure`, `help test-pressure` имеют русскую
-справку при `ui.language=ru`; новые команды и настройки дополняются клавишей Tab.
-Общая справка сгруппирована по задачам. Подробная справка разделяет синтаксис,
-примеры, реле, проверки и ошибки; шаги пуска/останова показываются отдельными
-пунктами, а настройки — по одной на строку с указанием значений по умолчанию.
-Частота в `start` и `idd … frequency` задаётся в **Гц**, с шагом записи 0.1 Гц.
-Вывод показывает максимум Pb05, минимум Pb06 и отдельный минимум мотора.
-Для IDD 7 `drive7_min_hz=24`: при Pb05=45 Гц/Pb06=20 Гц допустимо 24..45 Гц.
-Пример: `start check 1 1 broth 29` проверяет задание 29 Гц.
-Проценты в этих командах больше не используются: обновите сохранённые сценарии.
-Границы IDD автоматически не меняются; команды аналоговых выходов `output`
-сохраняют прежние проценты.
-
-`start check <стеллаж> <ярус> broth <Гц>` читает устройства и показывает
-готовность датчиков, реле и выбранного IDD, включая расчёт частоты и причины
-блокировки. Реле, уставка и настройки не изменяются; проверка работает и при
-отключённой автоматике. Успешная проверка не запускает полив и не заменяет
-повторные проверки при настоящем `start`. Исправность AI не снимает требования
-к обратной связи IDD, проверке гидравлики и аппаратных защит.
-
-**Регулирование давления частотой**
-
-При `pressure_control_enabled=true` число в `start` задаёт начальную частоту.
-Для обсуждаемого стенда: начало **21 Гц**, цель **60 бар**, быстрый сброс
-частоты от **70 бар**, аварийный останов при **72 бар**, потолок **23,7 Гц**.
-Включение — только явными командами оператора, без пуска оборудования:
-
-```text
-set irrigation high_max_bar 72
-set irrigation rise_timeout_ms 60000
-set irrigation pressure_control_enabled true
-start check 1 1 broth 21 --pump 1
-```
-
-`start check` показывает минимум и потолок по выбранному IDD. Нижняя граница —
-наибольшее из `pressure_min_hz` (20 Гц по умолчанию), Pb06 и ограничения мотора.
-Это ограничение программы, а не измеренный минимальный режим конкретного
-насоса. Начало и потолок проверяются до включения реле. Параметры Pb05/Pb06
-не меняются. Пуск после простоя сохраняет обязательное подтверждение подпора
-НВД; низкий ДВД не разрешает работу без подпора.
-
-Ниже цели минус зона нечувствительности повышается по одному шагу, без
-накопления пропущенных шагов. Нужны свежие RUN, НВД и фактическая частота,
-достигшая прежней уставки. Перед повышением ещё раз читается AI2. Выше цели
-плюс зона частота снижается быстрее, а от `pressure_limit_bar` сразу задаётся
-допустимый минимум. После успешной команды снижения сохраняется наименьшее
-давление: рост на `pressure_rise_margin_bar` при ДВД выше
-`pressure_rise_stop_bar` вызывает останов с сообщением о возможном засоре.
-Постоянное повышенное давление само по себе не считается ростом. Контроль
-этой серии сбрасывается после возврата ДВД до `pressure_rise_stop_bar` или ниже.
-`high_max_bar` остаётся немедленным аварийным порогом; ошибки датчиков/связи,
-IDD, подпора, реле и тайм-ауты сохраняют свои остановы.
-
-Между полными проверками выполняются отдельные чтения типа и raw AI2.
-Снижение/останов по давлению выполняются перед опросом IDD, тока и реле;
-быстрый цикл никогда не повышает частоту. Пауза между циклами AI2 —
-`pressure_poll_ms`; полные проверки повторяются через `pressure_feedback_ms`
-после предыдущей полной проверки. К этим интервалам добавляется фактическое
-время запросов RS485: 50 мс не означает измерение каждые 50 мс. Каждая
-частотная запись подтверждается чтением PA01; в телеметрии видны текущая
-уставка, цель и пороги. Реальный разгон/торможение зависит также от Pb07/Pb08
-([руководство IDD mini PLUS](https://innovert.ru/docs/innovert/innovert-IDD-mini-plus.pdf), раздел 7-2);
-эти параметры программа не меняет. Шаги и времена ниже — настройки алгоритма,
-проверенные на имитаторе, без аппаратной настройки конкретной гидравлики.
-
-По умолчанию регулирование выключено, существующий `start` работает с
-фиксированной частотой. Пользовательский stand.ini автоматически не меняется;
-режим работает в обычном, пошаговом и one-shot пуске через общий контроллер.
-
-**Возврат к ручному заданию частоты**
-
-```text
-idd 7 configure manual --confirm
-idd 8 configure manual --confirm
-```
-
-Для выбранного IDD команда устанавливает Pb01=0 (частота из существующего
-Pb00), Pb02=1 (пуск через FWD), Pb03=1 (кнопка STOP доступна), Pd15=6 и Pd16=7.
-Значения сверены с [руководством IDD mini PLUS](https://innovert.ru/docs/innovert/innovert-IDD-mini-plus.pdf),
-раздел 7-2. Сначала записывается и проверяется Pb03. Перед записью требуются
-подтверждённый STOP, частота около нуля, отсутствие аварии и разомкнутый FWD;
-в активном поливе/STOPPING/FAULT команда запрещена.
-Она сохраняет значение Pb00 и пределы Pb05/Pb06, не переключает реле и не
-отправляет команду пуска. Это выбор режима FWD/Pb00, а не восстановление снимка
-настроек. При ошибке следующие записи прекращаются, выполненные сохраняются;
-проверьте `idd 7 status` / `idd 8 status`.
-
-Для возврата к заданию частоты через RS485 используйте прежнюю команду
-`idd 7 configure --confirm` (либо IDD8). В ручном режиме `setup`, `frequency`
-и автоматический `start` не проходят проверку источника частоты; диагностика
-`status`, `monitor`, `feedback` доступна. Tab и `help idd` включают новый вариант.
-
-`start step 1 1 broth 29` запускает проверку и пошаговый цикл. Перед записью
-частоты и каждым включением реле требуется отдельный пустой Enter. Вывод показывает
-назначение клапана/насоса, давление НВД/ДВД, частоту, ток двигателя и состояния
-реле. Стеллаж 1 соответствует реле 9/10/11, стеллаж 2 — 12/13/14.
-После записи читается состояние релейной платы; непредусмотренный включённый клапан вызывает
-останов. Проверка платы не доказывает физическое положение клапана — оператор
-сверяет его перед следующим Enter. STOP и аварийный останов не ждут подтверждения.
-Давление и IDD продолжают опрашиваться при ожидании Enter; ожидание ограничено
-`step_timeout_ms`, вывод — `telemetry_ms`. Набор давления и RUNNING переходят
-автоматически по обратной связи. Режим доступен в интерактивном и one-shot запуске,
-выход/EOF/Ctrl+C завершает контроллер. Обычный `start` сохраняет автоматический пуск.
-
-Один насос может обслуживать оба стеллажа: `--pump 1` / `--pump 2` выбирает
-НВД1/НВД2 для конкретного пуска, независимо от стеллажа. Пример:
-
-```text
-start check 2 1 broth 29 --pump 1
-start step 2 1 broth 29 --pump 1
-stop
-```
-
-При конфигурации по умолчанию это клапан 12, выбор НВД1 — реле 19,
-IDD7/FWD32; для первого стеллажа тот же насос выбирается тем же `--pump 1`.
-Соответствие насосов частотникам задают `pump1_drive` / `pump2_drive`;
-оно не выводится из номера стеллажа. Ручной выбор действует в обычном,
-проверочном и пошаговом пуске, не сохраняется в stand.ini. Без `--pump`
-применяются `rack1_pump` / `rack2_pump`; их можно явно настроить одинаково,
-если общий насос должен использоваться по умолчанию. Вывод показывает
-выбранные насос, IDD и реле; проверки и частотные пределы относятся только
-к выбранному IDD. STOP сохраняет выбор текущего цикла; повторный START
-и смена насоса во время работы запрещены. Tab дополняет `--pump` и `1`/`2`.
-
-Для тестов во время `WAIT_HIGH_PRESSURE` и `RUNNING` разрешено переключать
-ярусные клапаны реле 9..14 командами `on`, `off` / `of` в том же процессе:
-
-```text
-on 12
-off 9
-on 10 14
-stop
-```
-
-Сначала открывается новый путь, затем закрывается прежний. Хотя бы один
-клапан должен оставаться открыт: команда закрытия последнего или всех
-открытых клапанов отклоняется целиком до записи. Смешанные команды с реле
-насосов/прочих устройств запрещены. Плата подтверждает переключения;
-контроль давления, IDD и соответствия реле остаётся активным.
-Если при включённых насосах плата показывает все ярусные клапаны закрытыми,
-пуск снимается. Это проверка электрического состояния реле, физическое
-открытие клапана оператор проверяет отдельно. В ранних фазах пуска,
-STOPPING и FAULT ручное переключение запрещено.
-
-При останове снимаются FWD и подпор; **все** реле клапанов 9..14 выключаются
-только после настоящего STOP и частоты около нуля. При потере подтверждения
-останова клапаны сохраняются открытыми. Ошибка выключения одного клапана
-не препятствует попыткам выключить остальные; без подтверждения закрытия
-нет перехода в IDLE. Если цикла в процессе нет, `stop` закрывает клапаны
-только после подтверждённого останова обоих IDD; недоступный IDD сохраняет
-блокировку закрытия. `emergency-stop` снимает пуски без требования обратной
-связи IDD, закрытие выполняет активный контроллер после STOP.
-
-Новые mutable options зарегистрированы в `irrigation_config.OPTION_SPECS`,
-хранятся в `[irrigation]` пользовательского `stand.ini` и изменяются только явной
-командой `set irrigation <имя> <значение>` либо редактированием файла:
-
-| Параметры | Значения по умолчанию |
-|---|---|
-| enabled; ai_verified; vfd_verified; hydraulics_verified; protections_verified; pressure_unit_verified; relay_id_verified | false для каждого |
-| ai1_zero_raw_is_zero; ai2_zero_raw_is_zero | false; false (особый нуль только после проверки соответствующего канала) |
-| pump1_drive; pump2_drive; rack1_pump; rack2_pump | 7; 8; 1; 2 |
-| drive7_min_hz; drive8_min_hz | 24; 0 (для IDD 8 применяется Pb06, отдельный минимум мотора не задан) |
-| low_ready_bar; low_min_bar; high_target_bar; high_min_bar; high_max_bar; hysteresis_bar | 1; 0.5; 60; 50; 70; 0.2 |
-| pressure_control_enabled | false |
-| pressure_min_hz; pressure_max_hz | 20; 23.7 |
-| pressure_limit_bar; pressure_deadband_bar | 70; 1 (при включении: цель + зона < порог роста < предел < high_max_bar) |
-| pressure_rise_stop_bar; pressure_rise_margin_bar | 63; 0.5 (порог давления и прирост после снижения для останова) |
-| pressure_up_step_hz; pressure_down_step_hz | 0.1; 0.5 |
-| pressure_up_interval_ms; pressure_down_interval_ms | 1000; 250 |
-| pressure_poll_ms; pressure_feedback_ms | 50; 250 |
-| valve_delay_ms; prime_timeout_ms; rise_timeout_ms; stop_timeout_ms; leak_delay_ms; poll_ms | 2000; 10000; 20000; 15000; 2000; 250 |
-| telemetry_ms; step_timeout_ms | 1000; 30000 |
-| stop_hz; run_register; run_mask; fault_register; fault_mask; setpoint_readback | 0.1; -1; 1; -1; 65535; false |
-
-Все времена конфигурации — миллисекунды. Пороги являются примерами для тестов;
-значение ДВД 60 требует подтверждения единиц давления на оборудовании. AI режима
-3 декодируются как микроамперы; по умолчанию raw=0 считается недостоверным.
-Если на конкретном стенде оператор проверил такой нуль при сбросе давления,
-`ai1_zero_raw_is_zero=true` / `ai2_zero_raw_is_zero=true` явно разрешают для
-соответствующего канала `raw=0 → 0 бар`. Ток и исправность петли при таком чтении
-не определены: исправный нуль и отсутствие сигнала программно не различаются,
-это принятие результата проверки оператора. Предупреждение остаётся в диагностике,
-`start check` и текущих измерениях. Контроль набора/падения давления и максимум
-ДВД продолжают работать, но при потере сигнала, возвращающей raw=0, реальное
-давление неизвестно и программный контроль максимума его не увидит.
-Остальные значения сохраняют документированный масштаб и проверку диапазона;
-режим канала, CRC и связь проверяются независимо. Эти настройки не разрешают
-автоматику и не заменяют аппаратную защиту. Опубликованное
-руководство старой IDD MINI подтверждает PA01/PA02, но не определяет однозначно
-RUN/STOP и текущую аварию. Для IDD222M21E производитель публикует карту
-[IDD mini PLUS](https://innovert.ru/docs/innovert/innovert-IDD-mini-plus.pdf):
-PA27=27 (0x001B) — текущая ошибка; PA28=28 (0x001C) — состояние 0 STOP, 1/2 RUN.
-`idd 7 feedback` / `idd 8 feedback` читает эту карту без флагов подтверждения,
-записи параметров и переключения реле. Пуск остаётся через FWD, Pb02=1.
-После проверки соответствия оборудования карте задаются `run_register=28`,
-`fault_register=27`; для этой пары используются код состояния и полный код
-ошибки, маски не применяются. Неизвестное PA28 отвергается. По умолчанию
-регистры остаются `-1`, разрешения пуска автоматически не выставляются.
-PA10 содержит историю и не заменяет текущую аварию.
-Диагностика `idd 7 monitor` / `idd 8 monitor` читает PA01/PA02/PA10 без
-флагов подтверждения. При неизвестном профиле RUN/аварии эти статусы показаны
-как «неизвестно»; успешное чтение имеет код 0. Ошибки Modbus дают код 1.
-`idd all status|setup|monitor` последовательно проверяет оба привода, даже если
-первый не отвечает; запись для `all` запрещена. Эта диагностика не разрешает пуск.
-`run_register`, `fault_register`, `run_mask`, `fault_mask` принимают десятичные
-числа и запись `0x...`; в файл сохраняются нормализованные десятичные значения.
-
-Полный пример конфигурации — [examples/stand.ini](examples/stand.ini).
-Последовательность, назначение параметров, источники карт Modbus, ограничения
-и процедура проверки описаны в [IRRIGATION.md](IRRIGATION.md), прежние ручные
-команды — в [STANDFORGE.md](STANDFORGE.md). Реальная аппаратная защита и проверка
-гидравлики обязательны перед разрешением автоматического полива.
-
-## Development
-
-Agent rules are in `AGENTS.md`.
-
-Run tests:
-
-```bash
+uv sync --extra dev
+uv run python --version
 uv run --extra dev pytest -q
+uv run rtuforge --home .
 ```
 
-## Pulsar water meters (proprietary RS-485 protocol)
+На Windows для Bionic: `uv run bionic-immitator --home .\bionic-data --no-controller`. На Linux: `uv run bionic-immitator --home ./bionic-data --no-controller`.
 
-The `pulsar` subcommand is deliberately separate from Modbus RTU `send` / `scan` and Stand Forge. It uses its own fully formed CRC16 frames, validating BCD address, function, frame length, request ID, and CRC of responses. No `config.ini` change is needed. Tested using a real discovery frame from the electronic water meter Pulsar model 1, N00014163, address `17440707`, and the Wiren Board protocol vectors.
+## 4. Что запускать
 
-Use a separate RS-485 test adapter or ensure the existing Bionic controller is not operating on this bus. Do **not** run two masters on the same physical RS-485 line. Use 9600 8N1; override your usual even-parity Modbus settings with `--parity N`. The software does not change serial/parity configuration automatically.
+| Программа | Команда | Что делает | Справка |
+|---|---|---|---|
+| RTU Forge | `rtuforge` | Modbus RTU, сканирование, HEX, сценарии и запись обмена | [HELP-RTUFORGE.md](docs/HELP-RTUFORGE.md) |
+| Stand Forge | `standforge` | Релейная плата, аналоговые каналы, IDD, полив и давление | [HELP-STANDFORGE.md](docs/HELP-STANDFORGE.md) |
+| Bionic Immitator | `bionic-immitator --home ./bionic-data --no-controller` | Физический имитатор Bionic Mini, запуск без контроллера | [HELP-BIONIC.md](docs/HELP-BIONIC.md) |
+| Hisense Aircon | `rtuforge aircon --demo` | Консоль кондиционера Hisense через ONOKOM, демонстрация | [HELP-AIRCON.md](docs/HELP-AIRCON.md) |
+
+Для запуска с оборудованием сначала настройте COM/`/dev/tty*`, скорость, чётность и адреса устройств. **Не запускайте одновременно два независимых RS-485 master на одной рабочей шине.** Проверка программного ответа реле не гарантирует фактическое положение клапана.
+
+## 5. Практические команды
+
+**RTU Forge:**
 
 ```powershell
-rtuforge.exe --port COM4 --baudrate 9600 --parity N pulsar read 17440707
-rtuforge.exe --port COM4 --baudrate 9600 --parity N pulsar read 17440707 --format raw
-rtuforge.exe --port COM4 --parity N pulsar param get 17440707 0x000A
-rtuforge.exe --port COM4 --parity N pulsar time get 17440707
-rtuforge.exe pulsar decode 17 44 07 07 0A 12 C3 1F 0A 01 00 00 00 00 79 E6 B4 7B
-rtuforge.exe --port COM4 --parity N pulsar discover --single
+rtuforge --port COM7 --baudrate 9600
+rtuforge --port COM7 --baudrate 9600 send 01 03 00 65 00 01
 ```
 
-Channel 1 defaults to little-endian float32 (Pulsar Water model 1). For other Pulsar models use `--format s32`, `--format u32`, `--format f64`, or `--format raw` as appropriate. Parameter indices and value encodings are model-dependent; `param get` prints all 8 raw value bytes by default, with optional `--format u8|u16|u32|s32|float|f64`. Do **not** infer parameter names, permissions or scalings without the manufacturer's model-specific table.
-
-Parameter and clock writes default to dry-run, showing the complete frame **without opening the port**. Writing requires `--execute`:
+**Stand Forge, сначала диагностика:**
 
 ```powershell
-rtuforge.exe pulsar param set 17440707 0x0010 0102030405060708
-rtuforge.exe --port COM4 --parity N pulsar param set 17440707 0x0010 0102030405060708 --execute
-rtuforge.exe pulsar time set 17440707 2026-10-12T15:34:56
-rtuforge.exe --port COM4 --parity N pulsar time set 17440707 2026-10-12T15:34:56 --execute
+standforge --port COM7 --baudrate 9600
 ```
 
-**WARNING:** The example parameter index and bytes are synthetic placeholders, **not** validated settings for N00014163. Parameter writes can alter calibration, configuration, accounting, or communications, and may be refused pending authorization. Changing clock impacts archives. Do not use `--execute` without confirming parameter mapping and implications on a test device. `discover --single` is a broadcast-style probe and is unsafe on a bus with several Pulsar devices.
+В интерактивной консоли:
 
-The existing Modbus transport remains single-owner. `pulsar` always uses `crc_mode_override="none"` on frames that already contain CRC16; it does not mutate `runtime.crc_mode`, `decode_rx`, or other runtime options. Ordinary `send`, `scan`, and `standforge` work as before.
+```text
+idd 7 status
+idd all monitor
+ai
+pressure
+start check 1 1 broth 29
+```
 
-References: [Pulsar application-layer functions](https://docs.pulsarm.ru/spaces/PULSARPROTOCOLS/pages/75759667/), [Wiren Board Pulsar driver](https://github.com/wirenboard/wb-mqtt-serial/blob/master/src/devices/pulsar_device.cpp), [Pulsar Water model 1 template](https://github.com/wirenboard/wb-mqtt-serial/blob/master/templates/config-pulsar-water.json).
+`start check` не включает насосы и не переключает реле. После настройки `stand.ini` и проверок оборудования оператор может применять `start step 1 1 broth 29` с отдельным Enter перед каждым шагом; `stop` завершает цикл, `emergency-stop` снимает пуски. **Частота в Гц**, а не в процентах.
+
+**Bionic Immitator:**
+
+```powershell
+bionic-immitator --home .\bionic-data --no-controller
+bionic-immitator --home .\bionic-data
+```
+
+`--no-controller` исключает использование USB №1 для безопасного знакомства. Настройки и состояние имитатора сохраняются отдельно.
+
+**Hisense Aircon:**
+
+```powershell
+rtuforge aircon --demo
+rtuforge --port COM7 --baudrate 9600 --bytesize 8 --parity N --stopbits 2 aircon diag
+rtuforge --port COM7 --baudrate 9600 --bytesize 8 --parity N --stopbits 2 aircon
+```
+
+`aircon diag` читает регистры, `--demo` не требует оборудования. Номера COM здесь примеры, а не фиксированные настройки.
+
+## 6. Обновление без потери настроек
+
+```bash
+git switch main
+git pull --ff-only origin main
+```
+
+После обновления повторно выполните `.\setup.ps1` (Windows) или `./setup.sh` (Linux). Для пользовательских параметров используйте собственные `config.ini`, `stand.ini`, `aircon.ini` и `bionic-immitator.ini`. Установщик не заменяет существующие пользовательские файлы; **не копируйте примеры поверх работающих конфигураций без резервной копии**.
+
+## 7. Подробные справочники
+
+- [Подготовка среды и установка](docs/HELP-ENVIRONMENT.md)
+- [RTU Forge и скрипты](docs/HELP-RTUFORGE.md)
+- [Stand Forge, IDD, полив, аварийная остановка](docs/HELP-STANDFORGE.md)
+- [Bionic Immitator и Pulsar](docs/HELP-BIONIC.md)
+- [Hisense Aircon](docs/HELP-AIRCON.md)
+- [Полное руководство по поливу](IRRIGATION.md)
+- [Полное руководство Stand Forge](STANDFORGE.md)
+- [Полное руководство Bionic](docs/BIONIC-IMMITATOR-USER-GUIDE.md)
+- [Полное руководство Aircon](docs/AIRCON-RU.md)
+- [Архив прежнего подробного README](docs/REFERENCE-LEGACY.md)
+
+Официальная документация: [uv](https://docs.astral.sh/uv/), [Python](https://www.python.org/), [Git](https://git-scm.com/). Требуется Python 3.11+; проект использует `pyserial`, `rich` и `prompt-toolkit`.
