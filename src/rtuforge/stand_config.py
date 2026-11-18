@@ -81,11 +81,14 @@ def with_overrides(
 
 def save_stand_settings(path: Path, settings: StandSettings) -> None:
     parser = configparser.ConfigParser()
-    parser["devices"] = {
-        "relay_address": str(settings.relay_address),
-        "output_address": str(settings.output_address),
-    }
-    parser["output"] = {"range": settings.output_range}
+    if path.exists():
+        parser.read(path, encoding="utf-8")
+    for section in ("devices", "output"):
+        if not parser.has_section(section):
+            parser.add_section(section)
+    parser["devices"]["relay_address"] = str(settings.relay_address)
+    parser["devices"]["output_address"] = str(settings.output_address)
+    parser["output"]["range"] = settings.output_range
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as stream:
         parser.write(stream)
