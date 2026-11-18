@@ -14,6 +14,7 @@ RTU Forge is a compact Python console for raw Modbus RTU work, reusable scripts,
 - Recording of TX+RX or RX-only data to clipboard or UTF-8 files.
 - One-command script recording with decode and clean-output flags.
 - Windows COM and Linux `/dev/tty*` serial paths.
+- Full-screen Russian Hisense/ONOKOM air-conditioner console with a hardware-free demo mode.
 
 ## Windows setup
 
@@ -30,7 +31,8 @@ Defaults:
 - `RepoRoot`: directory containing `setup.ps1`;
 - `DataDir`: `%APPDATA%\RTUForge`;
 - `WorkingDir`: DataDir;
-- executable: the actual `rtuforge.exe` reported by the uv tool bin directory.
+- executables: `rtuforge.exe`, `standforge.exe`, and `bionic-immitator.exe` in
+  the actual uv tool bin directory.
 
 Explicit relative `-RepoRoot`, `-DataDir`, and `-WorkingDir` values are resolved against the PowerShell invocation directory, even when the destination does not exist yet:
 
@@ -39,7 +41,13 @@ Explicit relative `-RepoRoot`, `-DataDir`, and `-WorkingDir` values are resolved
 .\setup.ps1 -NoShortcut
 ```
 
-Unless `-NoShortcut` is used, the installer creates a per-user `RTU Forge.lnk` whose target is the installed `rtuforge.exe`, whose arguments contain the absolute DataDir as `--home`, and whose working directory is WorkingDir. Unless `-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are copied from RepoRoot only when the source exists and the destination does not. Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1` to update the editable installation after dependency or packaging changes.
+Unless `-NoShortcut` is used, the installer creates per-user `RTU Forge.lnk`
+and `Bionic Immitator.lnk` shortcuts. The Bionic shortcut uses
+`<DataDir>\bionic-data`; it does not share or overwrite RTU Forge files. Unless
+`-NoMigrate` is used, `config.ini`, `scripts.ini`, and `.rtuforge_history` are
+copied from RepoRoot only when the source exists and the destination does not.
+Existing user data is never overwritten, moved, or deleted. Rerun `setup.ps1`
+to update the editable installation after dependency or packaging changes.
 
 `-NoMigrate` means only that these three files are not copied from RepoRoot. With a pre-existing config in DataDir, the installation is fully operational. With a new empty DataDir, setup and its `--help`/`paths` self-check succeed, but config-dependent commands report a missing config until you provide `config.ini`.
 
@@ -48,6 +56,31 @@ Verify the active locations from any directory:
 ```powershell
 rtuforge paths
 ```
+
+## Hisense air-conditioner console
+
+The separate full-screen application for Hisense AUC-18HR4SAA1 with the
+ONOKOM HS-A6 / HS-6-MB-B gateway is started from CMD with:
+
+```cmd
+rtuforge.exe aircon
+rtuforge.exe --port COM7 --baudrate 9600 --bytesize 8 --parity N --stopbits 2 aircon
+rtuforge.exe aircon --demo
+rtuforge.exe --port COM4 --baudrate 9600 --bytesize 8 --parity N --stopbits 2 aircon diag
+```
+
+It uses the existing `SerialTransport`, keeps its settings in a separate
+`aircon.ini` under the RTU Forge DataDir, and never writes to the gateway until
+the user explicitly enters `on`, `off`, `temp`, `mode`, or `fan`. CLI connection
+parameters take precedence over `aircon.ini`. The complete Russian installation,
+wiring, settings, commands, register list, and first-connection guide is in
+[docs/AIRCON-RU.md](docs/AIRCON-RU.md).
+
+`aircon diag` is read-only. It sends documented FC01/FC03 probes for connection,
+temperature, thermostat, configured/actual fan speed, compressor power, and
+gateway identity/version data. It prints complete TX/RX/CRC/timing details,
+records raw signed values and temperature-availability notes, and appends the
+same results to the configured diagnostic log.
 
 ## Development launch
 
@@ -58,6 +91,123 @@ uv sync --extra dev
 uv run rtuforge --home .
 uv run rtuforge --home . send 01 03 00 65 00 01
 ```
+
+The separate Russian-language Bionic Mini physical imitator is launched with:
+
+```powershell
+uv run bionic-immitator --home .\bionic-data
+uv run bionic-immitator --home .\bionic-data --no-controller
+```
+
+Its full-screen interface uses separate status, device, port, settings, help,
+log, RS-485, tank, water-composition, pump, equipment-health, pressure, irrigation, light,
+sensor, PonicPilot, and drive pages. PonicPilot ID 5 is permanently bound to
+the shared BP (broth) tank; all of its calculated measurements and doses use
+that tank only. Use
+`view <page>` or `F1`–`F6` to navigate, the mouse wheel or `PgUp`/`PgDn` to
+scroll, `Tab` for contextual completion, and `Up`/`Down` for persistent command
+history. See [BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md) for the complete key map.
+The step-by-step Russian installation, wiring, operation, test-scenario, command,
+and configuration reference is in
+[docs/BIONIC-IMMITATOR-USER-GUIDE.md](docs/BIONIC-IMMITATOR-USER-GUIDE.md).
+
+Lighting is configured independently per tier through `view light settings`.
+The mutable `light_profile` option stores the six `NONE`, `SINGLE`, or
+`SPECTRAL_4` assignments, their power DOs, physical Modbus AO IDs/channels,
+voltage ranges, brightness ranges, names, and enabled flags. `light apply`
+changes only the active interpretation, `light save` changes only the saved
+lighting profile, and `light restore-defaults` restores the Bionic Mini factory
+map in the draft. These operations never write controller-owned DO or AO
+outputs.
+
+The pressure model exposes mutable `pressure_rise_s`,
+`valve_pressure_response_ms`, `valve_pressure_close_response_ms`,
+`transient_pressure_spike_coefficient`,
+`transient_pressure_spike_duration_ms`, `closed_head_pressure_bar`,
+`rupture_threshold_bar`, and `rupture_residual_bar` options. Valve response
+times are model parameters in milliseconds; the default transient spike
+coefficient is zero because no measured water-hammer characteristic is being
+claimed.
+
+The Bionic level sensors drive a separately connected physical Waveshare Relay
+8/16CH on USB/RS-485 №2; they are not exposed as extra virtual devices on USB
+№1. The default CH1..CH8 map, configurable NO/NC installation contact, relay
+polarity, edge-triggered FC0F writes, and separate FC01 confirmation are
+documented in the Bionic guide. Every MIN/MAX sensor has its own persisted
+absolute threshold; MAX is independent of physical tank capacity and never
+stops filling by itself.
+
+Transfer pumps and HP1/HP2 accumulate heat and wear automatically when their
+real fluid path is unavailable. `view equipment` separates controller command,
+actual operation, flow/pressure, damage, VFD fault, and repair requirement.
+These internal diagnostics add no controller inputs or private Modbus alarm
+registers; repair and replacement require an explicit `--confirm` command.
+The settings page groups parameters by subsystem and sorts each group by its
+Russian display name. It exposes all five independent equipment profiles,
+including the direct dry-run threshold, cumulative wear rate, effective
+lifetime, current wear, and applied/saved state. `--sync-wear` aligns a new
+pump's wear lifetime with `failure_s` without repairing existing damage.
+Named `sim state` checkpoints persist physical test state separately from the
+INI and never restore controller-owned DO, AO, or RUN commands.
+On every exit, the current physical state is also written atomically to
+`bionic-runtime-state.json` and restored on the next launch. It remains in
+effect until `sim reset --confirm`; controller-owned DO, AO, frequency, and
+RUN commands are still never restored from this file.
+
+The incoming-water meter starts from the configurable
+`water_meter_initial_l` reading after first launch or `sim reset --confirm`,
+then accumulates only the water physically admitted through the BO fill path.
+Its current reading is preserved in the runtime state and is written to the
+event journal when the controller closes the BO fill output.
+
+The same incoming-water reading can optionally be exposed on USB №1 as channel
+1 of the proprietary Pulsar `N00014163` slave. There is no second total:
+the response float32 is calculated at read time as
+`model.water_meter.total_l / 1000` m³. The emulator is passive and disabled by
+default. Configure its eight-digit BCD address explicitly; `17440707` below is
+only an example, not an assertion about the installed meter:
+
+```text
+settings set pulsar_address 17440707
+settings set pulsar_enabled true
+settings apply
+settings save
+```
+
+USB №1 remains a single serial-port owner for both Modbus RTU and Pulsar
+requests. At 1250 litres the example exchange is:
+
+```text
+TX 17 44 07 07 01 0E 01 00 00 00 00 00 A8 F0
+RX 17 44 07 07 01 0E 00 00 A0 3F 00 00 BB 2D
+```
+
+The response payload `00 00 A0 3F` is little-endian float32 `1.25` m³.
+
+Observe the controller's existing USB №1 traffic without sending requests or
+opening the port a second time:
+
+```text
+counter check start
+counter check status
+counter check stop
+```
+
+The session records frames in memory. `stop` writes one JSON report under
+`counter-check-reports`. An absent observed response is reported separately;
+the observer does not claim that firmware itself reached a timeout.
+
+The demo irrigation balance separately tracks calculated tier flow, leaks,
+plant water uptake, and evaporation. `plant_water_uptake_fraction` and
+`irrigation_evaporation_fraction` are per-pass model coefficients; they are
+configurable assumptions, not measured broccoli characteristics. Existing
+nutrient uptake, deposition, and pH-drift coefficients continue to degrade the
+recirculating solution only through actual modeled irrigation flow.
+
+It has its own configuration and event journal and does not modify
+`config.ini`, `scripts.ini`, or RTU Forge history. Architecture, commands,
+verified Stage 7 Modbus maps, USB safety rules, and hardware assumptions are in
+[BIONIC-IMMITATOR.md](BIONIC-IMMITATOR.md).
 
 Linux development launch uses the same explicit checkout-local home:
 
@@ -106,7 +256,11 @@ All installer paths are normalized to absolute paths before files are created. M
 
 `--no-migrate` means only that config, scripts, and history are not copied from RepoRoot. It is suitable when DataDir already contains the intended user files. For a new empty DataDir, installer self-checks `--help` and `paths` still succeed, while config-dependent commands report a missing `config.ini` until one is supplied.
 
-The generated `<BinDir>/rtuforge` launcher exports the absolute DataDir as `RTUFORGE_HOME`, uses `exec`, forwards all arguments, and preserves the caller's current directory. `--desktop` is optional and uses WorkingDir only for graphical launch.
+The generated `<BinDir>/rtuforge`, `<BinDir>/standforge`, and
+`<BinDir>/bionic-immitator` launchers use `exec`, forward all arguments, and
+preserve the caller's current directory. The RTU Forge launcher additionally
+exports the absolute DataDir as `RTUFORGE_HOME`. `--desktop` is optional and
+uses WorkingDir only for graphical RTU Forge launch.
 
 ## Runtime path and user-data model
 
@@ -116,7 +270,7 @@ The generated `<BinDir>/rtuforge` launcher exports the absolute DataDir as `RTUF
 | DataDir / RTUFORGE_HOME | `config.ini`, `scripts.ini`, history | `%APPDATA%\RTUForge` | `${XDG_CONFIG_HOME:-$HOME/.config}/rtu-forge` |
 | WorkingDir | Starting directory for shortcut/desktop launch | DataDir | DataDir |
 | InstallDir | Installation environment | managed by `uv tool` | `${XDG_DATA_HOME:-$HOME/.local/share}/rtu-forge` |
-| Executable / BinDir | User shell executable/launcher | value from `uv tool dir --bin` | `$HOME/.local/bin/rtuforge` |
+| Executable / BinDir | User shell executables/launchers | value from `uv tool dir --bin` | `$HOME/.local/bin/{rtuforge,standforge,bionic-immitator}` |
 
 These roles are independent: DataDir, WorkingDir, and RepoRoot may coincide, but none is derived from another after setup. Inspect active application paths with:
 
@@ -931,6 +1085,242 @@ One-shot mode suppresses the automatic `Connected ...` message.
 
 Expected user/runtime errors are returned as concise messages with exit code `1`, without a Python traceback.
 
+## Stand Forge: полив и давление
+
+`standforge` сохраняет ручные команды тестового стенда и добавляет опциональный
+полив в отдельном цикле с непрерывным контролем давления. Автопуск отключён до
+проверки реального оборудования; приложение само не запускает насосы.
+
+```text
+standforge --home . help start
+standforge --home . idd 7 status
+standforge --home . idd 7 setup
+standforge --home . idd 7 frequency 29
+standforge --home . idd 7 monitor
+standforge --home . idd 7 feedback
+standforge --home . idd all setup
+standforge --home . idd all monitor
+standforge --home . test-pressure low 10
+standforge --home . start check 1 1 broth 29
+standforge --home . start step 1 1 broth 29
+```
+
+В интерактивной консоли: `start 1 1 broth 29`, `stop`, `emergency-stop`,
+`pressure`, `test-pressure stop`, `reset fault`. `help`, `help idd`, `help ai`,
+`help start`, `help stop`, `help pressure`, `help test-pressure` имеют русскую
+справку при `ui.language=ru`; новые команды и настройки дополняются клавишей Tab.
+Общая справка сгруппирована по задачам. Подробная справка разделяет синтаксис,
+примеры, реле, проверки и ошибки; шаги пуска/останова показываются отдельными
+пунктами, а настройки — по одной на строку с указанием значений по умолчанию.
+Частота в `start` и `idd … frequency` задаётся в **Гц**, с шагом записи 0.1 Гц.
+Вывод показывает максимум Pb05, минимум Pb06 и отдельный минимум мотора.
+Для IDD 7 `drive7_min_hz=24`: при Pb05=45 Гц/Pb06=20 Гц допустимо 24..45 Гц.
+Пример: `start check 1 1 broth 29` проверяет задание 29 Гц.
+Проценты в этих командах больше не используются: обновите сохранённые сценарии.
+Границы IDD автоматически не меняются; команды аналоговых выходов `output`
+сохраняют прежние проценты.
+
+`start check <стеллаж> <ярус> broth <Гц>` читает устройства и показывает
+готовность датчиков, реле и выбранного IDD, включая расчёт частоты и причины
+блокировки. Реле, уставка и настройки не изменяются; проверка работает и при
+отключённой автоматике. Успешная проверка не запускает полив и не заменяет
+повторные проверки при настоящем `start`. Исправность AI не снимает требования
+к обратной связи IDD, проверке гидравлики и аппаратных защит.
+
+**Регулирование давления частотой**
+
+При `pressure_control_enabled=true` число в `start` задаёт начальную частоту.
+Для обсуждаемого стенда: начало **21 Гц**, цель **60 бар**, быстрый сброс
+частоты от **70 бар**, аварийный останов при **72 бар**, потолок **23,7 Гц**.
+Включение — только явными командами оператора, без пуска оборудования:
+
+```text
+set irrigation high_max_bar 72
+set irrigation rise_timeout_ms 60000
+set irrigation pressure_control_enabled true
+start check 1 1 broth 21 --pump 1
+```
+
+`start check` показывает минимум и потолок по выбранному IDD. Нижняя граница —
+наибольшее из `pressure_min_hz` (20 Гц по умолчанию), Pb06 и ограничения мотора.
+Это ограничение программы, а не измеренный минимальный режим конкретного
+насоса. Начало и потолок проверяются до включения реле. Параметры Pb05/Pb06
+не меняются. Пуск после простоя сохраняет обязательное подтверждение подпора
+НВД; низкий ДВД не разрешает работу без подпора.
+
+Ниже цели минус зона нечувствительности повышается по одному шагу, без
+накопления пропущенных шагов. Нужны свежие RUN, НВД и фактическая частота,
+достигшая прежней уставки. Перед повышением ещё раз читается AI2. Выше цели
+плюс зона частота снижается быстрее, а от `pressure_limit_bar` сразу задаётся
+допустимый минимум. После успешной команды снижения сохраняется наименьшее
+давление: рост на `pressure_rise_margin_bar` при ДВД выше
+`pressure_rise_stop_bar` вызывает останов с сообщением о возможном засоре.
+Постоянное повышенное давление само по себе не считается ростом. Контроль
+этой серии сбрасывается после возврата ДВД до `pressure_rise_stop_bar` или ниже.
+`high_max_bar` остаётся немедленным аварийным порогом; ошибки датчиков/связи,
+IDD, подпора, реле и тайм-ауты сохраняют свои остановы.
+
+Между полными проверками выполняются отдельные чтения типа и raw AI2.
+Снижение/останов по давлению выполняются перед опросом IDD, тока и реле;
+быстрый цикл никогда не повышает частоту. Пауза между циклами AI2 —
+`pressure_poll_ms`; полные проверки повторяются через `pressure_feedback_ms`
+после предыдущей полной проверки. К этим интервалам добавляется фактическое
+время запросов RS485: 50 мс не означает измерение каждые 50 мс. Каждая
+частотная запись подтверждается чтением PA01; в телеметрии видны текущая
+уставка, цель и пороги. Реальный разгон/торможение зависит также от Pb07/Pb08
+([руководство IDD mini PLUS](https://innovert.ru/docs/innovert/innovert-IDD-mini-plus.pdf), раздел 7-2);
+эти параметры программа не меняет. Шаги и времена ниже — настройки алгоритма,
+проверенные на имитаторе, без аппаратной настройки конкретной гидравлики.
+
+По умолчанию регулирование выключено, существующий `start` работает с
+фиксированной частотой. Пользовательский stand.ini автоматически не меняется;
+режим работает в обычном, пошаговом и one-shot пуске через общий контроллер.
+
+**Возврат к ручному заданию частоты**
+
+```text
+idd 7 configure manual --confirm
+idd 8 configure manual --confirm
+```
+
+Для выбранного IDD команда устанавливает Pb01=0 (частота из существующего
+Pb00), Pb02=1 (пуск через FWD), Pb03=1 (кнопка STOP доступна), Pd15=6 и Pd16=7.
+Значения сверены с [руководством IDD mini PLUS](https://innovert.ru/docs/innovert/innovert-IDD-mini-plus.pdf),
+раздел 7-2. Сначала записывается и проверяется Pb03. Перед записью требуются
+подтверждённый STOP, частота около нуля, отсутствие аварии и разомкнутый FWD;
+в активном поливе/STOPPING/FAULT команда запрещена.
+Она сохраняет значение Pb00 и пределы Pb05/Pb06, не переключает реле и не
+отправляет команду пуска. Это выбор режима FWD/Pb00, а не восстановление снимка
+настроек. При ошибке следующие записи прекращаются, выполненные сохраняются;
+проверьте `idd 7 status` / `idd 8 status`.
+
+Для возврата к заданию частоты через RS485 используйте прежнюю команду
+`idd 7 configure --confirm` (либо IDD8). В ручном режиме `setup`, `frequency`
+и автоматический `start` не проходят проверку источника частоты; диагностика
+`status`, `monitor`, `feedback` доступна. Tab и `help idd` включают новый вариант.
+
+`start step 1 1 broth 29` запускает проверку и пошаговый цикл. Перед записью
+частоты и каждым включением реле требуется отдельный пустой Enter. Вывод показывает
+назначение клапана/насоса, давление НВД/ДВД, частоту, ток двигателя и состояния
+реле. Стеллаж 1 соответствует реле 9/10/11, стеллаж 2 — 12/13/14.
+После записи читается состояние релейной платы; непредусмотренный включённый клапан вызывает
+останов. Проверка платы не доказывает физическое положение клапана — оператор
+сверяет его перед следующим Enter. STOP и аварийный останов не ждут подтверждения.
+Давление и IDD продолжают опрашиваться при ожидании Enter; ожидание ограничено
+`step_timeout_ms`, вывод — `telemetry_ms`. Набор давления и RUNNING переходят
+автоматически по обратной связи. Режим доступен в интерактивном и one-shot запуске,
+выход/EOF/Ctrl+C завершает контроллер. Обычный `start` сохраняет автоматический пуск.
+
+Один насос может обслуживать оба стеллажа: `--pump 1` / `--pump 2` выбирает
+НВД1/НВД2 для конкретного пуска, независимо от стеллажа. Пример:
+
+```text
+start check 2 1 broth 29 --pump 1
+start step 2 1 broth 29 --pump 1
+stop
+```
+
+При конфигурации по умолчанию это клапан 12, выбор НВД1 — реле 19,
+IDD7/FWD32; для первого стеллажа тот же насос выбирается тем же `--pump 1`.
+Соответствие насосов частотникам задают `pump1_drive` / `pump2_drive`;
+оно не выводится из номера стеллажа. Ручной выбор действует в обычном,
+проверочном и пошаговом пуске, не сохраняется в stand.ini. Без `--pump`
+применяются `rack1_pump` / `rack2_pump`; их можно явно настроить одинаково,
+если общий насос должен использоваться по умолчанию. Вывод показывает
+выбранные насос, IDD и реле; проверки и частотные пределы относятся только
+к выбранному IDD. STOP сохраняет выбор текущего цикла; повторный START
+и смена насоса во время работы запрещены. Tab дополняет `--pump` и `1`/`2`.
+
+Для тестов во время `WAIT_HIGH_PRESSURE` и `RUNNING` разрешено переключать
+ярусные клапаны реле 9..14 командами `on`, `off` / `of` в том же процессе:
+
+```text
+on 12
+off 9
+on 10 14
+stop
+```
+
+Сначала открывается новый путь, затем закрывается прежний. Хотя бы один
+клапан должен оставаться открыт: команда закрытия последнего или всех
+открытых клапанов отклоняется целиком до записи. Смешанные команды с реле
+насосов/прочих устройств запрещены. Плата подтверждает переключения;
+контроль давления, IDD и соответствия реле остаётся активным.
+Если при включённых насосах плата показывает все ярусные клапаны закрытыми,
+пуск снимается. Это проверка электрического состояния реле, физическое
+открытие клапана оператор проверяет отдельно. В ранних фазах пуска,
+STOPPING и FAULT ручное переключение запрещено.
+
+При останове снимаются FWD и подпор; **все** реле клапанов 9..14 выключаются
+только после настоящего STOP и частоты около нуля. При потере подтверждения
+останова клапаны сохраняются открытыми. Ошибка выключения одного клапана
+не препятствует попыткам выключить остальные; без подтверждения закрытия
+нет перехода в IDLE. Если цикла в процессе нет, `stop` закрывает клапаны
+только после подтверждённого останова обоих IDD; недоступный IDD сохраняет
+блокировку закрытия. `emergency-stop` снимает пуски без требования обратной
+связи IDD, закрытие выполняет активный контроллер после STOP.
+
+Новые mutable options зарегистрированы в `irrigation_config.OPTION_SPECS`,
+хранятся в `[irrigation]` пользовательского `stand.ini` и изменяются только явной
+командой `set irrigation <имя> <значение>` либо редактированием файла:
+
+| Параметры | Значения по умолчанию |
+|---|---|
+| enabled; ai_verified; vfd_verified; hydraulics_verified; protections_verified; pressure_unit_verified; relay_id_verified | false для каждого |
+| ai1_zero_raw_is_zero; ai2_zero_raw_is_zero | false; false (особый нуль только после проверки соответствующего канала) |
+| pump1_drive; pump2_drive; rack1_pump; rack2_pump | 7; 8; 1; 2 |
+| drive7_min_hz; drive8_min_hz | 24; 0 (для IDD 8 применяется Pb06, отдельный минимум мотора не задан) |
+| low_ready_bar; low_min_bar; high_target_bar; high_min_bar; high_max_bar; hysteresis_bar | 1; 0.5; 60; 50; 70; 0.2 |
+| pressure_control_enabled | false |
+| pressure_min_hz; pressure_max_hz | 20; 23.7 |
+| pressure_limit_bar; pressure_deadband_bar | 70; 1 (при включении: цель + зона < порог роста < предел < high_max_bar) |
+| pressure_rise_stop_bar; pressure_rise_margin_bar | 63; 0.5 (порог давления и прирост после снижения для останова) |
+| pressure_up_step_hz; pressure_down_step_hz | 0.1; 0.5 |
+| pressure_up_interval_ms; pressure_down_interval_ms | 1000; 250 |
+| pressure_poll_ms; pressure_feedback_ms | 50; 250 |
+| valve_delay_ms; prime_timeout_ms; rise_timeout_ms; stop_timeout_ms; leak_delay_ms; poll_ms | 2000; 10000; 20000; 15000; 2000; 250 |
+| telemetry_ms; step_timeout_ms | 1000; 30000 |
+| stop_hz; run_register; run_mask; fault_register; fault_mask; setpoint_readback | 0.1; -1; 1; -1; 65535; false |
+
+Все времена конфигурации — миллисекунды. Пороги являются примерами для тестов;
+значение ДВД 60 требует подтверждения единиц давления на оборудовании. AI режима
+3 декодируются как микроамперы; по умолчанию raw=0 считается недостоверным.
+Если на конкретном стенде оператор проверил такой нуль при сбросе давления,
+`ai1_zero_raw_is_zero=true` / `ai2_zero_raw_is_zero=true` явно разрешают для
+соответствующего канала `raw=0 → 0 бар`. Ток и исправность петли при таком чтении
+не определены: исправный нуль и отсутствие сигнала программно не различаются,
+это принятие результата проверки оператора. Предупреждение остаётся в диагностике,
+`start check` и текущих измерениях. Контроль набора/падения давления и максимум
+ДВД продолжают работать, но при потере сигнала, возвращающей raw=0, реальное
+давление неизвестно и программный контроль максимума его не увидит.
+Остальные значения сохраняют документированный масштаб и проверку диапазона;
+режим канала, CRC и связь проверяются независимо. Эти настройки не разрешают
+автоматику и не заменяют аппаратную защиту. Опубликованное
+руководство старой IDD MINI подтверждает PA01/PA02, но не определяет однозначно
+RUN/STOP и текущую аварию. Для IDD222M21E производитель публикует карту
+[IDD mini PLUS](https://innovert.ru/docs/innovert/innovert-IDD-mini-plus.pdf):
+PA27=27 (0x001B) — текущая ошибка; PA28=28 (0x001C) — состояние 0 STOP, 1/2 RUN.
+`idd 7 feedback` / `idd 8 feedback` читает эту карту без флагов подтверждения,
+записи параметров и переключения реле. Пуск остаётся через FWD, Pb02=1.
+После проверки соответствия оборудования карте задаются `run_register=28`,
+`fault_register=27`; для этой пары используются код состояния и полный код
+ошибки, маски не применяются. Неизвестное PA28 отвергается. По умолчанию
+регистры остаются `-1`, разрешения пуска автоматически не выставляются.
+PA10 содержит историю и не заменяет текущую аварию.
+Диагностика `idd 7 monitor` / `idd 8 monitor` читает PA01/PA02/PA10 без
+флагов подтверждения. При неизвестном профиле RUN/аварии эти статусы показаны
+как «неизвестно»; успешное чтение имеет код 0. Ошибки Modbus дают код 1.
+`idd all status|setup|monitor` последовательно проверяет оба привода, даже если
+первый не отвечает; запись для `all` запрещена. Эта диагностика не разрешает пуск.
+`run_register`, `fault_register`, `run_mask`, `fault_mask` принимают десятичные
+числа и запись `0x...`; в файл сохраняются нормализованные десятичные значения.
+
+Полный пример конфигурации — [examples/stand.ini](examples/stand.ini).
+Последовательность, назначение параметров, источники карт Modbus, ограничения
+и процедура проверки описаны в [IRRIGATION.md](IRRIGATION.md), прежние ручные
+команды — в [STANDFORGE.md](STANDFORGE.md). Реальная аппаратная защита и проверка
+гидравлики обязательны перед разрешением автоматического полива.
+
 ## Development
 
 Agent rules are in `AGENTS.md`.
@@ -940,3 +1330,35 @@ Run tests:
 ```bash
 uv run --extra dev pytest -q
 ```
+
+## Pulsar water meters (proprietary RS-485 protocol)
+
+The `pulsar` subcommand is deliberately separate from Modbus RTU `send` / `scan` and Stand Forge. It uses its own fully formed CRC16 frames, validating BCD address, function, frame length, request ID, and CRC of responses. No `config.ini` change is needed. Tested using a real discovery frame from the electronic water meter Pulsar model 1, N00014163, address `17440707`, and the Wiren Board protocol vectors.
+
+Use a separate RS-485 test adapter or ensure the existing Bionic controller is not operating on this bus. Do **not** run two masters on the same physical RS-485 line. Use 9600 8N1; override your usual even-parity Modbus settings with `--parity N`. The software does not change serial/parity configuration automatically.
+
+```powershell
+rtuforge.exe --port COM4 --baudrate 9600 --parity N pulsar read 17440707
+rtuforge.exe --port COM4 --baudrate 9600 --parity N pulsar read 17440707 --format raw
+rtuforge.exe --port COM4 --parity N pulsar param get 17440707 0x000A
+rtuforge.exe --port COM4 --parity N pulsar time get 17440707
+rtuforge.exe pulsar decode 17 44 07 07 0A 12 C3 1F 0A 01 00 00 00 00 79 E6 B4 7B
+rtuforge.exe --port COM4 --parity N pulsar discover --single
+```
+
+Channel 1 defaults to little-endian float32 (Pulsar Water model 1). For other Pulsar models use `--format s32`, `--format u32`, `--format f64`, or `--format raw` as appropriate. Parameter indices and value encodings are model-dependent; `param get` prints all 8 raw value bytes by default, with optional `--format u8|u16|u32|s32|float|f64`. Do **not** infer parameter names, permissions or scalings without the manufacturer's model-specific table.
+
+Parameter and clock writes default to dry-run, showing the complete frame **without opening the port**. Writing requires `--execute`:
+
+```powershell
+rtuforge.exe pulsar param set 17440707 0x0010 0102030405060708
+rtuforge.exe --port COM4 --parity N pulsar param set 17440707 0x0010 0102030405060708 --execute
+rtuforge.exe pulsar time set 17440707 2026-10-12T15:34:56
+rtuforge.exe --port COM4 --parity N pulsar time set 17440707 2026-10-12T15:34:56 --execute
+```
+
+**WARNING:** The example parameter index and bytes are synthetic placeholders, **not** validated settings for N00014163. Parameter writes can alter calibration, configuration, accounting, or communications, and may be refused pending authorization. Changing clock impacts archives. Do not use `--execute` without confirming parameter mapping and implications on a test device. `discover --single` is a broadcast-style probe and is unsafe on a bus with several Pulsar devices.
+
+The existing Modbus transport remains single-owner. `pulsar` always uses `crc_mode_override="none"` on frames that already contain CRC16; it does not mutate `runtime.crc_mode`, `decode_rx`, or other runtime options. Ordinary `send`, `scan`, and `standforge` work as before.
+
+References: [Pulsar application-layer functions](https://docs.pulsarm.ru/spaces/PULSARPROTOCOLS/pages/75759667/), [Wiren Board Pulsar driver](https://github.com/wirenboard/wb-mqtt-serial/blob/master/src/devices/pulsar_device.cpp), [Pulsar Water model 1 template](https://github.com/wirenboard/wb-mqtt-serial/blob/master/templates/config-pulsar-water.json).
