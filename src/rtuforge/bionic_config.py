@@ -5,6 +5,7 @@ from __future__ import annotations
 import configparser
 import io
 import os
+import re
 import shutil
 import tempfile
 from dataclasses import dataclass, fields, replace
@@ -40,6 +41,8 @@ class BionicSettings:
     ponics_address: int = 5
     hp1_address: int = 7
     hp2_address: int = 8
+    pulsar_enabled: bool = False
+    pulsar_address: str = "00000001"
     model_interval_ms: int = 50
     ui_interval_ms: int = 500
     retention_days: int = 7
@@ -171,6 +174,8 @@ class BionicSettings:
 
 
 def _section(name: str) -> str:
+    if name.startswith("pulsar_"):
+        return "pulsar"
     if name in {"hp1_address", "hp2_address"}:
         return "devices"
     if name.startswith("hp1_"):
@@ -223,6 +228,8 @@ def parse_sensor_relay_map(value: str) -> dict[str, int]:
 
 
 def validate_settings(settings: BionicSettings, *, validate_lights: bool = True) -> None:
+    if not re.fullmatch(r"[0-9]{8}", settings.pulsar_address):
+        raise ValueError("Адрес «Пульсар» должен состоять ровно из 8 десятичных цифр BCD")
     addresses = {
         name: getattr(settings, name)
         for name in ("relay_address", "ao1_address", "ao2_address", "ao3_address", "ponics_address", "ai_address", "hp1_address", "hp2_address")

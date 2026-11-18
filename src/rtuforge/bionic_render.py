@@ -22,6 +22,7 @@ from .bionic_ponics import (
     PONICS_DEMO_LABEL, PONICS_OPTION_NAMES, PONICS_REGISTER_COUNT, PONICS_REGISTERS,
     PONICS_STATE_LABELS, PONICS_TANK_LABEL,
 )
+from .bionic_pulsar import PULSAR_MODEL, PULSAR_VOLUME_CHANNEL
 from .bionic_sensor_bridge import SensorRelayState
 
 VIEW_NAMES = ("status", "devices", "ports", "settings", "help", "log", "rs485", "tanks", "pumps", "equipment", "pressure", "irrigation", "light", "light-settings", "sensors", "ponics", "ponics-settings", "ponics-registers", "water", "drives", "drive-hp1", "drive-hp2")
@@ -35,6 +36,9 @@ EQUIPMENT_STATE_NAMES = {"HEALTHY":"ИСПРАВНО", "DRY_RUNNING":"СУХОЙ
 HELP_GROUPS = (
     ("УПРАВЛЕНИЕ СИМУЛЯЦИЕЙ", "\n".join((
         "sim start            Запустить расчёт физики",
+        "counter check start  Пассивно наблюдать Modbus/Pulsar на USB №1",
+        "counter check status Показать счётчики текущей диагностической сессии",
+        "counter check stop   Завершить наблюдение и сохранить JSON-отчёт",
         "sim pause            Приостановить расчёт физики",
         "sim resume           Продолжить расчёт",
         "sim speed 1          Нормальная скорость",
@@ -71,6 +75,8 @@ SETTING_LABELS = {
     "ao2_address":("Аналоговый выход №2: Modbus ID",""), "ao3_address":("Аналоговый выход №3: Modbus ID",""),
     "ai_address":("Аналоговый вход давления: Modbus ID",""), "hp1_address":("Частотник HP1: Modbus ID",""), "hp2_address":("Частотник HP2: Modbus ID",""),
     "ponics_address":("PonicPilot 32: Modbus ID",""),
+    "pulsar_enabled":("Пульсар: эмуляция на USB №1",""),
+    "pulsar_address":("Пульсар: восьмизначный BCD-адрес",""),
     "model_interval_ms":("Период расчёта модели","мс"), "ui_interval_ms":("Период обновления экрана","мс"), "retention_days":("Хранение журнала","дн."),
     "bo_capacity_l":("Осмос: ёмкость бака","л"), "bp_capacity_l":("Бульон: ёмкость бака","л"),
     "bso1_capacity_l":("Дренаж 1: ёмкость бака","л"), "bso2_capacity_l":("Дренаж 2: ёмкость бака","л"),
@@ -277,7 +283,9 @@ def _status_tanks(model: BionicModel) -> list[StyledLine]:
     return lines
 
 
-def _status_tank_gauges(model: BionicModel) -> list[StyledLine]:
+def _status_tank_gauges(
+    model: BionicModel, settings: BionicSettings,
+) -> list[StyledLine]:
     """One-line horizontal gauges with MIN/MAX marks at their real positions."""
     names = {"bo": "БО", "bp": "БП", "bso1": "БСО1", "bso2": "БСО2"}
     bar_width = 8
@@ -317,6 +325,11 @@ def _status_tank_gauges(model: BionicModel) -> list[StyledLine]:
         tuple(),
         _heading("ИТОГО ВОДЫ"),
         _styled("СЧЁТЧИК ВХОДА ", ("ok", f"{model.water_meter.total_l:.3f} л")),
+        _styled(
+            f"ПУЛЬСАР {PULSAR_MODEL} · КАНАЛ {PULSAR_VOLUME_CHANNEL} · "
+            f"{settings.pulsar_address} · "
+            f"{'ВКЛ' if settings.pulsar_enabled else 'ВЫКЛ'}"
+        ),
         _styled(f"БО {model.tanks['bo'].volume_l:.3f} л"),
         _styled(f"ТРАКТ БП+БСО1+БСО2 {model.irrigation_loop_volume_l:.3f} л"),
         _styled(f"ВСЕГО В СИСТЕМЕ {model.total_system_water_l:.3f} л"),
@@ -442,10 +455,6 @@ def _pump_status_lines(
     dry = ("fault", "ДА") if dry_running else ("inactive", "НЕТ")
     failure_parts = tuple(("fault", failure) for failure in failures) or (("inactive", "ОТКАЗ НЕТ"),)
 
-    first = _styled(
-        f"{name:<{name_width}} CMD ", command,
-        " | МОТОР ", motor, model_note,
-    )
     failure_cells: list[StyledLine] = []
     for style, failure in failure_parts:
         if failure.startswith("ОТКАЗ "):
@@ -463,6 +472,12 @@ def _pump_status_lines(
         column_widths = (21, 15, available - 36)
     else:
         column_widths = (14, 13, max(1, available - 27))
+    command_cell = _styled("CMD ", command)
+    first = _styled(
+        f"{name:<{name_width}} ",
+        *_fit_fragments(command_cell, column_widths[0], pad=True),
+        " | МОТОР ", motor, model_note,
+    )
     cells = [
         _styled("ПОДАЧА ", flow),
         _styled("СУХОЙ ХОД ", dry),
@@ -740,7 +755,7 @@ def _status(
     if width >= 150:
         left = tanks + [tuple()] + sensors + [tuple()] + pumps + [tuple()] + outputs + [tuple()] + hydraulics
         middle = ponics + [tuple()] + drives + [tuple()] + lights + [tuple()] + alarms + [tuple()] + link
-        gauges = _status_tank_gauges(model)
+        gauges = _status_tank_gauges(model, settings)
         styled_lines, column_widths = _join_status_three_columns(
             left, middle, gauges, width,
         )
@@ -770,7 +785,7 @@ def _devices(s:BionicSettings,width:int)->list[str]:
     return lines+[ellipsize(f"do-{c:<2} | {n}",width) for c,n in OUTPUT_NAMES.items()]
 
 def _ports(s:BionicSettings,width:int)->list[str]:
-    return [ellipsize(x,width) for x in ("USB №1 | Контроллер Bionic Mini | Modbus RTU slave",f"Порт: {s.controller_port} | {s.controller_baudrate} 8{s.controller_parity}{s.controller_stopbits:g}","Устройства: relay-32ch, ao-1..3, PonicPilot ID 5, ai-pressure, hp1, hp2","","USB №2 | Физическое реле датчиков | Modbus RTU master",f"Порт: {s.sensor_relay_port} | {s.sensor_relay_baudrate} 8{s.sensor_relay_parity}{s.sensor_relay_stopbits:g}",f"Waveshare {s.sensor_relay_channels}CH | ID {s.sensor_relay_id} | аппаратный режим {'ВКЛ' if s.hardware_mode else 'ВЫКЛ'}")]
+    return [ellipsize(x,width) for x in ("USB №1 | Контроллер Bionic Mini | Modbus RTU slave + Пульсар slave",f"Порт: {s.controller_port} | {s.controller_baudrate} 8{s.controller_parity}{s.controller_stopbits:g}","Устройства: relay-32ch, ao-1..3, PonicPilot ID 5, ai-pressure, hp1, hp2",f"Пульсар {PULSAR_MODEL} | канал {PULSAR_VOLUME_CHANNEL} | адрес {s.pulsar_address} | {'ВКЛ' if s.pulsar_enabled else 'ВЫКЛ'}","","USB №2 | Физическое реле датчиков | Modbus RTU master",f"Порт: {s.sensor_relay_port} | {s.sensor_relay_baudrate} 8{s.sensor_relay_parity}{s.sensor_relay_stopbits:g}",f"Waveshare {s.sensor_relay_channels}CH | ID {s.sensor_relay_id} | аппаратный режим {'ВКЛ' if s.hardware_mode else 'ВЫКЛ'}")]
 
 def _technical(section:str,name:str)->str:
     return {"bo_capacity_l":"tanks.bo.capacity_l","bp_capacity_l":"tanks.bp.capacity_l","bso1_capacity_l":"tanks.bso1.capacity_l","bso2_capacity_l":"tanks.bso2.capacity_l"}.get(name,f"{section}.{name}")

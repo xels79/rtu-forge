@@ -28,18 +28,21 @@ from .bionic_lights import (
 from .bionic_model import BionicModel
 from .bionic_modbus import build_default_bus
 from .bionic_ponics import PONICS_OPTION_NAMES, PONICS_REGISTERS
+from .bionic_pulsar import PulsarWaterMeterSlave
 from .bionic_render import print_view
 from .bionic_sensor_bridge import SensorRelayBridge, SensorRelayState
 from .bionic_server import ModbusSlaveServer, SerialSlaveTransport
 from .bionic_state import (
     list_states, load_state, runtime_state_path, save_state, state_path,
 )
+from .counter_check import CounterCheck
 from .transport import SerialTransport
 
 
 HELP = """Bionic Immitator — цифровая физическая установка Bionic Mini
 
 status | devices | ports | help
+counter check start | status | stop
 tank list | tank <bo|bp|bso1|bso2> level <л|N%> | capacity <л> | fill-rate <л/мин>
 pump list | pump <bo-to-bp|bso1-to-bp|bso2-to-bp> flow <л/мин>
 equipment list | status <id> | repair|replace <id> --confirm | set <id> <параметр> <значение> [--sync-wear]
@@ -84,6 +87,7 @@ class BionicContext:
     notice: str = ""
     saved: BionicSettings | None = None
     sensor_relay_state: SensorRelayState | None = None
+    counter_check: CounterCheck | None = None
 
     def event(self, kind: str, subject: str, message: str) -> None:
         self.journal.add(kind, subject, message)
@@ -245,7 +249,8 @@ def make_context(home: Path, config_path: Path | None = None, *, console: Consol
             apply_model_settings(settings, model, initial=True)
             restored_notice = f"Автосостояние не восстановлено: {exc}; загружено начальное состояние"
             journal.add("ОШИБКА", "simulation-state", restored_notice)
-    ctx = BionicContext(home, path, settings, settings, model, journal, console or Console(), test_mode=test_mode)
+    ctx = BionicContext(home, path, settings, settings, model, journal, console or Console(),
+                        test_mode=test_mode, counter_check=CounterCheck())
     ctx.saved = settings
     ctx.notice = restored_notice
     ctx.sensor_relay_state = SensorRelayState()
@@ -395,6 +400,32 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
     model = ctx.model
     if command in {"exit", "quit"}:
         return "exit"
+    if command == "counter":
+        if len(args) != 2 or args[0] != "check" or args[1] not in {"start", "status", "stop"}:
+            raise ValueError("counter check start|status|stop")
+        check = ctx.counter_check
+        if check is None:
+            raise RuntimeError("Диагностика счётчика не инициализирована")
+        if args[1] == "start":
+            summary = check.start()
+        elif args[1] == "status":
+            summary = check.status(model)
+        else:
+            summary = check.stop(ctx.home, model)
+        ctx.notice = (
+            f"counter check: {'активен' if summary['active'] else 'остановлен'}; "
+            f"сессия {summary['sessionId'] or 'нет'}; Modbus {summary['modbusRequests']}; "
+            f"Pulsar {summary['pulsarRequests']}; ответы {summary['successfulResponses']}; "
+            f"CRC {summary['crcErrors']}; протокол {summary['protocolErrors']}; "
+            f"без ответа {summary['observedNoResponse']}; timeout firmware не подтверждается; "
+            f"DO22={summary['do22']}; полив={summary['irrigationActive']}; "
+            f"объём={summary['lastPulsarVolumeM3']} м³"
+        )
+        if "reportPath" in summary:
+            ctx.notice += f"; отчёт {summary['reportPath']}"
+        if not ctx.screen_mode:
+            ctx.console.print(ctx.notice)
+        return None
     if command == "help":
         if len(args) >= 2 and args[0] == "search":
             ctx.help_query = " ".join(args[1:])
@@ -856,6 +887,7 @@ def execute_command(ctx: BionicContext, line: str) -> str | None:
             reconnect = any(getattr(ctx.settings, name) != getattr(ctx.draft, name) for name in (
                 "controller_port", "controller_baudrate", "controller_parity", "controller_stopbits",
                 "relay_address", "ao1_address", "ao2_address", "ao3_address", "ponics_address", "ai_address", "hp1_address", "hp2_address",
+                "pulsar_enabled", "pulsar_address",
                 "sensor_relay_port", "sensor_relay_baudrate", "sensor_relay_parity", "sensor_relay_stopbits",
                 "sensor_relay_id", "sensor_relay_channels", "sensor_relay_active_low", "sensor_relay_map",
                 "sensor_relay_loss_behavior", "hardware_mode",
@@ -1059,7 +1091,13 @@ def main() -> int:
                 ctx.settings.controller_port, ctx.settings.controller_baudrate,
                 ctx.settings.controller_parity, ctx.settings.controller_stopbits,
             )
-            server = ModbusSlaveServer(bus, transport, home / f".{ctx.settings.controller_port}.bionic.lock")
+            pulsar = PulsarWaterMeterSlave(
+                ctx.model, ctx.settings.pulsar_address, ctx.settings.pulsar_enabled,
+            )
+            server = ModbusSlaveServer(
+                bus, transport, home / f".{ctx.settings.controller_port}.bionic.lock",
+                pulsar, ctx.counter_check,
+            )
             server.start()
         bridge_runner = _start_bridge(ctx)
 
