@@ -68,7 +68,9 @@ def test_transport_connect_and_endpoint_use_effective_settings(tmp_path):
         serial_class.return_value.is_open = True
         transport.connect()
     kwargs = serial_class.call_args.kwargs
-    assert kwargs["port"] == "COM7"
+    assert kwargs["port"] is None
+    assert serial_class.return_value.port == "COM7"
+    serial_class.return_value.open.assert_called_once()
     assert kwargs["baudrate"] == 19200
     assert kwargs["parity"] == "N"
     assert transport.endpoint == "COM7 @ 19200 8N1"
@@ -116,15 +118,20 @@ def test_persistent_set_does_not_capture_cli_overrides(tmp_path):
 
 class FakeSerial:
     def __init__(self):
-        self.is_open = True
+        self.is_open = False
+        self.port = None
         self.in_waiting = 0
         self.writes: list[bytes] = []
 
     def reset_input_buffer(self):
         return None
 
+    def open(self):
+        self.is_open = True
+
     def write(self, payload):
         self.writes.append(payload)
+        return len(payload)
 
     def flush(self):
         return None
@@ -155,7 +162,8 @@ def test_connect_send_and_scan_open_the_same_effective_cli_port(tmp_path, comman
     fake_serial = FakeSerial()
     with patch("serial.Serial", return_value=fake_serial) as serial_class:
         execute_command(ctx, command)
-    assert serial_class.call_args.kwargs["port"] == "COM7"
+    assert serial_class.call_args.kwargs["port"] is None
+    assert fake_serial.port == "COM7"
     assert serial_class.call_args.kwargs["baudrate"] == 19200
 
 
@@ -186,7 +194,8 @@ def test_script_commands_use_effective_cli_port_without_persisting_it(tmp_path, 
     with patch("serial.Serial", return_value=fake_serial) as serial_class:
         execute_command(ctx, command)
 
-    assert serial_class.call_args.kwargs["port"] == "COM7"
+    assert serial_class.call_args.kwargs["port"] is None
+    assert fake_serial.port == "COM7"
     assert serial_class.call_args.kwargs["baudrate"] == 19200
     assert config["connection"]["port"] == "COM4"
     assert load_config(path)["connection"]["port"].upper() == "COM4"

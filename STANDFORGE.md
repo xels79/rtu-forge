@@ -1,0 +1,174 @@
+# Stand Forge
+
+Stand Forge is a small test-bench console built on RTU Forge's existing serial transport and configuration.
+
+It controls two Waveshare Modbus RTU devices:
+
+- Relay board: manual control of channels 1..32; four tanks mapped to the first eight channels, two relays per tank.
+- 8-channel analog output board: first four channels mapped to temperature, humidity, low pressure and high pressure.
+
+## Tank commands
+
+Relay mapping:
+
+- Tank 1 -> relay 1 (lower float), relay 2 (upper float)
+- Tank 2 -> relay 3, relay 4
+- Tank 3 -> relay 5, relay 6
+- Tank 4 -> relay 7, relay 8
+
+States:
+
+- `empty` -> both relays off
+- `middle` -> lower relay on, upper relay off
+- `full` -> both relays on
+
+Examples:
+
+```text
+standforge tank 1 empty
+standforge tank 1 middle
+standforge tank 1 full
+standforge tank 4 full
+```
+
+The two relays are written in one Modbus FC0F request.
+
+## Manual relay commands
+
+Switch selected relay channels (1..32) on or off:
+
+```text
+standforge on 1
+standforge off 1
+standforge of 1
+standforge on 1 3 8
+standforge off 2 4
+standforge on 1 16 32
+standforge off 32
+```
+
+`of` is an alias for `off`. The same commands work at the `stand>` prompt.
+Channels 1..32 map to coil addresses 0..31 at the configured relay device ID.
+Each selected channel is written separately using Modbus FC0F with quantity 1;
+other channels are left unchanged. All channel numbers are validated before
+connecting or sending, and repeated channels are written only once. If a write
+fails, the command stops and reports the error; earlier successful writes remain applied.
+
+## Analog output commands
+
+Channel mapping:
+
+1. temperature
+2. humidity
+3. pressure-low
+4. pressure-high
+
+Examples:
+
+```text
+standforge output temperature 50
+standforge output humidity 75
+standforge output pressure-low 25
+standforge output pressure high 80
+```
+
+Percent is scaled into the configured physical output range.
+
+Supported ranges:
+
+- `0-20ma` -> 0..20000 uA
+- `4-20ma` -> 4000..20000 uA
+- `0-10v` -> 0..10000 mV
+
+
+## Reset
+
+Reset the complete bench to its initial state:
+
+```text
+standforge reset
+standforge reset all
+```
+
+This switches all relays on the configured relay device off in one command,
+including channels 9..32, and sets all four tanks to `empty`. It then sets the
+first four analog outputs to `0%`. For a `4-20ma` range, `0%` means 4000 uA rather than 0 uA.
+
+The relay reset uses Waveshare's FC05 command at coil address `0x00FF` with
+value `0x0000`, as documented in the
+[Waveshare relay protocol](https://www.waveshare.com/wiki/Modbus_RTU_Relay_16CH).
+For relay ID 1, the complete request is `01 05 00 FF 00 00 FD FA`; other IDs use
+their own calculated CRC. The response must echo the request with a valid CRC.
+
+The command attempts every reset operation even if one device fails, then reports any incomplete items.
+
+## Configuration
+
+Stand Forge reuses RTU Forge's `config.ini` and `RTUFORGE_HOME` for serial settings.
+
+Stand-specific settings are stored in `stand.ini` in the same home directory:
+
+```ini
+[devices]
+relay_address = 1
+output_address = 2
+
+[output]
+range = 0-20ma
+```
+
+Change them interactively:
+
+```text
+set relay-id 1
+set output-id 2
+set output-range 4-20ma
+```
+
+Or temporarily for one launch:
+
+```bash
+standforge --relay-id 5 --output-id 6 --output-range 0-10v status
+```
+
+Serial overrides are the same as RTU Forge:
+
+```bash
+standforge --port COM7 --baudrate 9600 tank 1 full
+```
+
+## Interactive shell
+
+Run:
+
+```bash
+standforge
+```
+
+Prompt:
+
+```text
+stand>
+```
+
+The shell has persistent history and Tab completion.
+
+Useful commands:
+
+```text
+tank <1..4> <empty|middle|full>
+on <1..32> [<1..32> ...]
+off <1..32> [<1..32> ...]  (alias: of)
+output <temperature|humidity|pressure-low|pressure-high> <0..100>
+reset [all]
+set <relay-id|output-id|output-range> <value>
+connect
+disconnect
+ports
+status
+paths
+help
+exit
+```
+
+Hardware access is not exercised by unit tests. Tests use a fake transport and validate the generated Modbus frames and responses.

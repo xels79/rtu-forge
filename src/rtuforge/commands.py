@@ -23,6 +23,7 @@ from .script_file import load_script_file, resolve_script_path, save_script_file
 from .scripts import ScriptStore
 from .script_engine import Instruction, LastResponse, ScriptError, compile_script, run_program
 from .transport import Exchange, SerialTransport
+from .pulsar_commands import execute_pulsar
 
 HELP_ALIASES = {"ls": "scripts", "list": "scripts", "cls": "clear", "quit": "exit"}
 
@@ -658,6 +659,7 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
     if command == "scan":
         interrupted = run_scan(ctx, parts[1:])
         return "script-interrupted" if interrupted and from_script else None
+    if command == "pulsar": execute_pulsar(ctx, parts[1:]); return None
     if command == "send":
         payload, explicit = _parse_send_arguments(parts[1:], ctx.language); send_frame(ctx, payload, decode_override=explicit if explicit is not None else inherited_decode_override); return None
     if command == "pause":
@@ -706,6 +708,7 @@ def execute_command(ctx: CommandContext, line: str, *, from_script: bool = False
     if command == "help":
         if len(parts) == 1: ctx.console.print(interactive_help(ctx.language), markup=False); return None
         topic = HELP_ALIASES.get(parts[1].lower(), parts[1].lower())
+        if topic == "pulsar": execute_pulsar(ctx, ["help"]); return None
         if topic in {"record", "run", "export", "import"}:
             from .runtime_text import TEXT
             ctx.console.print(TEXT["ru" if ctx.language.lower() == "ru" else "en"].get(f"help_{topic}", topic), markup=False); return None
