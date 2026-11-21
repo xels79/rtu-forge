@@ -19,6 +19,7 @@ GENERAL_HELP: dict[str, str] = {
   send [-d|--decode|-r|--raw] <hex...>
                                   Send one Modbus RTU frame
   pulsar ...                      Read/manage proprietary Pulsar RS-485 meters
+  light ...                       Control four Waveshare 0-10 V AO channels
   add script <name>               Capture commands until 'end script'
   run script <name> [-d|-r]       Run a stored script
   run file <file> [options]        Run a portable script file without importing
@@ -56,6 +57,7 @@ Use 'help run', 'help export' and 'help import' for portable file details.
   send [-d|--decode|-r|--raw] <hex...>
                                   Отправить один Modbus RTU кадр
   pulsar ...                      Чтение и параметры счётчиков «Пульсар»
+  light ...                       Свет Waveshare AO 0..10 В (4 канала)
   add script <name>               Записать скрипт до команды 'end script'
   run script <name> [-d|-r]       Запустить сохранённый скрипт
   run file <файл> [опции]          Запустить переносимый файл без импорта
