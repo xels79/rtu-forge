@@ -62,6 +62,11 @@ def load_config(path: Path) -> configparser.ConfigParser:
             if not parser.has_section(spec.section):
                 parser.add_section(spec.section)
             parser[spec.section][spec.name] = spec.default
+    if not parser.has_section("light"):
+        parser.add_section("light")
+    for name, value in {"light_address": "1", **{f"light_channel_{n}": str(n) for n in range(1, 5)}}.items():
+        if not parser.has_option("light", name):
+            parser["light"][name] = value
     return parser
 
 
