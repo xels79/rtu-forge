@@ -95,10 +95,12 @@ def execute_light(ctx, parts: list[str]) -> None:
                 physical = check_channel(int(parts[3]))
             except (ValueError, TypeError):
                 raise ValueError("Номера каналов должны быть 1..4") from None
-            if physical in (value for i, value in enumerate(channels, 1) if i != index):
-                raise ValueError(f"AO{physical} уже назначен другому каналу; сначала переставьте назначения")
+            swap = next((i for i, value in enumerate(channels, 1) if value == physical), index)
+            previous = channels[index - 1]
+            if swap != index:
+                ctx.config["light"][f"light_channel_{swap}"] = str(previous)
             _save(ctx, f"light_channel_{index}", str(physical))
-            ctx.console.print(f"Сохранён канал {index} -> AO{physical}", markup=False)
+            ctx.console.print(f"Сохранён канал {index} -> AO{physical}" + (f"; канал {swap} -> AO{previous}" if swap != index else ""), markup=False)
             return
         raise ValueError("Использование: light set address <1..247> | light set channel <1..4> <1..4>")
 
